@@ -135,6 +135,10 @@ final class RegionRecordRunnerUtils {
      * @param recordIndex the position of the record in the walk
      */
     static void runRegionRecord(@NotNull TriggerContext context, @NotNull ClassicRegion region, int offset, int player, int recordIndex) {
+        if (context.executionCounter != null) {
+            context.executionCounter.record();
+        }
+
         if (!region.isPlainMemory()) {
             executeDecoded(context, region, offset, player, recordIndex, WHOLE_RECORD);
 
@@ -284,6 +288,10 @@ final class RegionRecordRunnerUtils {
 
         for (; cursor < TriggerRecordCodec.ACTION_COUNT; cursor++) {
             int result = executeActionInPlace(context, region, offset + TriggerRecordCodec.ACTIONS_OFFSET + cursor * TriggerRecordCodec.ACTION_SIZE);
+
+            if (context.executionCounter != null && (result == ACTION_RAN || result == ACTION_PRESERVE)) {
+                context.executionCounter.action();
+            }
 
             if (result == ACTION_END) {
                 cursor = TriggerRecordCodec.ACTION_COUNT;

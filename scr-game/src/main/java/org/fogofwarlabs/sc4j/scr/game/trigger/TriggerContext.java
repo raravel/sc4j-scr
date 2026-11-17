@@ -557,6 +557,10 @@ public final class TriggerContext implements org.fogofwarlabs.sc4j.engine.trigge
      */
     final int @NotNull [] countCacheGap;
     @Nullable ScrTriggerSystem.ExtendedDeathsOperations extendedDeathsOperations;
+    /**
+     * The observer of trigger work, or {@code null}.
+     */
+    @Nullable ExecutionCounter executionCounter;
     int extendedDeathsMode;
     /**
      * The classic trigger lists of the EUD emulation, built with the address space.
@@ -878,6 +882,31 @@ public final class TriggerContext implements org.fogofwarlabs.sc4j.engine.trigge
      */
     public @Nullable ClassicAddressSpace getClassicAddressSpace() {
         return this.extendedDeathsOperations instanceof ClassicAddressSpace space ? space : null;
+    }
+
+    /**
+     * Observes the trigger work of the evaluation: each walked trigger record and each executed action. It is called on the
+     * simulation thread in execution order and must not change game state.
+     */
+    public interface ExecutionCounter {
+        /**
+         * A trigger record is walked: its conditions are tested, or its running actions resume.
+         */
+        void record();
+
+        /**
+         * An action runs.
+         */
+        void action();
+    }
+
+    /**
+     * Sets the observer of trigger work.
+     *
+     * @param executionCounter the observer, or {@code null}
+     */
+    public void setExecutionCounter(@Nullable ExecutionCounter executionCounter) {
+        this.executionCounter = executionCounter;
     }
 
     /**

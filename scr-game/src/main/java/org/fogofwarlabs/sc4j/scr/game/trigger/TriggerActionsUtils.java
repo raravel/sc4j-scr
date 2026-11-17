@@ -150,6 +150,10 @@ final class TriggerActionsUtils {
                 break;
             }
 
+            if (context.executionCounter != null) {
+                context.executionCounter.action();
+            }
+
             boolean succeeded = actionType >= context.getActionRegistry().getCount() || executeAction(context, record, action);
 
             if (context.isEvaluationStopped() || !succeeded) {

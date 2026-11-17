@@ -512,6 +512,10 @@ public final class ScrTriggerSystem implements TriggerSystem {
             return;
         }
 
+        if (context.executionCounter != null) {
+            context.executionCounter.record();
+        }
+
         context.currentRecordPlayer      = player;
         context.currentRecordIndex       = recordIndex;
         context.currentRecordInitialized = true;

@@ -1083,6 +1083,9 @@ public final class ClassicAddressSpace implements ScrTriggerSystem.ExtendedDeath
     private long @NotNull [] sortedEnds;
 
     private @Nullable IntConsumer failureListener;
+    private @Nullable WriteWatch writeWatch;
+    private int writeWatchStart;
+    private int writeWatchSize;
     private @Nullable ClassicStatTextRegion statText;
     private @Nullable ClassicButtonSets buttonSets;
     private @Nullable ClassicPoolHeads poolHeads;
@@ -1164,6 +1167,43 @@ public final class ClassicAddressSpace implements ScrTriggerSystem.ExtendedDeath
      */
     public void setFailureListener(@Nullable IntConsumer failureListener) {
         this.failureListener = failureListener;
+    }
+
+    /**
+     * Observes the DWORDs written into an address range.
+     */
+    public interface WriteWatch {
+        /**
+         * A DWORD of the watched range was written.
+         *
+         * @param address the aligned classic address
+         * @param value   the DWORD after the write
+         */
+        void written(int address, int value);
+    }
+
+    /**
+     * Watches the aligned DWORD writes of {@link #writeDword} and {@link #setExtendedDeaths} into a range: the watch sees each written
+     * value on the simulation thread, after the write.
+     *
+     * @param start the first classic address
+     * @param size  the range size in bytes
+     * @param watch the watch, or {@code null} to stop watching
+     */
+    public void setWriteWatch(int start, int size, @Nullable WriteWatch watch) {
+        this.writeWatchStart = start;
+        this.writeWatchSize  = size;
+        this.writeWatch      = watch;
+    }
+
+    private void notifyWatch(int address) {
+        WriteWatch watch = this.writeWatch;
+
+        if (watch != null && Integer.compareUnsigned(address - this.writeWatchStart, this.writeWatchSize) < 0) {
+            int aligned = address & ~ClassicRegion.DWORD_OFFSET_MASK;
+
+            watch.written(aligned, this.readDword(aligned));
+        }
     }
 
     /**
@@ -1420,6 +1460,7 @@ public final class ClassicAddressSpace implements ScrTriggerSystem.ExtendedDeath
 
         if (aligned == address) {
             this.writeAligned(address, value);
+            this.notifyWatch(address);
 
             return;
         }
@@ -1433,6 +1474,8 @@ public final class ClassicAddressSpace implements ScrTriggerSystem.ExtendedDeath
 
         this.writeAligned(aligned, low);
         this.writeAligned(aligned + Integer.BYTES, high);
+        this.notifyWatch(aligned);
+        this.notifyWatch(aligned + Integer.BYTES);
     }
 
     /**
@@ -1596,6 +1639,7 @@ public final class ClassicAddressSpace implements ScrTriggerSystem.ExtendedDeath
 
                 if (this.sortedEnds[regionIndex] - (address & DWORD_MASK) >= Integer.BYTES && !region.isWriteIgnored()) {
                     region.writeModified(offset, modifier, amount);
+                    this.notifyWatch(address);
 
                     return;
                 }

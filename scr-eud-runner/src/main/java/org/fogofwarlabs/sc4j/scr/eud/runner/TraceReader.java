@@ -85,7 +85,7 @@ final class TraceReader {
         ClassicAddressSpace space = GameReads.liveSpace(game);
 
         if (this.stackAddress == 0) {
-            this.stackAddress = this.findStack(space);
+            this.stackAddress = this.findStackAddress(space);
 
             if (this.stackAddress == 0) {
                 return List.of();
@@ -118,9 +118,10 @@ final class TraceReader {
     }
 
     /**
-     * @return the address of the first stack DWORD, or 0 when no region holds the header
+     * @param space the live address space
+     * @return the address of the first stack DWORD, or 0 when no region holds the header (the map writes it when its main starts)
      */
-    private int findStack(@NotNull ClassicAddressSpace space) {
+    int findStackAddress(@NotNull ClassicAddressSpace space) {
         for (ClassicRegion region : space.getRegions()) {
             int size = region.getSize();
 

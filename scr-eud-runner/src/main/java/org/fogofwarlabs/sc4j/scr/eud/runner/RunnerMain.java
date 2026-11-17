@@ -29,9 +29,10 @@ import java.util.concurrent.atomic.AtomicReference;
  * Runs a map headless as a single-player use-map-settings game, optionally driven by a {@code .mtest} script, and writes one JSON report.
  * <p>
  * {@code eud-runner --data <SC:R folder> --map <scx|scm> --out <report.json> [--script <file.mtest>] [--frames N] [--slot N]
- * [--frame-timeout-ms N] [--time-limit-ms N] [--epmap <output.epmap>]}
+ * [--frame-timeout-ms N] [--time-limit-ms N] [--epmap <output.epmap>] [--profile]}
  * <p>
  * With the trace file of a {@code [main] debug} build, a failed or hung run reports the epScript statements that were running.
+ * {@code --profile} counts the trigger records and actions of each frame and, with the trace file, attributes the actions to statements.
  * <p>
  * The report is written to {@code --out} (never stdout, which the engine's logging may share). Exit status 0 means a report was written,
  * 2 a usage error.
@@ -60,6 +61,7 @@ public final class RunnerMain {
     private volatile long loadMillis;
     private volatile @Nullable Game game;
     private @Nullable TraceReader trace;
+    private @Nullable Profiler profiler;
 
     private final Set<Integer> heldKeys = new HashSet<>();
     private int mouseButtons;
@@ -80,9 +82,10 @@ public final class RunnerMain {
      * @param frameTimeoutMillis the wall time one frame may take before the run counts as hung
      * @param timeLimitMillis    the wall time of the whole run
      * @param epmap              the trace file of a debug build, or {@code null}
+     * @param profile            whether trigger work is counted
      */
     record Options(@NotNull Path data, @NotNull Path map, @NotNull Path out, @Nullable Path script, int frames, int slot,
-                   long frameTimeoutMillis, long timeLimitMillis, @Nullable Path epmap) {
+                   long frameTimeoutMillis, long timeLimitMillis, @Nullable Path epmap, boolean profile) {
     }
 
     private RunnerMain(@NotNull Options options, @Nullable MtestScript script) {
@@ -104,7 +107,7 @@ public final class RunnerMain {
         } catch (IllegalArgumentException exception) {
             System.err.println("eud-runner: " + exception.getMessage());
             System.err.println("usage: eud-runner --data <SC:R folder> --map <scx|scm> --out <report.json> [--script <file.mtest>] " +
-                               "[--frames N] [--slot N] [--frame-timeout-ms N] [--time-limit-ms N] [--epmap <output.epmap>]");
+                               "[--frames N] [--slot N] [--frame-timeout-ms N] [--time-limit-ms N] [--epmap <output.epmap>] [--profile]");
             System.exit(2);
             return;
         }
@@ -201,6 +204,11 @@ public final class RunnerMain {
 
             game      = session.getGame();
             this.game = game;
+
+            if (this.options.profile()) {
+                this.profiler = new Profiler(this.trace);
+                this.profiler.attach(game);
+            }
             this.loadMillis        = (System.nanoTime() - this.startNanos) / 1_000_000;
             this.lastProgressNanos = System.nanoTime();
             this.simulating        = true;
@@ -255,6 +263,10 @@ public final class RunnerMain {
             case "failed", "hang" -> "failed";
             default -> null;
         });
+
+        if (this.profiler != null) {
+            report.put("profile", this.profiler.report());
+        }
 
         report.put("loadMs", this.loadMillis);
         report.put("elapsedMs", (System.nanoTime() - this.startNanos) / 1_000_000);
@@ -439,6 +451,10 @@ public final class RunnerMain {
             } else {
                 stalls = 0;
                 this.frame += after - before;
+
+                if (this.profiler != null) {
+                    this.profiler.endFrame(game, this.frame);
+                }
             }
 
             this.lastProgressNanos = System.nanoTime();
@@ -587,6 +603,7 @@ public final class RunnerMain {
         Path out = null;
         Path script = null;
         Path epmap = null;
+        boolean profile = false;
         int frames = DEFAULT_FRAMES;
         int slot = 0;
         long frameTimeout = DEFAULT_FRAME_TIMEOUT_MILLIS;
@@ -594,6 +611,11 @@ public final class RunnerMain {
 
         for (int index = 0; index < arguments.length; index++) {
             String name = arguments[index];
+
+            if (name.equals("--profile")) {
+                profile = true;
+                continue;
+            }
 
             if (index + 1 >= arguments.length) {
                 throw new IllegalArgumentException(name + " needs a value.");
@@ -619,7 +641,7 @@ public final class RunnerMain {
             throw new IllegalArgumentException("--data, --map and --out are required.");
         }
 
-        return new Options(data, map, out, script, frames, slot, frameTimeout, timeLimit, epmap);
+        return new Options(data, map, out, script, frames, slot, frameTimeout, timeLimit, epmap, profile);
     }
 
     private static int parsePositive(@NotNull String name, @NotNull String value, int maximum) {
