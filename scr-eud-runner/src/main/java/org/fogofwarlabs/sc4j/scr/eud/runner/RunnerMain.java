@@ -516,9 +516,7 @@ public final class RunnerMain {
                 }
                 case TEXT -> {
                     List<String> lines = reads.messageLines();
-                    String expected = expect.text();
-                    boolean found = lines.stream().anyMatch(line -> expected != null && line.contains(expected));
-                    result.put("ok", found);
+                    result.put("ok", expect.holdsText(lines));
                     result.put("actual", lines);
                 }
             }

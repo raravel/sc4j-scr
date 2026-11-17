@@ -17,7 +17,7 @@ import java.util.Map;
  * <li>{@code click X,Y [left|right|middle] [FRAMES]}: the button is held at the map pixel X,Y for FRAMES game frames, then released;</li>
  * <li>{@code press X,Y [button]}, {@code release [button]}: only the press at a map pixel, or only the release;</li>
  * <li>{@code expect deaths P<1-12> <UNIT 0-227> OP VALUE}, {@code expect memory 0x<ADDRESS> OP VALUE},
- * {@code expect text contains "TEXT"}, {@code expect units OP VALUE}: a check of the state reached so far.</li>
+ * {@code expect text [not] contains "TEXT"}, {@code expect units OP VALUE}: a check of the state reached so far.</li>
  * </ul>
  * A line that cannot be read is a {@link Problem}; every problem of a script is reported, and a script with problems is not run.
  */
@@ -48,7 +48,7 @@ public final class MtestScript {
     static final @NotNull String RELEASE_USAGE = "release [left|right|middle]";
     static final @NotNull String EXPECT_DEATHS_USAGE = "expect deaths P<1-12> <UNIT 0-227> <OP> <VALUE>";
     static final @NotNull String EXPECT_MEMORY_USAGE = "expect memory 0x<ADDRESS> <OP> <VALUE>";
-    static final @NotNull String EXPECT_TEXT_USAGE = "expect text contains \"TEXT\"";
+    static final @NotNull String EXPECT_TEXT_USAGE = "expect text [not] contains \"TEXT\"";
     static final @NotNull String EXPECT_UNITS_USAGE = "expect units <OP> <VALUE>";
     static final @NotNull String EXPECT_USAGE = EXPECT_DEATHS_USAGE + " | " + EXPECT_MEMORY_USAGE + " | " + EXPECT_TEXT_USAGE + " | " +
                                                EXPECT_UNITS_USAGE;
@@ -143,7 +143,7 @@ public final class MtestScript {
      * @param player   the 0-based player of {@link Subject#DEATHS}
      * @param unit     the unit of {@link Subject#DEATHS}
      * @param address  the address of {@link Subject#MEMORY}
-     * @param operator the comparison, {@code contains} for {@link Subject#TEXT}
+     * @param operator the comparison, {@code contains} or {@code not contains} for {@link Subject#TEXT}
      * @param value    the expected number
      * @param text     the expected text of {@link Subject#TEXT}, else {@code null}
      */
@@ -165,6 +165,18 @@ public final class MtestScript {
                 case ">=" -> actual >= this.value;
                 default -> throw new IllegalStateException("Unknown operator: " + this.operator);
             };
+        }
+
+        /**
+         * Checks the message lines against the expected text.
+         *
+         * @param lines the message lines read
+         * @return whether some line contains the text ({@code contains}) or none does ({@code not contains})
+         */
+        public boolean holdsText(@NotNull java.util.List<String> lines) {
+            boolean found = this.text != null && lines.stream().anyMatch(line -> line.contains(this.text));
+
+            return this.operator.equals("not contains") != found;
         }
     }
 
@@ -364,8 +376,15 @@ public final class MtestScript {
                 return new Expect(line, text, Subject.UNITS, 0, 0, 0, operator, value, null);
             }
             case "text" -> {
-                if (words.length < 4 || !words[2].equalsIgnoreCase("contains")) {
-                    throw new LineException(words.length < 3 ? "missing_argument" : "bad_operator", text, EXPECT_TEXT_USAGE);
+                boolean negated = words.length >= 3 && words[2].equalsIgnoreCase("not");
+                int operatorWord = negated ? 3 : 2;
+
+                if (words.length < operatorWord + 2) {
+                    throw new LineException(words.length <= operatorWord ? "missing_argument" : "bad_text", text, EXPECT_TEXT_USAGE);
+                }
+
+                if (!words[operatorWord].equalsIgnoreCase("contains")) {
+                    throw new LineException("bad_operator", text, EXPECT_TEXT_USAGE);
                 }
 
                 int start = text.indexOf('"');
@@ -399,7 +418,7 @@ public final class MtestScript {
                     throw new LineException("extra_argument", text.substring(index).strip(), EXPECT_TEXT_USAGE);
                 }
 
-                return new Expect(line, text, Subject.TEXT, 0, 0, 0, "contains", 0, expected.toString());
+                return new Expect(line, text, Subject.TEXT, 0, 0, 0, negated ? "not contains" : "contains", 0, expected.toString());
             }
             default -> throw new LineException("unknown_subject", words[1], EXPECT_USAGE);
         }

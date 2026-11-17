@@ -128,6 +128,25 @@ final class MtestScriptTest {
     }
 
     @Test
+    void expectTextNotContainsHoldsOnlyWhenNoLineHasTheText() {
+        MtestScript.Expect present = (MtestScript.Expect) only("expect text contains \"전투 시작!\"");
+        MtestScript.Expect absent = (MtestScript.Expect) only("expect text not contains \"전투 시작!\"");
+        java.util.List<String> shown = java.util.List.of("", "\u0006전투 시작!");
+        java.util.List<String> cleared = java.util.List.of("", " ");
+
+        assertEquals("not contains", absent.operator());
+        assertEquals("전투 시작!", absent.text());
+        assertTrue(present.holdsText(shown));
+        assertFalse(present.holdsText(cleared));
+        assertFalse(absent.holdsText(shown));
+        assertTrue(absent.holdsText(cleared));
+        assertEquals("bad_operator", problem("expect text not equals \"a\"").code());
+        assertEquals("bad_text", problem("expect text not contains").code());
+        assertEquals("missing_argument", problem("expect text not").code());
+        assertEquals("missing_argument", problem("expect text").code());
+    }
+
+    @Test
     void expectUnitsComparesTheLiveUnitCount() {
         MtestScript.Expect expect = (MtestScript.Expect) only("expect units < 1700");
 
