@@ -1,0 +1,18 @@
+plugins {
+    id 'java-library'
+    id 'org.fogofwarlabs.sc4j.scr.java'
+}
+
+// eud-runner: runs a map headless, optionally driven by a .mtest script, and writes a JSON report (eud-agent's map tests). The jar holds
+// only these classes; it runs on the class path of the engine's runtime/lib/* and the scr.jar mod.
+dependencies {
+    implementation project(':scr-game')
+}
+
+jar {
+    archiveFileName = 'eud-runner.jar'
+    manifest {
+        attributes('Main-Class': 'org.fogofwarlabs.sc4j.scr.eud.runner.RunnerMain',
+                   'Implementation-Version': project.version)
+    }
+}

@@ -54,7 +54,9 @@ List<String> scrModules = [
     'net',
     'client',
     // JMH benchmarks (the frame benchmark of the replay simulation).
-    'benchmark'
+    'benchmark',
+    // eud-agent's headless map test runner.
+    'eud-runner'
 ]
 
 for (item in scrModules) {
