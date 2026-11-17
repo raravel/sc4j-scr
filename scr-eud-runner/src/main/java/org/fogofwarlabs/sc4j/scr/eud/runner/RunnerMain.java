@@ -29,7 +29,9 @@ import java.util.concurrent.atomic.AtomicReference;
  * Runs a map headless as a single-player use-map-settings game, optionally driven by a {@code .mtest} script, and writes one JSON report.
  * <p>
  * {@code eud-runner --data <SC:R folder> --map <scx|scm> --out <report.json> [--script <file.mtest>] [--frames N] [--slot N]
- * [--frame-timeout-ms N] [--time-limit-ms N]}
+ * [--frame-timeout-ms N] [--time-limit-ms N] [--epmap <output.epmap>]}
+ * <p>
+ * With the trace file of a {@code [main] debug} build, a failed or hung run reports the epScript statements that were running.
  * <p>
  * The report is written to {@code --out} (never stdout, which the engine's logging may share). Exit status 0 means a report was written,
  * 2 a usage error.
@@ -56,6 +58,8 @@ public final class RunnerMain {
     private volatile long lastProgressNanos;
     private volatile boolean simulating;
     private volatile long loadMillis;
+    private volatile @Nullable Game game;
+    private @Nullable TraceReader trace;
 
     private final Set<Integer> heldKeys = new HashSet<>();
     private int mouseButtons;
@@ -75,9 +79,10 @@ public final class RunnerMain {
      * @param slot               the human lobby slot
      * @param frameTimeoutMillis the wall time one frame may take before the run counts as hung
      * @param timeLimitMillis    the wall time of the whole run
+     * @param epmap              the trace file of a debug build, or {@code null}
      */
     record Options(@NotNull Path data, @NotNull Path map, @NotNull Path out, @Nullable Path script, int frames, int slot,
-                   long frameTimeoutMillis, long timeLimitMillis) {
+                   long frameTimeoutMillis, long timeLimitMillis, @Nullable Path epmap) {
     }
 
     private RunnerMain(@NotNull Options options, @Nullable MtestScript script) {
@@ -99,7 +104,7 @@ public final class RunnerMain {
         } catch (IllegalArgumentException exception) {
             System.err.println("eud-runner: " + exception.getMessage());
             System.err.println("usage: eud-runner --data <SC:R folder> --map <scx|scm> --out <report.json> [--script <file.mtest>] " +
-                               "[--frames N] [--slot N] [--frame-timeout-ms N] [--time-limit-ms N]");
+                               "[--frames N] [--slot N] [--frame-timeout-ms N] [--time-limit-ms N] [--epmap <output.epmap>]");
             System.exit(2);
             return;
         }
@@ -125,7 +130,13 @@ public final class RunnerMain {
             }
         }
 
-        new RunnerMain(options, script).run();
+        RunnerMain runner = new RunnerMain(options, script);
+
+        if (options.epmap() != null) {
+            runner.trace = TraceReader.load(options.epmap());
+        }
+
+        runner.run();
     }
 
     private void run() throws Exception {
@@ -161,7 +172,10 @@ public final class RunnerMain {
     private void writeAbandoned(@NotNull String status, @NotNull String error) throws IOException {
         Map<String, Object> report = baseReport();
 
-        report.put("runtime", ordered("status", status, "frame", this.frame, "error", error));
+        Map<String, Object> runtime = ordered("status", status, "frame", this.frame, "error", error);
+
+        this.putTrace(runtime);
+        report.put("runtime", runtime);
         report.put("framesRun", this.frame);
         report.put("framesPlanned", this.plannedFrames());
         this.putScript(report, status.equals("hang") ? "failed" : "incomplete");
@@ -185,7 +199,8 @@ public final class RunnerMain {
             LiveGame live = new LiveGame(setup, 12345);
             LiveMapSession session = LiveMapSession.start(gameData, live, this.options.map());
 
-            game = session.getGame();
+            game      = session.getGame();
+            this.game = game;
             this.loadMillis        = (System.nanoTime() - this.startNanos) / 1_000_000;
             this.lastProgressNanos = System.nanoTime();
             this.simulating        = true;
@@ -197,12 +212,20 @@ public final class RunnerMain {
             Exception failure = session.getFailure();
 
             if (failure != null) {
-                report.put("runtime", failureReport(failure, this.frame));
+                Map<String, Object> runtime = failureReport(failure, this.frame);
+
+                this.putTrace(runtime);
+                report.put("runtime", runtime);
             } else {
                 Map<String, Object> runtime = ordered("status", "ok");
 
                 if (stoppedBy != null) {
                     runtime.put("stoppedBy", stoppedBy);
+                    runtime.put("frame", this.frame);
+                }
+
+                if (session.getOutcome() != null) {
+                    runtime.put("outcome", session.getOutcome());
                 }
 
                 report.put("runtime", runtime);
@@ -214,7 +237,11 @@ public final class RunnerMain {
             }
         } catch (Throwable error) {
             this.simulating = false;
-            report.put("runtime", failureReport(error, this.frame));
+
+            Map<String, Object> runtime = failureReport(error, this.frame);
+
+            this.putTrace(runtime);
+            report.put("runtime", runtime);
         }
 
         report.put("framesRun", this.frame);
@@ -233,6 +260,27 @@ public final class RunnerMain {
         report.put("elapsedMs", (System.nanoTime() - this.startNanos) / 1_000_000);
 
         return report;
+    }
+
+    /**
+     * Adds the running epScript statements of a debug build: {@code where} the innermost, {@code trace} the stack outermost first.
+     */
+    private void putTrace(@NotNull Map<String, Object> runtime) {
+        TraceReader reader = this.trace;
+        Game current = this.game;
+
+        if (reader == null || current == null) {
+            return;
+        }
+
+        try {
+            List<String> stack = reader.readStack(current);
+
+            runtime.put("where", TraceReader.top(stack));
+            runtime.put("trace", stack);
+        } catch (RuntimeException error) {
+            runtime.put("traceError", error.getClass().getSimpleName() + ": " + error.getMessage());
+        }
     }
 
     /**
@@ -394,6 +442,10 @@ public final class RunnerMain {
             }
 
             this.lastProgressNanos = System.nanoTime();
+
+            if (session.getOutcome() != null) {
+                return "game_ended";
+            }
         }
 
         return session.getFailure() != null ? "failure" : null;
@@ -534,6 +586,7 @@ public final class RunnerMain {
         Path map = null;
         Path out = null;
         Path script = null;
+        Path epmap = null;
         int frames = DEFAULT_FRAMES;
         int slot = 0;
         long frameTimeout = DEFAULT_FRAME_TIMEOUT_MILLIS;
@@ -553,6 +606,7 @@ public final class RunnerMain {
                 case "--map" -> map = Path.of(value);
                 case "--out" -> out = Path.of(value);
                 case "--script" -> script = Path.of(value);
+                case "--epmap" -> epmap = Path.of(value);
                 case "--frames" -> frames = parsePositive(name, value, 1_000_000);
                 case "--slot" -> slot = parsePositive(name, value, 11);
                 case "--frame-timeout-ms" -> frameTimeout = parsePositive(name, value, 600_000);
@@ -565,7 +619,7 @@ public final class RunnerMain {
             throw new IllegalArgumentException("--data, --map and --out are required.");
         }
 
-        return new Options(data, map, out, script, frames, slot, frameTimeout, timeLimit);
+        return new Options(data, map, out, script, frames, slot, frameTimeout, timeLimit, epmap);
     }
 
     private static int parsePositive(@NotNull String name, @NotNull String value, int maximum) {

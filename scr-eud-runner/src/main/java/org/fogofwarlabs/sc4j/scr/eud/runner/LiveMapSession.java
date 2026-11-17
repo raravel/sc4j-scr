@@ -107,6 +107,17 @@ final class LiveMapSession {
     }
 
     /**
+     * @return the outcome screen the local player reached: {@code null} while the game runs, else {@code defeat} or {@code victory}
+     */
+    @Nullable String getOutcome() {
+        return switch (this.live.getLocalOutcome()) {
+            case 0 -> null;
+            case 2 -> "defeat";
+            default -> "victory";
+        };
+    }
+
+    /**
      * Advances one frame.
      */
     void stepFrame() {

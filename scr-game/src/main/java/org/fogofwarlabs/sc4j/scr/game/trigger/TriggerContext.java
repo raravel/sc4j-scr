@@ -870,6 +870,17 @@ public final class TriggerContext implements org.fogofwarlabs.sc4j.engine.trigge
     }
 
     /**
+     * Returns the classic address space that the triggers of this context read and write in EUD mode. Its regions hold what the
+     * triggers wrote (the string section payload, for one); a space made with {@link ClassicAddressSpace#create(TriggerContext, Game)}
+     * builds those regions anew from the map.
+     *
+     * @return the live address space, or {@code null} before the first EUD access or when another provider was set
+     */
+    public @Nullable ClassicAddressSpace getClassicAddressSpace() {
+        return this.extendedDeathsOperations instanceof ClassicAddressSpace space ? space : null;
+    }
+
+    /**
      * @return the EUD mode bits of the map triggers, set by the {@code TRIG} scan:
      * {@link #EXTENDED_DEATHS_CONDITION_MODE} for an extended Deaths condition,
      * {@link #EXTENDED_SET_DEATHS_MODE} for an extended SetDeaths action

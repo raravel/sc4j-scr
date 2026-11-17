@@ -34,7 +34,17 @@ final class GameReads {
     private final @NotNull ClassicAddressSpace space;
 
     GameReads(@NotNull Game game) {
-        this.space = ClassicAddressSpace.create(game);
+        this.space = liveSpace(game);
+    }
+
+    /**
+     * @param game the game
+     * @return the address space the map's triggers use, so that what they wrote is read back; a new one before the first EUD access
+     */
+    static @NotNull ClassicAddressSpace liveSpace(@NotNull Game game) {
+        ClassicAddressSpace live = game.getTriggerContext() == null ? null : game.getTriggerContext().getClassicAddressSpace();
+
+        return live != null ? live : ClassicAddressSpace.create(game);
     }
 
     /**
