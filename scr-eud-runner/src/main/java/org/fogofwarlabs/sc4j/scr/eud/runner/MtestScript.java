@@ -19,6 +19,9 @@ import java.util.regex.Pattern;
  * <li>{@code keydown NAME}, {@code keyup NAME}: only the press or only the release;</li>
  * <li>{@code click X,Y [left|right|middle] [FRAMES]}: the button is held at the map pixel X,Y for FRAMES game frames, then released;</li>
  * <li>{@code press X,Y [button]}, {@code release [button]}: only the press at a map pixel, or only the release;</li>
+ * <li>{@code view X,Y}: the 640x480 game view is centred on the map pixel X,Y, clamped to the map as the client clamps its camera; it
+ * clicks nothing, selects nothing and lets no frame pass, and the pointer keeps its place on the screen; like {@code click} it takes the camera
+ * over from a trigger Center View that holds it;</li>
  * <li>{@code expect deaths P<1-12> <UNIT 0-227> OP VALUE}, {@code expect memory 0x<ADDRESS> OP VALUE},
  * {@code expect text [not] contains "TEXT"}, {@code expect units OP VALUE}: a check of the state reached so far;</li>
  * <li>{@code shot [NAME]}: a picture of what the player sees at that point, without advancing the game; NAME is
@@ -55,6 +58,7 @@ public final class MtestScript {
     static final @NotNull String CLICK_USAGE = "click X,Y [left|right|middle] [FRAMES]";
     static final @NotNull String PRESS_USAGE = "press X,Y [left|right|middle]";
     static final @NotNull String RELEASE_USAGE = "release [left|right|middle]";
+    static final @NotNull String VIEW_USAGE = "view X,Y";
     static final @NotNull String EXPECT_DEATHS_USAGE = "expect deaths P<1-12> <UNIT 0-227> <OP> <VALUE>";
     static final @NotNull String EXPECT_MEMORY_USAGE = "expect memory 0x<ADDRESS> <OP> <VALUE>";
     static final @NotNull String EXPECT_TEXT_USAGE = "expect text [not] contains \"TEXT\"";
@@ -62,7 +66,7 @@ public final class MtestScript {
     static final @NotNull String EXPECT_USAGE = EXPECT_DEATHS_USAGE + " | " + EXPECT_MEMORY_USAGE + " | " + EXPECT_TEXT_USAGE + " | " +
                                                EXPECT_UNITS_USAGE;
     static final @NotNull String SHOT_USAGE = "shot [NAME]  (NAME: A-Z a-z 0-9 _ -, at most 40)";
-    static final @NotNull String COMMANDS_USAGE = "wait, key, keydown, keyup, click, press, release, expect, shot";
+    static final @NotNull String COMMANDS_USAGE = "wait, key, keydown, keyup, click, press, release, view, expect, shot";
 
     /**
      * The mouse button flags of the classic interface (0x6CDDC0).
@@ -83,7 +87,7 @@ public final class MtestScript {
     /**
      * One step of a script.
      */
-    public sealed interface Step permits Wait, KeyStep, MouseStep, Expect, Shot {
+    public sealed interface Step permits Wait, KeyStep, MouseStep, View, Expect, Shot {
         /**
          * @return the 1-based script line
          */
@@ -136,6 +140,16 @@ public final class MtestScript {
      * @param frames the hold time of {@link MouseAction#CLICK}, else 0
      */
     public record MouseStep(int line, @NotNull MouseAction action, int x, int y, int button, int frames) implements Step {
+    }
+
+    /**
+     * {@code view X,Y}: the game view is centred on a map pixel without a click and without a frame.
+     *
+     * @param line the script line
+     * @param x    the map pixel X the view centres on
+     * @param y    the map pixel Y the view centres on
+     */
+    public record View(int line, int x, int y) implements Step {
     }
 
     /**
@@ -244,6 +258,7 @@ public final class MtestScript {
                 case Wait wait -> wait.frames();
                 case KeyStep key -> key.frames();
                 case MouseStep mouse -> mouse.frames();
+                case View ignored -> 0;
                 case Expect ignored -> 0;
                 case Shot ignored -> 0;
             };
@@ -360,6 +375,11 @@ public final class MtestScript {
                 requireCount(words, 1, 2, RELEASE_USAGE);
                 int button = words.length > 1 ? parseButton(words[1], RELEASE_USAGE) : LEFT_BUTTON;
                 yield new MouseStep(line, MouseAction.RELEASE, 0, 0, button, 0);
+            }
+            case "view" -> {
+                requireCount(words, 2, 2, VIEW_USAGE);
+                int[] point = parsePoint(words[1], VIEW_USAGE);
+                yield new View(line, point[0], point[1]);
             }
             case "expect" -> parseExpect(line, text, words);
             case "shot" -> {

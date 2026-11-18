@@ -81,8 +81,10 @@ public final class RunnerMain {
 
     private final Set<Integer> heldKeys = new HashSet<>();
     private int mouseButtons;
-    private int viewScreenX;
-    private int viewScreenY;
+    /**
+     * The local player's camera, made when the game starts.
+     */
+    private @Nullable ViewCamera viewCamera;
     private int viewMouseX = 10;
     private int viewMouseY = 10;
 
@@ -252,8 +254,10 @@ public final class RunnerMain {
             LiveGame live = new LiveGame(setup, 12345);
             LiveMapSession session = LiveMapSession.start(gameData, live, this.options.map(), lineLayout);
 
-            game      = session.getGame();
-            this.game = game;
+            game            = session.getGame();
+            this.game       = game;
+            this.viewCamera = new ViewCamera(game);
+            this.viewCamera.placeStartScreen(live.getLocalPlayer());
 
             if (this.options.profile()) {
                 this.profiler = new Profiler(this.trace);
@@ -533,6 +537,12 @@ public final class RunnerMain {
                         yield null;
                     }
                 };
+                case MtestScript.View view -> {
+                    // The pointer keeps its place on the screen; the next frame supplies the moved camera.
+                    this.camera().centerOn(view.x(), view.y());
+                    this.applyMouse(game);
+                    yield null;
+                }
                 case MtestScript.Expect expect -> {
                     this.expects.add(evaluate(game, expect, this.frame));
                     yield null;
@@ -595,6 +605,9 @@ public final class RunnerMain {
                 stalls = 0;
                 this.frame += after - before;
 
+                // As the client: a screen the game stored and the trigger Center View move the camera before the interface follows.
+                this.camera().followFrame();
+
                 if (this.clientInterface != null) {
                     this.clientInterface.followFrame();
                 }
@@ -621,7 +634,7 @@ public final class RunnerMain {
         ClientInterface current = this.clientInterface;
 
         if (current == null) {
-            current              = new ClientInterface(session.getGame(), session.getLive(), session.getFrameTiming());
+            current              = new ClientInterface(session.getGame(), session.getLive(), session.getFrameTiming(), this.camera());
             this.clientInterface = current;
         }
 
@@ -637,7 +650,9 @@ public final class RunnerMain {
         }
 
         try {
-            this.requireInterface(session).pressLeft(this.viewScreenX + this.viewMouseX, this.viewScreenY + this.viewMouseY,
+            ViewCamera camera = this.camera();
+
+            this.requireInterface(session).pressLeft(camera.getScreenX() + this.viewMouseX, camera.getScreenY() + this.viewMouseY,
                                                      this.viewMouseX, this.viewMouseY);
         } catch (IOException | RuntimeException error) {
             this.interfaceErrors.add("frame " + this.frame + ": " + error.getClass().getSimpleName() + ": " + error.getMessage());
@@ -655,7 +670,7 @@ public final class RunnerMain {
         }
 
         try {
-            current.releaseLeft(this.viewScreenX + this.viewMouseX, this.viewScreenY + this.viewMouseY);
+            current.releaseLeft(this.camera().getScreenX() + this.viewMouseX, this.camera().getScreenY() + this.viewMouseY);
         } catch (IOException | RuntimeException error) {
             this.interfaceErrors.add("frame " + this.frame + ": " + error.getClass().getSimpleName() + ": " + error.getMessage());
         }
@@ -697,22 +712,37 @@ public final class RunnerMain {
     }
 
     /**
-     * Moves the screen and the pointer so that the pointer rests on a map pixel.
+     * @return the local player's camera
+     * @throws IllegalStateException before the game started
+     */
+    private @NotNull ViewCamera camera() {
+        ViewCamera current = this.viewCamera;
+
+        if (current == null) {
+            throw new IllegalStateException("The camera is made when the game starts.");
+        }
+
+        return current;
+    }
+
+    /**
+     * Moves the screen and the pointer so that the pointer rests on a map pixel: the screen centres on it within the map.
      */
     private void pointAt(@NotNull Game game, int x, int y) {
-        int mapWidth = game.getMap().getWidth() * 32;
-        int mapHeight = game.getMap().getHeight() * 32;
+        ViewCamera camera = this.camera();
 
-        this.viewScreenX = Math.clamp(x - LiveMapSession.VIEWPORT_WIDTH / 2, 0, Math.max(0, mapWidth - LiveMapSession.VIEWPORT_WIDTH));
-        this.viewScreenY = Math.clamp(y - LiveMapSession.VIEWPORT_HEIGHT / 2, 0, Math.max(0, mapHeight - LiveMapSession.VIEWPORT_HEIGHT));
-        this.viewMouseX  = x - this.viewScreenX;
-        this.viewMouseY  = y - this.viewScreenY;
+        camera.centerOn(x, y);
+        this.viewMouseX = x - camera.getScreenX();
+        this.viewMouseY = y - camera.getScreenY();
         this.applyMouse(game);
     }
 
+    /**
+     * Supplies the buttons, the pointer and the camera to the game, as the client does before every frame.
+     */
     private void applyMouse(@NotNull Game game) {
         game.getInterfaceLink().getLocalInterface().setMouseButtons(this.mouseButtons);
-        game.getInterfaceLink().getLocalView().setView(this.viewScreenX, this.viewScreenY, this.viewMouseX, this.viewMouseY);
+        this.camera().supply(this.viewMouseX, this.viewMouseY);
     }
 
     private static @NotNull Map<String, Object> evaluate(@NotNull Game game, @NotNull MtestScript.Expect expect, int frame) {

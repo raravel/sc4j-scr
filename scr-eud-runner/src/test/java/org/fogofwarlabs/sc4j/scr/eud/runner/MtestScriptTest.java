@@ -91,6 +91,27 @@ final class MtestScriptTest {
     }
 
     @Test
+    void viewCentresOnAMapPixelWithoutFrames() {
+        assertEquals(new MtestScript.View(1, 1024, 1024), only("view 1024,1024"));
+        assertEquals(new MtestScript.View(1, 0, 0), only("VIEW 0,0"));
+        assertEquals(new MtestScript.View(1, MtestScript.MAXIMUM_COORDINATE, 7), only("view " + MtestScript.MAXIMUM_COORDINATE + ",7"));
+        assertEquals(0, MtestScript.parse(List.of("view 1,2", "view 3,4")).getPlannedFrames());
+    }
+
+    @Test
+    void viewRejectsAnythingButOnePoint() {
+        assertEquals(new MtestScript.Problem(1, "missing_argument", "view", MtestScript.VIEW_USAGE), problem("view"));
+        assertEquals("extra_argument", problem("view 1,2 3").code());
+        assertEquals("extra_argument", problem("view 1,2 left").code());
+        assertEquals("bad_point", problem("view 10").code());
+        assertEquals("bad_point", problem("view 1,2,3").code());
+        assertEquals("out_of_range", problem("view -1,5").code());
+        assertEquals("bad_number", problem("view 0.5,1").code());
+        assertEquals("out_of_range", problem("view 8192,1").code());
+        assertEquals(MtestScript.VIEW_USAGE, problem("view x,y").usage());
+    }
+
+    @Test
     void expectDeathsReadsOnePlayerAndUnit() {
         MtestScript.Expect expect = (MtestScript.Expect) only("expect deaths P1 2 == 1");
 

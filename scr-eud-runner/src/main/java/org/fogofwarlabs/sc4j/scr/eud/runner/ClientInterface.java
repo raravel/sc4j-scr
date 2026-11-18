@@ -1,12 +1,9 @@
 package org.fogofwarlabs.sc4j.scr.eud.runner;
 
-import org.fogofwarlabs.sc4j.engine.client.display.DisplayScale;
-import org.fogofwarlabs.sc4j.engine.client.display.UiSurface;
 import org.fogofwarlabs.sc4j.scr.client.ui.command.CommandCard;
 import org.fogofwarlabs.sc4j.scr.client.ui.console.ConsoleModel;
 import org.fogofwarlabs.sc4j.scr.client.ui.input.WorldInterface;
 import org.fogofwarlabs.sc4j.scr.client.world.ClientCamera;
-import org.fogofwarlabs.sc4j.scr.client.world.GameScreenCamera;
 import org.fogofwarlabs.sc4j.scr.client.world.GameViewport;
 import org.fogofwarlabs.sc4j.scr.client.world.ScrGameView;
 import org.fogofwarlabs.sc4j.scr.client.world.ScrPresentation;
@@ -14,7 +11,6 @@ import org.fogofwarlabs.sc4j.scr.game.frame.GameSpeed;
 import org.fogofwarlabs.sc4j.scr.game.session.LiveGame;
 import org.fogofwarlabs.sc4j.scr.game.state.Game;
 import org.fogofwarlabs.sc4j.scr.game.trigger.eud.region.LocalInterfaceState;
-import org.fogofwarlabs.sc4j.scr.game.trigger.eud.region.LocalView;
 import org.jetbrains.annotations.NotNull;
 
 import java.io.IOException;
@@ -28,19 +24,14 @@ import java.io.IOException;
  * supplied to the game.
  */
 final class ClientInterface {
-    private static final int TILE_SIZE = 32;
-
     private final @NotNull Game game;
     private final @NotNull GameSpeed timing;
     private final int player;
-    private final int mapWidth;
-    private final int mapHeight;
 
     private final @NotNull ScrGameView view;
     private final @NotNull ConsoleModel model;
     private final @NotNull WorldInterface world;
-    private final @NotNull GameViewport viewport;
-    private final @NotNull ClientCamera camera;
+    private final @NotNull ViewCamera camera;
 
     private boolean installed;
 
@@ -50,25 +41,18 @@ final class ClientInterface {
      * @param game   the game
      * @param live   the live session, which takes the selection commands
      * @param timing the game speed configuration
+     * @param camera the local player's camera, which the console and the world interaction read
      */
-    ClientInterface(@NotNull Game game, @NotNull LiveGame live, @NotNull GameSpeed timing) {
-        this.game      = game;
-        this.timing    = timing;
-        this.player    = live.getLocalPlayer();
-        this.mapWidth  = game.getMap().getWidth() * TILE_SIZE;
-        this.mapHeight = game.getMap().getHeight() * TILE_SIZE;
+    ClientInterface(@NotNull Game game, @NotNull LiveGame live, @NotNull GameSpeed timing, @NotNull ViewCamera camera) {
+        this.game   = game;
+        this.timing = timing;
+        this.player = live.getLocalPlayer();
+        this.camera = camera;
 
         this.view  = new ScrGameView(game);
         this.model = new ConsoleModel(this.view, new ScrPresentation(game));
         // Live play: the commands go into the session's turn buffer and execute on a later frame.
         this.world = new WorldInterface(this.model, (issuer, opcode, payload) -> live.submit(opcode, payload), true);
-
-        this.viewport = new GameViewport();
-        this.viewport.setSurface(UiSurface.of(LiveMapSession.VIEWPORT_WIDTH, LiveMapSession.VIEWPORT_HEIGHT, DisplayScale.ONE));
-        this.viewport.setInterface(false, true, false);
-        this.camera = new ClientCamera(this.mapWidth, this.mapHeight);
-        this.camera.setViewport(this.viewport);
-        this.camera.setNativeZoom();
 
         this.model.setOwnLocalSelection(this.player);
         this.installed = false;
@@ -105,17 +89,12 @@ final class ClientInterface {
     }
 
     /**
-     * Reads the console values for a shot when the interface does not follow the frames.
+     * Reads the console values for a shot when the interface does not follow the frames. The shot shows the camera ({@link ViewCamera}).
      */
     void prepareShot() {
         if (!this.installed) {
             this.refresh();
         }
-
-        // The camera shows the game screen the game holds (LocalView), as the client follows a screen write.
-        LocalView localView = this.game.getInterfaceLink().getLocalView();
-
-        GameScreenCamera.ofPlayView(this.camera, this.viewport, this.mapWidth, this.mapHeight).moveTo(localView.getScreenX(), localView.getScreenY());
     }
 
     private void refresh() {
@@ -136,7 +115,7 @@ final class ClientInterface {
     void pressLeft(int mapX, int mapY, int screenX, int screenY) throws IOException {
         this.install();
 
-        if (screenY >= this.viewport.getPlayRows()) {
+        if (screenY >= this.getViewport().getPlayRows()) {
             // Below the play view the pointer is over the console, not the map.
             return;
         }
@@ -157,14 +136,14 @@ final class ClientInterface {
             return;
         }
 
-        LocalView localView = this.game.getInterfaceLink().getLocalView();
-        int left = localView.getScreenX();
-        int top = localView.getScreenY();
+        int left = this.camera.getScreenX();
+        int top = this.camera.getScreenY();
+        float zoom = this.getCamera().getZoom();
 
         this.world.handleLeftRelease(mapX, mapY, false, false, false, false,
                                      left, top,
-                                     left + this.viewport.getViewTileWidth(this.camera.getZoom()),
-                                     top + this.viewport.getViewTileHeight(this.camera.getZoom()));
+                                     left + this.getViewport().getViewTileWidth(zoom),
+                                     top + this.getViewport().getViewTileHeight(zoom));
     }
 
     @NotNull ScrGameView getView() {
@@ -180,10 +159,10 @@ final class ClientInterface {
     }
 
     @NotNull GameViewport getViewport() {
-        return this.viewport;
+        return this.camera.getViewport();
     }
 
     @NotNull ClientCamera getCamera() {
-        return this.camera;
+        return this.camera.getCamera();
     }
 }
