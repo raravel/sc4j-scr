@@ -17,7 +17,8 @@
 
 > **Fork notice (`eud` branch).** This fork adds `scr-eud-runner`, a headless map runner that
 > [eud-agent](https://github.com/raravel/eud-agent) uses to test EUD maps: it plays a map without a client, drives it with
-> a `.mtest` script (keys, mouse buttons at map pixels, checks of deaths, memory, message lines and units), reports
+> a `.mtest` script (keys, mouse buttons at map pixels, checks of deaths, memory, message lines and units, and `shot`
+> pictures of the classic 640x480 screen with its console), reports
 > failures and hangs (with the running epScript statement of a `[main] debug` build) and can count the trigger work per
 > frame and per statement. Its releases (`v<scr version>-eud.<n>`) carry the `scr.jar` and `eud-runner.jar` built from this
 > branch. Everything else is upstream [fogofwarlabs/sc4j-scr](https://github.com/fogofwarlabs/sc4j-scr).

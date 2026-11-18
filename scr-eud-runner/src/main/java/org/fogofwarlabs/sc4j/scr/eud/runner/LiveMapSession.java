@@ -57,11 +57,13 @@ final class LiveMapSession {
      * @param gameData the installed game data
      * @param live     the live session
      * @param mapPath  the map file
+     * @param layout   the client's message line layout
      * @return the started session
      * @throws IOException           if the map or the installed texts cannot be read
      * @throws IllegalStateException if the game fails at startup
      */
-    static @NotNull LiveMapSession start(@NotNull GameData gameData, @NotNull LiveGame live, @NotNull Path mapPath) throws IOException {
+    static @NotNull LiveMapSession start(@NotNull GameData gameData, @NotNull LiveGame live, @NotNull Path mapPath,
+                                         MessageLines.@NotNull TextLayout layout) throws IOException {
         ReplayRuntime runtime = ReplayRuntime.createLiveGame(live.getReplay(),
                                                              ChkFile.parseTolerant(live.getSetup().getMapData()),
                                                              gameData,
@@ -71,7 +73,7 @@ final class LiveMapSession {
                                                              VIEWPORT_WIDTH, VIEWPORT_HEIGHT,
                                                              INSTRUCTION_LIMIT);
 
-        prepareInterface(runtime.getGame(), gameData);
+        prepareInterface(runtime.getGame(), gameData, layout);
 
         runtime.setSourceFile(GameSourceFile.read(mapPath));
         live.startSession(runtime.getGame(), runtime.getFrameTiming());
@@ -97,6 +99,20 @@ final class LiveMapSession {
      */
     @NotNull Game getGame() {
         return this.runtime.getGame();
+    }
+
+    /**
+     * @return the live session, which takes the local player's commands
+     */
+    @NotNull LiveGame getLive() {
+        return this.live;
+    }
+
+    /**
+     * @return the game speed configuration
+     */
+    @NotNull GameSpeed getFrameTiming() {
+        return this.runtime.getFrameTiming();
     }
 
     /**
@@ -129,7 +145,8 @@ final class LiveMapSession {
         this.live.updateOutcome(this.runtime.getGame());
     }
 
-    private static void prepareInterface(@NotNull Game game, @NotNull GameData gameData) throws IOException {
+    private static void prepareInterface(@NotNull Game game, @NotNull GameData gameData, MessageLines.@NotNull TextLayout layout)
+            throws IOException {
         game.getInterfaceLink().getLocalKeyStates().setAllReleased();
         game.getInterfaceLink().getLocalView().setView(0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
 
@@ -148,7 +165,8 @@ final class LiveMapSession {
 
         MessageLines lines = game.getInterfaceLink().getMessageLines();
 
-        lines.setLayout(text -> new int[]{text.length});
+        // The client's own wrapping, so a long line takes the rows it takes on the client's screen (MessageLayout).
+        lines.setLayout(layout);
         lines.setHostClock(() -> game.getCurrentFrame() * GameSpeed.FASTEST_DURATION);
         lines.setSubtitles(Boolean.TRUE);
         lines.setDepartureFormats("%s has left the game.", "%s was dropped from the game.");

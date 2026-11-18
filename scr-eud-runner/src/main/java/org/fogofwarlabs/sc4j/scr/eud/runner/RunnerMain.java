@@ -1,7 +1,11 @@
 package org.fogofwarlabs.sc4j.scr.eud.runner;
 
 import org.fogofwarlabs.sc4j.scr.content.ScrRaceIds;
+import org.fogofwarlabs.sc4j.scr.data.format.casc.CascStorage;
+import org.fogofwarlabs.sc4j.scr.data.format.casc.GameLocaleUtils;
 import org.fogofwarlabs.sc4j.scr.data.format.mpq.MpqArchive;
+import org.fogofwarlabs.sc4j.scr.data.resource.ScrResourceProvider;
+import org.fogofwarlabs.sc4j.scr.game.presentation.MessageLines;
 import org.fogofwarlabs.sc4j.scr.game.session.LiveGame;
 import org.fogofwarlabs.sc4j.scr.game.session.setup.MeleeGameSetup;
 import org.fogofwarlabs.sc4j.scr.game.state.Game;
@@ -29,7 +33,11 @@ import java.util.concurrent.atomic.AtomicReference;
  * Runs a map headless as a single-player use-map-settings game, optionally driven by a {@code .mtest} script, and writes one JSON report.
  * <p>
  * {@code eud-runner --data <SC:R folder> --map <scx|scm> --out <report.json> [--script <file.mtest>] [--frames N] [--slot N]
- * [--frame-timeout-ms N] [--time-limit-ms N] [--epmap <output.epmap>] [--profile]}
+ * [--frame-timeout-ms N] [--time-limit-ms N] [--epmap <output.epmap>] [--profile] [--shots-dir <folder>]}
+ * <p>
+ * A script's {@code shot} lines write {@code <shots-dir>/<name>.png}: the classic 640x480 screen the local player sees at that point of the run
+ * ({@link ShotRenderer}). The window and OpenGL context are made at the first shot only; a shot that cannot be drawn is reported with its
+ * reason and never changes the run.
  * <p>
  * With the trace file of a {@code [main] debug} build, a failed or hung run reports the epScript statements that were running.
  * {@code --profile} counts the trigger records and actions of each frame and, with the trace file, attributes the actions to statements.
@@ -55,13 +63,21 @@ public final class RunnerMain {
     private final @Nullable MtestScript script;
     private final long startNanos = System.nanoTime();
     private final List<Map<String, Object>> expects = Collections.synchronizedList(new ArrayList<>());
+    private final List<Map<String, Object>> shots = Collections.synchronizedList(new ArrayList<>());
+    private final List<String> interfaceErrors = Collections.synchronizedList(new ArrayList<>());
     private volatile int frame;
     private volatile long lastProgressNanos;
     private volatile boolean simulating;
+    /**
+     * Whether a shot is being drawn: the frame watchdog waits, as the draw has its own bound ({@link ShotRenderer}).
+     */
+    private volatile boolean rendering;
     private volatile long loadMillis;
     private volatile @Nullable Game game;
     private @Nullable TraceReader trace;
     private @Nullable Profiler profiler;
+    private @Nullable ClientInterface clientInterface;
+    private @Nullable ShotRenderer shotRenderer;
 
     private final Set<Integer> heldKeys = new HashSet<>();
     private int mouseButtons;
@@ -83,9 +99,10 @@ public final class RunnerMain {
      * @param timeLimitMillis    the wall time of the whole run
      * @param epmap              the trace file of a debug build, or {@code null}
      * @param profile            whether trigger work is counted
+     * @param shotsDir           the folder of the shot pictures, or {@code null}
      */
     record Options(@NotNull Path data, @NotNull Path map, @NotNull Path out, @Nullable Path script, int frames, int slot,
-                   long frameTimeoutMillis, long timeLimitMillis, @Nullable Path epmap, boolean profile) {
+                   long frameTimeoutMillis, long timeLimitMillis, @Nullable Path epmap, boolean profile, @Nullable Path shotsDir) {
     }
 
     private RunnerMain(@NotNull Options options, @Nullable MtestScript script) {
@@ -105,10 +122,7 @@ public final class RunnerMain {
         try {
             options = parseOptions(arguments);
         } catch (IllegalArgumentException exception) {
-            System.err.println("eud-runner: " + exception.getMessage());
-            System.err.println("usage: eud-runner --data <SC:R folder> --map <scx|scm> --out <report.json> [--script <file.mtest>] " +
-                               "[--frames N] [--slot N] [--frame-timeout-ms N] [--time-limit-ms N] [--epmap <output.epmap>] [--profile]");
-            System.exit(2);
+            exitWithUsage(exception.getMessage());
             return;
         }
 
@@ -116,6 +130,11 @@ public final class RunnerMain {
 
         if (options.script() != null) {
             script = MtestScript.parse(Files.readAllLines(options.script(), StandardCharsets.UTF_8));
+
+            if (script.getProblems().isEmpty() && !script.getShots().isEmpty() && options.shotsDir() == null) {
+                exitWithUsage("The script has shot lines; --shots-dir is required.");
+                return;
+            }
 
             if (!script.getProblems().isEmpty()) {
                 Map<String, Object> report = baseReport();
@@ -142,6 +161,14 @@ public final class RunnerMain {
         runner.run();
     }
 
+    private static void exitWithUsage(@NotNull String message) {
+        System.err.println("eud-runner: " + message);
+        System.err.println("usage: eud-runner --data <SC:R folder> --map <scx|scm> --out <report.json> [--script <file.mtest>] " +
+                           "[--frames N] [--slot N] [--frame-timeout-ms N] [--time-limit-ms N] [--epmap <output.epmap>] [--profile] " +
+                           "[--shots-dir <folder>]");
+        System.exit(2);
+    }
+
     private void run() throws Exception {
         AtomicReference<Map<String, Object>> finished = new AtomicReference<>();
         Thread worker = new Thread(() -> finished.set(this.simulate()), "eud-runner-simulation");
@@ -154,12 +181,15 @@ public final class RunnerMain {
 
             long now = System.nanoTime();
 
-            if (worker.isAlive() && this.simulating && (now - this.lastProgressNanos) / 1_000_000 > this.options.frameTimeoutMillis()) {
+            if (worker.isAlive() && this.simulating && !this.rendering &&
+                (now - this.lastProgressNanos) / 1_000_000 > this.options.frameTimeoutMillis()) {
                 this.writeAbandoned("hang", "No frame finished within " + this.options.frameTimeoutMillis() + " ms.");
                 return;
             }
 
-            if (worker.isAlive() && (now - this.startNanos) / 1_000_000 > this.options.timeLimitMillis() + this.options.frameTimeoutMillis()) {
+            // A shot's own bound ends its wait (ShotRenderer); the time limit then stops the run at its next frame.
+            if (worker.isAlive() && !this.rendering &&
+                (now - this.startNanos) / 1_000_000 > this.options.timeLimitMillis() + this.options.frameTimeoutMillis()) {
                 this.writeAbandoned("timeout", "The run did not finish within " + this.options.timeLimitMillis() + " ms.");
                 return;
             }
@@ -195,12 +225,32 @@ public final class RunnerMain {
     private @NotNull Map<String, Object> simulate() {
         Map<String, Object> report = baseReport();
         Game game = null;
+        MessageLayout layout = null;
+        MessageLines.TextLayout lineLayout;
+        CascStorage[] opened = new CascStorage[1];
 
-        try (GameData gameData = GameData.loadFrom(this.options.data())) {
+        try (GameData gameData = loadGameData(this.options.data(), opened)) {
+            CascStorage storage = opened[0];
+            ScrResourceProvider resources = ScrResourceProvider.borrow(storage, gameData.getAddedGraphics());
+            String locale = GameLocaleUtils.select(null, this.options.data(), storage);
+
+            try {
+                layout     = MessageLayout.load(resources, locale);
+                lineLayout = layout.getLayout();
+            } catch (IOException | RuntimeException | LinkageError error) {
+                // Without the client's font metrics the lines are not wrapped; the report says so.
+                lineLayout = text -> new int[]{text.length};
+                report.put("messageLayoutError", error.getClass().getSimpleName() + ": " + error.getMessage());
+            }
+
+            if (this.script != null && !this.script.getShots().isEmpty()) {
+                this.shotRenderer = new ShotRenderer(storage, resources, locale);
+            }
+
             byte[] mapData = MpqArchive.open(this.options.map()).readFile("staredit\\scenario.chk");
             MeleeGameSetup setup = MeleeGameSetup.createUseMapSettings(mapData, "tester", ScrRaceIds.TERRAN, this.options.slot(), 6);
             LiveGame live = new LiveGame(setup, 12345);
-            LiveMapSession session = LiveMapSession.start(gameData, live, this.options.map());
+            LiveMapSession session = LiveMapSession.start(gameData, live, this.options.map(), lineLayout);
 
             game      = session.getGame();
             this.game = game;
@@ -243,8 +293,11 @@ public final class RunnerMain {
             if (failure == null || classify(failure).equals("unsupported")) {
                 putState(report, game);
             }
+
+            this.closeRenderers(layout);
         } catch (Throwable error) {
             this.simulating = false;
+            this.closeRenderers(layout);
 
             Map<String, Object> runtime = failureReport(error, this.frame);
 
@@ -268,10 +321,57 @@ public final class RunnerMain {
             report.put("profile", this.profiler.report());
         }
 
+        if (!this.interfaceErrors.isEmpty()) {
+            report.put("interfaceErrors", List.copyOf(this.interfaceErrors));
+        }
+
         report.put("loadMs", this.loadMillis);
         report.put("elapsedMs", (System.nanoTime() - this.startNanos) / 1_000_000);
 
         return report;
+    }
+
+    /**
+     * Opens the installed storage and loads its game data, which owns the storage from then on.
+     *
+     * @param data   the SC:R installation
+     * @param opened receives the opened storage
+     * @return the game data
+     * @throws IOException if the storage cannot be opened or a table cannot be loaded
+     */
+    private static @NotNull GameData loadGameData(@NotNull Path data, @Nullable CascStorage @NotNull [] opened) throws IOException {
+        CascStorage storage = CascStorage.open(data);
+
+        try {
+            GameData gameData = GameData.load(storage);
+
+            opened[0] = storage;
+
+            return gameData;
+        } catch (IOException | RuntimeException | Error exception) {
+            try {
+                storage.close();
+            } catch (RuntimeException | Error closeFailure) {
+                exception.addSuppressed(closeFailure);
+            }
+
+            throw exception;
+        }
+    }
+
+    /**
+     * Closes the shot renderer and the message metrics before the storage they read closes.
+     */
+    private void closeRenderers(@Nullable MessageLayout layout) {
+        ShotRenderer renderer = this.shotRenderer;
+
+        if (renderer != null) {
+            renderer.close();
+        }
+
+        if (layout != null) {
+            layout.close();
+        }
     }
 
     /**
@@ -343,8 +443,43 @@ public final class RunnerMain {
 
         boolean allPassed = results.stream().allMatch(result -> Boolean.TRUE.equals(((Map<?, ?>) result).get("ok")));
         String status = runtimeVerdict != null ? runtimeVerdict : unreached ? "incomplete" : allPassed ? "passed" : "failed";
+        Map<String, Object> section = ordered("status", status, "expects", results);
 
-        report.put("script", ordered("status", status, "expects", results));
+        if (!this.script.getShots().isEmpty()) {
+            section.put("shots", this.shotResults());
+
+            ShotRenderer renderer = this.shotRenderer;
+
+            if (renderer != null && !renderer.getWarnings().isEmpty()) {
+                section.put("shotWarnings", renderer.getWarnings());
+            }
+        }
+
+        report.put("script", section);
+    }
+
+    /**
+     * @return every shot result, then the shots never reached
+     */
+    private @NotNull List<Object> shotResults() {
+        List<Object> results;
+        Set<Integer> taken = new HashSet<>();
+
+        synchronized (this.shots) {
+            results = new ArrayList<>(this.shots);
+
+            for (Map<String, Object> shot : this.shots) {
+                taken.add((Integer) shot.get("line"));
+            }
+        }
+
+        for (MtestScript.Shot shot : this.script.getShots()) {
+            if (!taken.contains(shot.line())) {
+                results.add(ordered("line", shot.line(), "name", shot.name(), "notReached", true));
+            }
+        }
+
+        return results;
     }
 
     /**
@@ -378,24 +513,32 @@ public final class RunnerMain {
                     case CLICK -> {
                         this.pointAt(game, mouse.x(), mouse.y());
                         this.mouseButtons |= mouse.button();
+                        this.pressOnMap(session, mouse.button());
                         String result = this.advance(session, mouse.frames());
                         this.mouseButtons &= ~mouse.button();
                         this.applyMouse(game);
+                        this.releaseOnMap(mouse.button());
                         yield result;
                     }
                     case PRESS -> {
                         this.pointAt(game, mouse.x(), mouse.y());
                         this.mouseButtons |= mouse.button();
+                        this.pressOnMap(session, mouse.button());
                         yield null;
                     }
                     case RELEASE -> {
                         this.mouseButtons &= ~mouse.button();
                         this.applyMouse(game);
+                        this.releaseOnMap(mouse.button());
                         yield null;
                     }
                 };
                 case MtestScript.Expect expect -> {
                     this.expects.add(evaluate(game, expect, this.frame));
+                    yield null;
+                }
+                case MtestScript.Shot shot -> {
+                    this.shoot(session, shot);
                     yield null;
                 }
             };
@@ -452,6 +595,10 @@ public final class RunnerMain {
                 stalls = 0;
                 this.frame += after - before;
 
+                if (this.clientInterface != null) {
+                    this.clientInterface.followFrame();
+                }
+
                 if (this.profiler != null) {
                     this.profiler.endFrame(game, this.frame);
                 }
@@ -465,6 +612,82 @@ public final class RunnerMain {
         }
 
         return session.getFailure() != null ? "failure" : null;
+    }
+
+    /**
+     * @return the client interface of the run, made on first use
+     */
+    private @NotNull ClientInterface requireInterface(@NotNull LiveMapSession session) {
+        ClientInterface current = this.clientInterface;
+
+        if (current == null) {
+            current              = new ClientInterface(session.getGame(), session.getLive(), session.getFrameTiming());
+            this.clientInterface = current;
+        }
+
+        return current;
+    }
+
+    /**
+     * Hands a left press at the pointer to the client's world interaction, which selects as the client does.
+     */
+    private void pressOnMap(@NotNull LiveMapSession session, int button) {
+        if (button != MtestScript.LEFT_BUTTON) {
+            return;
+        }
+
+        try {
+            this.requireInterface(session).pressLeft(this.viewScreenX + this.viewMouseX, this.viewScreenY + this.viewMouseY,
+                                                     this.viewMouseX, this.viewMouseY);
+        } catch (IOException | RuntimeException error) {
+            this.interfaceErrors.add("frame " + this.frame + ": " + error.getClass().getSimpleName() + ": " + error.getMessage());
+        }
+    }
+
+    /**
+     * Hands a left release at the pointer to the client's world interaction: a click selects the unit under it, a box the units inside.
+     */
+    private void releaseOnMap(int button) {
+        ClientInterface current = this.clientInterface;
+
+        if (button != MtestScript.LEFT_BUTTON || current == null) {
+            return;
+        }
+
+        try {
+            current.releaseLeft(this.viewScreenX + this.viewMouseX, this.viewScreenY + this.viewMouseY);
+        } catch (IOException | RuntimeException error) {
+            this.interfaceErrors.add("frame " + this.frame + ": " + error.getClass().getSimpleName() + ": " + error.getMessage());
+        }
+    }
+
+    /**
+     * Draws a shot of the current frame. The game does not run meanwhile; a shot that cannot be drawn is reported and the run goes on.
+     */
+    private void shoot(@NotNull LiveMapSession session, @NotNull MtestScript.Shot shot) {
+        Path folder = this.options.shotsDir();
+        ShotRenderer renderer = this.shotRenderer;
+
+        this.rendering = true;
+
+        try {
+            if (folder == null || renderer == null) {
+                throw new IOException("no renderer");
+            }
+
+            Path file = folder.resolve(shot.name() + ".png").toAbsolutePath();
+
+            renderer.shoot(this.requireInterface(session), file);
+            this.shots.add(ordered("line", shot.line(), "name", shot.name(), "frame", this.frame, "file", file.toString(),
+                                   "width", ShotRenderer.WIDTH, "height", ShotRenderer.HEIGHT));
+        } catch (IOException | RuntimeException | LinkageError error) {
+            String reason = error instanceof IOException ? error.getMessage() : error.getClass().getSimpleName() + ": " + error.getMessage();
+
+            this.shots.add(ordered("line", shot.line(), "name", shot.name(), "frame", this.frame, "error", "unavailable: " + reason));
+        } finally {
+            this.lastProgressNanos = System.nanoTime();
+            this.rendering         = false;
+        }
     }
 
     private void releaseKey(@NotNull Game game, int key) {
@@ -601,6 +824,7 @@ public final class RunnerMain {
         Path out = null;
         Path script = null;
         Path epmap = null;
+        Path shotsDir = null;
         boolean profile = false;
         int frames = DEFAULT_FRAMES;
         int slot = 0;
@@ -627,6 +851,7 @@ public final class RunnerMain {
                 case "--out" -> out = Path.of(value);
                 case "--script" -> script = Path.of(value);
                 case "--epmap" -> epmap = Path.of(value);
+                case "--shots-dir" -> shotsDir = Path.of(value);
                 case "--frames" -> frames = parsePositive(name, value, 1_000_000);
                 case "--slot" -> slot = parsePositive(name, value, 11);
                 case "--frame-timeout-ms" -> frameTimeout = parsePositive(name, value, 600_000);
@@ -639,7 +864,7 @@ public final class RunnerMain {
             throw new IllegalArgumentException("--data, --map and --out are required.");
         }
 
-        return new Options(data, map, out, script, frames, slot, frameTimeout, timeLimit, epmap, profile);
+        return new Options(data, map, out, script, frames, slot, frameTimeout, timeLimit, epmap, profile, shotsDir);
     }
 
     private static int parsePositive(@NotNull String name, @NotNull String value, int maximum) {

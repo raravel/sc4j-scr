@@ -156,11 +156,62 @@ final class MtestScriptTest {
     }
 
     @Test
-    void screenshotLinesWaitForTheScreenshotPhase() {
+    void windowLinesWaitForTheScreenshotPhase() {
         assertEquals("screenshot_phase", problem("@window 1920x1080").code());
-        assertEquals("screenshot_phase", problem("shot menu.png").code());
         assertEquals("unsupported_command", problem("type hello").code());
         assertEquals("unknown_command", problem("sleep 3").code());
+    }
+
+    @Test
+    void shotTakesAnOptionalName() {
+        assertEquals(new MtestScript.Shot(1, "selected"), only("shot selected"));
+        assertEquals(new MtestScript.Shot(1, "A-b_9"), only("SHOT A-b_9"));
+        assertEquals(new MtestScript.Shot(1, "x".repeat(40)), only("shot " + "x".repeat(40)));
+    }
+
+    @Test
+    void shotWithoutANameIsNamedAfterItsLine() {
+        MtestScript script = MtestScript.parse(List.of("wait 1", "# comment", "shot"));
+
+        assertEquals(List.of(), script.getProblems());
+        assertEquals(List.of(new MtestScript.Shot(3, "line3")), script.getShots());
+        assertEquals(1, script.getPlannedFrames());
+    }
+
+    @Test
+    void shotNamesAreUniqueIgnoringCase() {
+        MtestScript script = MtestScript.parse(List.of("shot start", "shot Start", "shot line4", "shot"));
+
+        assertEquals(List.of(new MtestScript.Shot(1, "start"), new MtestScript.Shot(3, "line4")), script.getShots());
+        assertEquals(2, script.getProblems().size());
+        assertEquals(new MtestScript.Problem(2, "duplicate_shot", "Start", MtestScript.SHOT_USAGE), script.getProblems().get(0));
+        assertEquals(new MtestScript.Problem(4, "duplicate_shot", "line4", MtestScript.SHOT_USAGE), script.getProblems().get(1));
+    }
+
+    @Test
+    void shotNameMustBeShortPlainText() {
+        assertEquals("bad_name", problem("shot menu.png").code());
+        assertEquals("bad_name", problem("shot ../x").code());
+        assertEquals("bad_name", problem("shot 전투").code());
+        assertEquals("bad_name", problem("shot " + "x".repeat(41)).code());
+        assertEquals(MtestScript.SHOT_USAGE, problem("shot a/b").usage());
+        assertEquals("extra_argument", problem("shot a b").code());
+    }
+
+    @Test
+    void aScriptHoldsAtMostSixteenShots() {
+        List<String> lines = new java.util.ArrayList<>();
+
+        for (int index = 0; index < MtestScript.MAXIMUM_SHOTS + 2; index++) {
+            lines.add("shot s" + index);
+        }
+
+        MtestScript script = MtestScript.parse(lines);
+
+        assertEquals(MtestScript.MAXIMUM_SHOTS, script.getShots().size());
+        assertEquals(2, script.getProblems().size());
+        assertEquals("too_many_shots", script.getProblems().get(0).code());
+        assertEquals(MtestScript.MAXIMUM_SHOTS + 1, script.getProblems().get(0).line());
     }
 
     @Test

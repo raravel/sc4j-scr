@@ -4,9 +4,12 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * A parsed map test script ({@code .mtest}): one step per line, blank lines and lines whose first non-blank character is {@code #} ignored.
@@ -17,7 +20,9 @@ import java.util.Map;
  * <li>{@code click X,Y [left|right|middle] [FRAMES]}: the button is held at the map pixel X,Y for FRAMES game frames, then released;</li>
  * <li>{@code press X,Y [button]}, {@code release [button]}: only the press at a map pixel, or only the release;</li>
  * <li>{@code expect deaths P<1-12> <UNIT 0-227> OP VALUE}, {@code expect memory 0x<ADDRESS> OP VALUE},
- * {@code expect text [not] contains "TEXT"}, {@code expect units OP VALUE}: a check of the state reached so far.</li>
+ * {@code expect text [not] contains "TEXT"}, {@code expect units OP VALUE}: a check of the state reached so far;</li>
+ * <li>{@code shot [NAME]}: a picture of what the player sees at that point, without advancing the game; NAME is
+ * {@code [A-Za-z0-9_-]{1,40}}, unique in the script, {@code line<N>} by default, and a script holds at most {@value #MAXIMUM_SHOTS}.</li>
  * </ul>
  * A line that cannot be read is a {@link Problem}; every problem of a script is reported, and a script with problems is not run.
  */
@@ -38,6 +43,10 @@ public final class MtestScript {
      * The largest map pixel coordinate (a 256-tile side).
      */
     public static final int MAXIMUM_COORDINATE = 256 * 32 - 1;
+    /**
+     * The most {@code shot} lines of a script.
+     */
+    public static final int MAXIMUM_SHOTS = 16;
 
     static final @NotNull String WAIT_USAGE = "wait N";
     static final @NotNull String KEY_USAGE = "key NAME [FRAMES]";
@@ -52,7 +61,8 @@ public final class MtestScript {
     static final @NotNull String EXPECT_UNITS_USAGE = "expect units <OP> <VALUE>";
     static final @NotNull String EXPECT_USAGE = EXPECT_DEATHS_USAGE + " | " + EXPECT_MEMORY_USAGE + " | " + EXPECT_TEXT_USAGE + " | " +
                                                EXPECT_UNITS_USAGE;
-    static final @NotNull String COMMANDS_USAGE = "wait, key, keydown, keyup, click, press, release, expect";
+    static final @NotNull String SHOT_USAGE = "shot [NAME]  (NAME: A-Z a-z 0-9 _ -, at most 40)";
+    static final @NotNull String COMMANDS_USAGE = "wait, key, keydown, keyup, click, press, release, expect, shot";
 
     /**
      * The mouse button flags of the classic interface (0x6CDDC0).
@@ -61,6 +71,7 @@ public final class MtestScript {
     static final int RIGHT_BUTTON = 0x08;
     static final int MIDDLE_BUTTON = 0x20;
 
+    private static final @NotNull Pattern SHOT_NAME = Pattern.compile("[A-Za-z0-9_-]{1,40}");
     private static final @NotNull List<String> OPERATORS = List.of("==", "!=", "<", "<=", ">", ">=");
     private static final @NotNull Map<String, Integer> NAMED_KEYS = Map.ofEntries(
         Map.entry("SPACE", 0x20), Map.entry("ENTER", 0x0D), Map.entry("ESCAPE", 0x1B), Map.entry("TAB", 0x09),
@@ -72,7 +83,7 @@ public final class MtestScript {
     /**
      * One step of a script.
      */
-    public sealed interface Step permits Wait, KeyStep, MouseStep, Expect {
+    public sealed interface Step permits Wait, KeyStep, MouseStep, Expect, Shot {
         /**
          * @return the 1-based script line
          */
@@ -181,6 +192,15 @@ public final class MtestScript {
     }
 
     /**
+     * {@code shot}.
+     *
+     * @param line the script line
+     * @param name the picture name, the file name without {@code .png}
+     */
+    public record Shot(int line, @NotNull String name) implements Step {
+    }
+
+    /**
      * A line that cannot be read.
      *
      * @param line   the script line
@@ -225,10 +245,18 @@ public final class MtestScript {
                 case KeyStep key -> key.frames();
                 case MouseStep mouse -> mouse.frames();
                 case Expect ignored -> 0;
+                case Shot ignored -> 0;
             };
         }
 
         return frames;
+    }
+
+    /**
+     * @return the {@code shot} steps in script order
+     */
+    public @NotNull List<Shot> getShots() {
+        return this.steps.stream().filter(Shot.class::isInstance).map(Shot.class::cast).toList();
     }
 
     /**
@@ -240,6 +268,8 @@ public final class MtestScript {
     public static @NotNull MtestScript parse(@NotNull List<String> lines) {
         List<Step> steps = new ArrayList<>();
         List<Problem> problems = new ArrayList<>();
+        Set<String> shotNames = new HashSet<>();
+        int shots = 0;
 
         for (int index = 0; index < lines.size(); index++) {
             int line = index + 1;
@@ -250,7 +280,19 @@ public final class MtestScript {
             }
 
             try {
-                steps.add(parseStep(line, text));
+                Step step = parseStep(line, text);
+
+                if (step instanceof Shot shot) {
+                    if (++shots > MAXIMUM_SHOTS) {
+                        throw new LineException("too_many_shots", text + " (at most " + MAXIMUM_SHOTS + ")", SHOT_USAGE);
+                    }
+
+                    if (!shotNames.add(shot.name().toLowerCase(Locale.ROOT))) {
+                        throw new LineException("duplicate_shot", shot.name(), SHOT_USAGE);
+                    }
+                }
+
+                steps.add(step);
             } catch (LineException exception) {
                 problems.add(new Problem(line, exception.code, exception.detail, exception.usage));
             }
@@ -320,8 +362,16 @@ public final class MtestScript {
                 yield new MouseStep(line, MouseAction.RELEASE, 0, 0, button, 0);
             }
             case "expect" -> parseExpect(line, text, words);
-            case "shot", "scroll", "type", "move", "pause", "keyrepeat", "exit" ->
-                throw new LineException(command.equals("shot") ? "screenshot_phase" : "unsupported_command", words[0], COMMANDS_USAGE);
+            case "shot" -> {
+                requireCount(words, 1, 2, SHOT_USAGE);
+
+                if (words.length > 1 && !SHOT_NAME.matcher(words[1]).matches()) {
+                    throw new LineException("bad_name", words[1], SHOT_USAGE);
+                }
+
+                yield new Shot(line, words.length > 1 ? words[1] : "line" + line);
+            }
+            case "scroll", "type", "move", "pause", "keyrepeat", "exit" -> throw new LineException("unsupported_command", words[0], COMMANDS_USAGE);
             default -> throw new LineException("unknown_command", words[0], COMMANDS_USAGE);
         };
     }

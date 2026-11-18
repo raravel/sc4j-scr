@@ -7,12 +7,19 @@ plugins {
 // only these classes; it runs on the class path of the engine's runtime/lib/* and the scr.jar mod.
 dependencies {
     implementation project(':scr-game')
+    // The client's own message layout, console and world renderer for shot; scr.jar holds them at run time.
+    implementation project(':scr-client')
+    implementation project(':scr-render')
+    implementation "org.fogofwarlabs.sc4j:sc4j-engine:$sc4jVersion"
+    implementation platform("org.lwjgl:lwjgl-bom:$LWJGL_VERSION")
+    implementation 'org.lwjgl:lwjgl'
+    implementation 'org.lwjgl:lwjgl-opengl'
 }
 
 jar {
     archiveFileName = 'eud-runner.jar'
     manifest {
         attributes('Main-Class': 'org.fogofwarlabs.sc4j.scr.eud.runner.RunnerMain',
-                   'Implementation-Version': project.version + '-eud.2')
+                   'Implementation-Version': project.version + '-eud.3')
     }
 }
