@@ -77,6 +77,10 @@ public final class RunnerMain {
      * Frames in a row that do not advance before the game counts as ended.
      */
     private static final int STALL_LIMIT = 50;
+    /**
+     * The name of the human player unless a JavaScript test names one ({@code // @player NAME}).
+     */
+    static final @NotNull String DEFAULT_PLAYER_NAME = "tester";
     private static final int TRACE_LINES = 6;
 
     private final @NotNull Options options;
@@ -128,10 +132,11 @@ public final class RunnerMain {
      * @param shotsDir           the folder of the shot pictures, or {@code null}
      * @param js                 the Enhanced Script folder that runs in the game, or {@code null}
      * @param lan                whether the game is a network game with one human instead of a single-player game
+     * @param playerName         the name of the human player
      */
     record Options(@NotNull Path data, @NotNull Path map, @NotNull Path out, @Nullable Path script, int frames, int slot,
                    long frameTimeoutMillis, long timeLimitMillis, @Nullable Path epmap, boolean profile, @Nullable Path shotsDir,
-                   @Nullable Path js, boolean lan) {
+                   @Nullable Path js, boolean lan, @NotNull String playerName) {
     }
 
     private RunnerMain(@NotNull Options options, @Nullable MtestScript script, @Nullable JsTest jsTest) {
@@ -178,6 +183,18 @@ public final class RunnerMain {
                 return;
             }
 
+            String playerName = jsTest.playerName();
+
+            if (!jsTest.problems().isEmpty()) {
+                Map<String, Object> report = baseReport();
+
+                report.put("runtime", ordered("status", "skipped", "reason", "js_error"));
+                report.put("script", ordered("status", "error", "problems", jsTest.problems()));
+                writeReport(options.out(), report);
+                System.exit(0);
+                return;
+            }
+
             try {
                 jsPackage = jsTest.writePackage();
             } catch (IOException exception) {
@@ -192,7 +209,7 @@ public final class RunnerMain {
 
             options   = new Options(options.data(), options.map(), options.out(), options.script(), options.frames(), options.slot(),
                                     options.frameTimeoutMillis(), options.timeLimitMillis(), options.epmap(), options.profile(),
-                                    options.shotsDir(), jsPackage, options.lan() || jsTest.usesChat());
+                                    options.shotsDir(), jsPackage, options.lan() || jsTest.usesChat(), playerName);
         } else if (options.script() != null) {
             script = MtestScript.parse(Files.readAllLines(options.script(), StandardCharsets.UTF_8));
 
@@ -426,7 +443,7 @@ public final class RunnerMain {
             this.shotLocale    = locale;
 
             byte[] mapData = MpqArchive.open(this.options.map()).readFile("staredit\\scenario.chk");
-            MeleeGameSetup setup = MeleeGameSetup.createUseMapSettings(mapData, "tester", ScrRaceIds.TERRAN, this.options.slot(), 6);
+            MeleeGameSetup setup = MeleeGameSetup.createUseMapSettings(mapData, this.options.playerName(), ScrRaceIds.TERRAN, this.options.slot(), 6);
             LiveGame live = new LiveGame(setup, 12345);
 
             if (this.options.lan()) {
@@ -779,6 +796,16 @@ public final class RunnerMain {
             }
 
             @Override
+            public @Nullable String clickScreen(int x, int y, int button, int frames) {
+                return RunnerMain.this.clickScreen(session, x, y, button, frames);
+            }
+
+            @Override
+            public void mouse(int x, int y) {
+                RunnerMain.this.mouse(game, x, y);
+            }
+
+            @Override
             public void press(int x, int y, int button) {
                 RunnerMain.this.press(session, x, y, button);
             }
@@ -847,6 +874,43 @@ public final class RunnerMain {
         this.release(session.getGame(), button);
 
         return result;
+    }
+
+    /**
+     * Moves the pointer to a pixel of the game screen, lets one frame pass with it resting there (a map that arms a button while the pointer is
+     * over it sees the hover before the press, as with a hand), then holds a mouse button for some frames and releases it; the screen does
+     * not move.
+     *
+     * @return why the run stopped early, or {@code null}
+     */
+    @Nullable String clickScreen(@NotNull LiveMapSession session, int x, int y, int button, int frames) {
+        Game game = session.getGame();
+
+        this.mouse(game, x, y);
+
+        String result = this.advance(session, 1);
+
+        if (result != null) {
+            return result;
+        }
+
+        this.mouseButtons |= button;
+        this.pressOnMap(session, button);
+
+        result = this.advance(session, frames);
+
+        this.release(game, button);
+
+        return result;
+    }
+
+    /**
+     * Moves the pointer to a pixel of the game screen; the screen and the buttons stay as they are.
+     */
+    void mouse(@NotNull Game game, int x, int y) {
+        this.viewMouseX = x;
+        this.viewMouseY = y;
+        this.applyMouse(game);
     }
 
     void press(@NotNull LiveMapSession session, int x, int y, int button) {
@@ -1245,7 +1309,7 @@ public final class RunnerMain {
             throw new IllegalArgumentException("--data, --map and --out are required.");
         }
 
-        return new Options(data, map, out, script, frames, slot, frameTimeout, timeLimit, epmap, profile, shotsDir, js, lan);
+        return new Options(data, map, out, script, frames, slot, frameTimeout, timeLimit, epmap, profile, shotsDir, js, lan, DEFAULT_PLAYER_NAME);
     }
 
     private static int parsePositive(@NotNull String name, @NotNull String value, int maximum) {

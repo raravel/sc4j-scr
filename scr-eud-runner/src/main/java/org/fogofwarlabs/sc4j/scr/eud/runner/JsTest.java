@@ -27,6 +27,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.BiConsumer;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
@@ -45,7 +46,8 @@ import java.util.stream.Stream;
  * and ends it after MAXFRAMES;</li>
  * <li>{@code yield t.key(NAME, FRAMES = 8)}, {@code t.keyDown(NAME)}, {@code t.keyUp(NAME)};</li>
  * <li>{@code yield t.click(X, Y, BUTTON = 'left', FRAMES = 8)}, {@code t.press(X, Y, BUTTON)}, {@code t.release(BUTTON)},
- * {@code t.view(X, Y)}, {@code t.chat(TEXT)};</li>
+ * {@code t.view(X, Y)}, {@code t.chat(TEXT)}, all at a map pixel; {@code yield t.clickScreen(X, Y, BUTTON = 'left', FRAMES = 8)} and
+ * {@code t.mouse(X, Y)} at a pixel of the 640x480 game screen, without moving the screen;</li>
  * <li>{@code t.shot(NAME)}; the reads {@code t.deaths(PLAYER 1-12, UNIT)}, {@code t.memory(ADDRESS)}, {@code t.units()}, {@code t.text()}
  * and {@code t.frame()};</li>
  * <li>{@code t.expect(VALUE)} and {@code t.require(VALUE)} with {@code toBe}, {@code atLeast}, {@code atMost}, {@code above},
@@ -73,6 +75,11 @@ final class JsTest {
     private static final @NotNull Pattern FILE_NAME = Pattern.compile("[A-Za-z0-9_][A-Za-z0-9_.-]{0,80}\\.js");
     private static final @NotNull Pattern SHOT_NAME = Pattern.compile("[A-Za-z0-9_-]{1,40}");
     private static final @NotNull Pattern CHAT_CALL = Pattern.compile("\\.\\s*chat\\s*\\(");
+    private static final @NotNull Pattern PLAYER_LINE = Pattern.compile("(?m)^[ \\t]*//[ \\t]*@player[ \\t]+([^\\r\\n]*?)[ \\t]*$");
+    /**
+     * The longest player name in UTF-8 bytes, as the game's name field holds it.
+     */
+    static final int MAXIMUM_PLAYER_NAME_BYTES = 24;
 
     /**
      * What the runner does for the test.
@@ -90,6 +97,10 @@ final class JsTest {
         void keyUp(int virtualKey);
 
         @Nullable String click(int x, int y, int button, int frames);
+
+        @Nullable String clickScreen(int x, int y, int button, int frames);
+
+        void mouse(int x, int y);
 
         void press(int x, int y, int button);
 
@@ -139,10 +150,10 @@ final class JsTest {
         }
     }
 
-    private record Click(int line, int x, int y, int button, int frames) implements Token {
+    private record Click(int line, int x, int y, int button, int frames, boolean screen) implements Token {
         @Override
         public @NotNull String call() {
-            return "t.click";
+            return this.screen ? "t.clickScreen" : "t.click";
         }
     }
 
@@ -220,6 +231,45 @@ final class JsTest {
      */
     boolean usesChat() {
         return CHAT_CALL.matcher(this.text).find();
+    }
+
+    /**
+     * The name of the human player: the first {@code // @player NAME} line of the file, which a map that runs test commands only for some
+     * names needs, or {@link RunnerMain#DEFAULT_PLAYER_NAME}. A name that is empty, over {@value #MAXIMUM_PLAYER_NAME_BYTES} bytes of UTF-8
+     * or holds a control character is a problem, and the test does not run.
+     *
+     * @return the name
+     */
+    @NotNull String playerName() {
+        this.problems.removeIf(problem -> "bad_player".equals(problem.get("code")));
+
+        Matcher matcher = PLAYER_LINE.matcher(this.text);
+
+        if (!matcher.find()) {
+            return RunnerMain.DEFAULT_PLAYER_NAME;
+        }
+
+        String name = matcher.group(1);
+
+        if (name.isEmpty() || name.getBytes(StandardCharsets.UTF_8).length > MAXIMUM_PLAYER_NAME_BYTES ||
+            name.chars().anyMatch(character -> character < 0x20 || character == 0x7F)) {
+            int line = (int) this.text.substring(0, matcher.start()).chars().filter(character -> character == '\n').count() + 1;
+
+            this.problems.add(RunnerMain.ordered("line", line, "code", "bad_player", "detail", name, "usage",
+                                                 "// @player NAME (1 to " + MAXIMUM_PLAYER_NAME_BYTES + " bytes of UTF-8)"));
+            return RunnerMain.DEFAULT_PLAYER_NAME;
+        }
+
+        return name;
+    }
+
+    /**
+     * @return the problems found so far
+     */
+    @NotNull List<Map<String, Object>> problems() {
+        synchronized (this.problems) {
+            return List.copyOf(this.problems);
+        }
     }
 
     /**
@@ -379,7 +429,7 @@ final class JsTest {
 
             if (token == null) {
                 this.problems.add(RunnerMain.ordered("line", 0, "code", "bad_yield", "detail", describe(yielded), "usage",
-                                                     "yield t.wait(N), t.until(fn, N), t.key(NAME, N) or t.click(X, Y, BUTTON, N)"));
+                                                     "yield t.wait(N), t.until(fn, N), t.key(NAME, N), t.click(X, Y, BUTTON, N) or t.clickScreen(X, Y, BUTTON, N)"));
                 return null;
             }
 
@@ -388,7 +438,8 @@ final class JsTest {
             stopped = switch (token) {
                 case Wait wait -> host.advance(wait.frames());
                 case Key key -> host.holdKey(key.virtualKey(), key.frames());
-                case Click click -> host.click(click.x(), click.y(), click.button(), click.frames());
+                case Click click -> click.screen() ? host.clickScreen(click.x(), click.y(), click.button(), click.frames())
+                                                   : host.click(click.x(), click.y(), click.button(), click.frames());
                 case Until until -> {
                     int waited = 0;
 
@@ -600,7 +651,24 @@ final class JsTest {
             int button = button(arguments, 2, usage);
             int frames = integer(arguments, 3, usage, 1, MtestScript.MAXIMUM_HOLD_FRAMES, MtestScript.DEFAULT_HOLD_FRAMES);
 
-            return this.token(cx, new Click(this.line(), x, y, button, frames));
+            return this.token(cx, new Click(this.line(), x, y, button, frames, false));
+        });
+        define(scope, t, "clickScreen", 4, (cx, s, self, arguments) -> {
+            String usage = "t.clickScreen(x, y, button, frames)";
+            int x = integer(arguments, 0, usage, 0, LiveMapSession.VIEWPORT_WIDTH - 1, null);
+            int y = integer(arguments, 1, usage, 0, LiveMapSession.VIEWPORT_HEIGHT - 1, null);
+            int button = button(arguments, 2, usage);
+            int frames = integer(arguments, 3, usage, 1, MtestScript.MAXIMUM_HOLD_FRAMES, MtestScript.DEFAULT_HOLD_FRAMES);
+
+            return this.token(cx, new Click(this.line(), x, y, button, frames, true));
+        });
+        define(scope, t, "mouse", 2, (cx, s, self, arguments) -> {
+            String usage = "t.mouse(x, y)";
+            int x = integer(arguments, 0, usage, 0, LiveMapSession.VIEWPORT_WIDTH - 1, null);
+            int y = integer(arguments, 1, usage, 0, LiveMapSession.VIEWPORT_HEIGHT - 1, null);
+
+            this.host().mouse(x, y);
+            return Undefined.instance;
         });
         define(scope, t, "press", 3, (cx, s, self, arguments) -> {
             String usage = "t.press(x, y, button)";
