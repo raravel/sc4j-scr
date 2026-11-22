@@ -16,3 +16,7 @@ Changes made here:
 
 - `script/ScriptSimulationPlugin.java`: a second constructor that takes a `ScriptLogOutput`, so eud-runner puts the script's log messages
   and errors in its report.
+- `script/ScriptSimulationPlugin.java`: that constructor also takes the host's globals and hands them to the runtime.
+- `script/runtime/ScriptRuntime.java`: a `create` overload whose `BiConsumer<Context, Scriptable>` adds the host's globals to the global
+  scope after the game API and before the prelude (eud-runner's map test host), and `callShared` with its `SharedCall` result, which calls a
+  script function as shared code between frames within one instruction budget (the steps of a map test).

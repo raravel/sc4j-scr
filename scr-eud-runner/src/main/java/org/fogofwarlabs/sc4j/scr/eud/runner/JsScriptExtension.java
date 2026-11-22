@@ -6,12 +6,16 @@ import org.fogofwarlabs.sc4j.scr.game.extension.ScrSimulationPlugin;
 import org.fogofwarlabs.sc4j.scr.game.state.Game;
 import org.fogofwarlabs.sc4j.screnhanced.script.ScriptSimulationPlugin;
 import org.fogofwarlabs.sc4j.screnhanced.script.ScriptTrailer;
+import org.fogofwarlabs.sc4j.screnhanced.script.runtime.ScriptRuntime;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import org.mozilla.javascript.Context;
+import org.mozilla.javascript.Scriptable;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.function.BiConsumer;
 
 /**
  * Attaches SC:R Enhanced's script runtime to the one game of a run whose {@code --js} names a script folder ({@link #arm}). The game finds
@@ -27,11 +31,13 @@ public final class JsScriptExtension implements ScrSimulationExtension {
     static final int MAXIMUM_MESSAGE_CHARS = 1000;
 
     private static @Nullable ScriptTrailer armed;
+    private static @Nullable BiConsumer<Context, Scriptable> armedGlobals;
     private static @Nullable Game armedGame;
     private static @Nullable ScriptSimulationPlugin plugin;
     private static final @NotNull List<Map<String, Object>> LINES = new ArrayList<>();
     private static int omitted;
     private static int errors;
+    private static @Nullable String lastErrorBeyondLines;
     private static @NotNull List<Object> warnings = List.of();
 
     /**
@@ -39,10 +45,47 @@ public final class JsScriptExtension implements ScrSimulationExtension {
      *
      * @param trailer  the script package of the test folder, with its resources
      * @param findings the warnings of the folder's check
+     * @param globals  adds the host's globals to the script's global scope, or {@code null}
      */
-    static synchronized void arm(@NotNull ScriptTrailer trailer, @NotNull List<Object> findings) {
-        armed    = trailer;
-        warnings = List.copyOf(findings);
+    static synchronized void arm(@NotNull ScriptTrailer trailer, @NotNull List<Object> findings,
+                                 @Nullable BiConsumer<Context, Scriptable> globals) {
+        armed        = trailer;
+        armedGlobals = globals;
+        warnings     = List.copyOf(findings);
+    }
+
+    /**
+     * @return the runtime of the attached script, or {@code null} before the game attached it
+     */
+    static synchronized @Nullable ScriptRuntime runtime() {
+        ScriptSimulationPlugin current = plugin;
+
+        return current != null ? current.getRuntime() : null;
+    }
+
+    /**
+     * @return the error lines written so far
+     */
+    static synchronized int errors() {
+        return errors;
+    }
+
+    /**
+     * @return the message of the newest error line, or {@code null}
+     */
+    static synchronized @Nullable String lastError() {
+        // An error past the kept lines is newer than any of them.
+        if (lastErrorBeyondLines != null) {
+            return lastErrorBeyondLines;
+        }
+
+        for (int index = LINES.size() - 1; index >= 0; index--) {
+            if ("error".equals(LINES.get(index).get("level"))) {
+                return (String) LINES.get(index).get("message");
+            }
+        }
+
+        return null;
     }
 
     @Override
@@ -56,7 +99,7 @@ public final class JsScriptExtension implements ScrSimulationExtension {
 
             armed     = null;
             armedGame = game;
-            plugin    = new ScriptSimulationPlugin(game, trailer.getScripts(), trailer.getResources(), JsScriptExtension::write);
+            plugin    = new ScriptSimulationPlugin(game, trailer.getScripts(), trailer.getResources(), JsScriptExtension::write, armedGlobals);
 
             return plugin;
         }
@@ -64,17 +107,23 @@ public final class JsScriptExtension implements ScrSimulationExtension {
 
     private static void write(@NotNull LogLevel level, @NotNull String moduleName, @NotNull String message) {
         synchronized (JsScriptExtension.class) {
+            String text = message.length() > MAXIMUM_MESSAGE_CHARS ? message.substring(0, MAXIMUM_MESSAGE_CHARS) + "…" : message;
+
             if (level == LogLevel.ERROR) {
                 errors++;
             }
 
             if (LINES.size() >= MAXIMUM_LINES) {
                 omitted++;
+
+                if (level == LogLevel.ERROR) {
+                    lastErrorBeyondLines = text;
+                }
+
                 return;
             }
 
             Game game = armedGame;
-            String text = message.length() > MAXIMUM_MESSAGE_CHARS ? message.substring(0, MAXIMUM_MESSAGE_CHARS) + "…" : message;
 
             LINES.add(RunnerMain.ordered("frame", game != null ? game.getCurrentFrame() : 0, "level", level.name().toLowerCase(),
                                          "module", moduleName, "message", text));

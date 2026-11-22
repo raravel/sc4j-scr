@@ -15,6 +15,11 @@ import org.fogofwarlabs.sc4j.screnhanced.graphics.ImageReplacements;
 import org.fogofwarlabs.sc4j.screnhanced.script.runtime.ScriptLogOutput;
 import org.fogofwarlabs.sc4j.screnhanced.script.runtime.ScriptRuntime;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+import org.mozilla.javascript.Context;
+import org.mozilla.javascript.Scriptable;
+
+import java.util.function.BiConsumer;
 
 /**
  * Runs the script package of one game's scenario in the game's simulation.
@@ -64,12 +69,13 @@ public final class ScriptSimulationPlugin implements ScrSimulationPlugin, ImageR
      * @param scriptPackage the script package of the game's scenario
      * @param resources     the resources of the game's map
      * @param logOutput     where the script's log messages and errors go
+     * @param globals       adds the host's globals to the script's global scope, or {@code null}
      */
     public ScriptSimulationPlugin(@NotNull Game game, @NotNull ScriptPackage scriptPackage, @NotNull ScriptResources resources,
-                                  @NotNull ScriptLogOutput logOutput) {
+                                  @NotNull ScriptLogOutput logOutput, @Nullable BiConsumer<Context, Scriptable> globals) {
         this.game    = game;
         this.runtime = ScriptRuntime.create(scriptPackage, game, resources, Integer.toUnsignedLong(game.getSetup().getSeed()),
-                                            ScriptRuntime.INSTRUCTION_BUDGET, logOutput);
+                                            ScriptRuntime.INSTRUCTION_BUDGET, logOutput, globals);
 
         this.started   = false;
         this.lastFrame = 0;

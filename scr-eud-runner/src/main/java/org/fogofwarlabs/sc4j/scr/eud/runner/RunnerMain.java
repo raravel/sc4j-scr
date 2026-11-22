@@ -81,6 +81,7 @@ public final class RunnerMain {
 
     private final @NotNull Options options;
     private final @Nullable MtestScript script;
+    private final @Nullable JsTest jsTest;
     private final long startNanos = System.nanoTime();
     private final List<Map<String, Object>> expects = Collections.synchronizedList(new ArrayList<>());
     private final List<Map<String, Object>> shots = Collections.synchronizedList(new ArrayList<>());
@@ -98,6 +99,9 @@ public final class RunnerMain {
     private @Nullable Profiler profiler;
     private @Nullable ClientInterface clientInterface;
     private @Nullable ShotRenderer shotRenderer;
+    private @Nullable CascStorage shotStorage;
+    private @Nullable ScrResourceProvider shotResources;
+    private @Nullable String shotLocale;
 
     private final Set<Integer> heldKeys = new HashSet<>();
     private int mouseButtons;
@@ -130,9 +134,10 @@ public final class RunnerMain {
                    @Nullable Path js, boolean lan) {
     }
 
-    private RunnerMain(@NotNull Options options, @Nullable MtestScript script) {
+    private RunnerMain(@NotNull Options options, @Nullable MtestScript script, @Nullable JsTest jsTest) {
         this.options = options;
         this.script  = script;
+        this.jsTest  = jsTest;
     }
 
     /**
@@ -142,6 +147,11 @@ public final class RunnerMain {
      * @throws Exception if the report cannot be written
      */
     public static void main(String @NotNull [] arguments) throws Exception {
+        if (arguments.length > 0 && arguments[0].equals("--convert-mtest")) {
+            convertMtest(arguments);
+            return;
+        }
+
         Options options;
 
         try {
@@ -152,8 +162,38 @@ public final class RunnerMain {
         }
 
         MtestScript script = null;
+        JsTest jsTest = null;
+        Path jsPackage = null;
 
-        if (options.script() != null) {
+        if (options.script() != null && options.script().getFileName().toString().endsWith(JsTest.EXTENSION)) {
+            if (options.js() != null) {
+                exitWithUsage("A .js test is its own script; --js is not given with it.");
+                return;
+            }
+
+            try {
+                jsTest = JsTest.load(options.script());
+            } catch (IllegalArgumentException exception) {
+                exitWithUsage(exception.getMessage());
+                return;
+            }
+
+            try {
+                jsPackage = jsTest.writePackage();
+            } catch (IOException exception) {
+                Map<String, Object> report = baseReport();
+
+                report.put("runtime", ordered("status", "skipped", "reason", "js_error"));
+                report.put("script", ordered("status", "error", "error", "The test package was not written: " + exception.getMessage()));
+                writeReport(options.out(), report);
+                System.exit(0);
+                return;
+            }
+
+            options   = new Options(options.data(), options.map(), options.out(), options.script(), options.frames(), options.slot(),
+                                    options.frameTimeoutMillis(), options.timeLimitMillis(), options.epmap(), options.profile(),
+                                    options.shotsDir(), jsPackage, options.lan() || jsTest.usesChat());
+        } else if (options.script() != null) {
             script = MtestScript.parse(Files.readAllLines(options.script(), StandardCharsets.UTF_8));
 
             if (script.getProblems().isEmpty() && !script.getShots().isEmpty() && options.shotsDir() == null) {
@@ -177,12 +217,24 @@ public final class RunnerMain {
             }
         }
 
-        if (options.js() != null && !armScript(options)) {
-            System.exit(0);
-            return;
+        if (options.js() != null) {
+            boolean armed;
+
+            try {
+                armed = armScript(options, jsTest);
+            } finally {
+                if (jsPackage != null) {
+                    JsTest.deletePackage(jsPackage);
+                }
+            }
+
+            if (!armed) {
+                System.exit(0);
+                return;
+            }
         }
 
-        RunnerMain runner = new RunnerMain(options, script);
+        RunnerMain runner = new RunnerMain(options, script, jsTest);
 
         if (options.epmap() != null) {
             runner.trace = TraceReader.load(options.epmap());
@@ -198,10 +250,11 @@ public final class RunnerMain {
      * names every finding and runs no game.
      *
      * @param options the command line
+     * @param jsTest  the JavaScript test whose package the folder is, or {@code null} for a plain {@code --js} folder
      * @return {@code true} if the script is armed, {@code false} if the report of a script that cannot run was written
      * @throws IOException if the report cannot be written
      */
-    private static boolean armScript(@NotNull Options options) throws IOException {
+    private static boolean armScript(@NotNull Options options, @Nullable JsTest jsTest) throws IOException {
         Path folder = options.js();
         List<Object> findings = new ArrayList<>();
         int errors;
@@ -226,7 +279,7 @@ public final class RunnerMain {
                     throw new IOException("The script package of " + folder + " was not written.");
                 }
 
-                JsScriptExtension.arm(trailer, findings);
+                JsScriptExtension.arm(trailer, findings, jsTest != null ? jsTest.globals() : null);
 
                 return true;
             }
@@ -238,15 +291,51 @@ public final class RunnerMain {
         Map<String, Object> report = baseReport();
 
         report.put("runtime", ordered("status", "skipped", "reason", "js_error"));
+
+        if (jsTest != null) {
+            List<Object> problems = new ArrayList<>();
+
+            for (Object finding : findings) {
+                Map<?, ?> fields = (Map<?, ?>) finding;
+
+                if ("error".equals(fields.get("severity"))) {
+                    problems.add(ordered("line", fields.get("line"), "code", "js_check", "detail", fields.get("file") + ": " + fields.get("message"),
+                                         "usage", "JavaScript that Rhino 1.8.1 runs: no class, async/await, spread or import/export"));
+                }
+            }
+
+            report.put("script", ordered("status", "error", "problems", problems));
+        }
+
         report.put("js", ordered("status", "check_error", "findings", findings));
         writeReport(options.out(), report);
 
         return false;
     }
 
+    /**
+     * {@code --convert-mtest <in.mtest> <out.test.js>}: writes the JavaScript test of a {@code .mtest} script ({@link MtestConverter}); a
+     * script with problems is listed on the standard error and nothing is written.
+     */
+    private static void convertMtest(String @NotNull [] arguments) throws IOException {
+        if (arguments.length != 3 || !arguments[2].endsWith(JsTest.EXTENSION)) {
+            System.err.println("usage: eud-runner --convert-mtest <in.mtest> <out.test.js>");
+            System.exit(2);
+            return;
+        }
+
+        List<MtestScript.Problem> problems = MtestConverter.convert(Path.of(arguments[1]), Path.of(arguments[2]));
+
+        for (MtestScript.Problem problem : problems) {
+            System.err.println("line " + problem.line() + ": " + problem.code() + ": " + problem.detail() + " (" + problem.usage() + ")");
+        }
+
+        System.exit(problems.isEmpty() ? 0 : 1);
+    }
+
     private static void exitWithUsage(@NotNull String message) {
         System.err.println("eud-runner: " + message);
-        System.err.println("usage: eud-runner --data <SC:R folder> --map <scx|scm> --out <report.json> [--script <file.mtest>] " +
+        System.err.println("usage: eud-runner --data <SC:R folder> --map <scx|scm> --out <report.json> [--script <file.mtest|NAME.test.js>] " +
                            "[--frames N] [--slot N] [--frame-timeout-ms N] [--time-limit-ms N] [--epmap <output.epmap>] [--profile] " +
                            "[--shots-dir <folder>] [--js <script folder>] [--lan]");
         System.exit(2);
@@ -306,7 +395,8 @@ public final class RunnerMain {
     }
 
     private long plannedFrames() {
-        return this.script != null ? this.script.getPlannedFrames() : this.options.frames();
+        // A JavaScript test plans no frame count: it runs until test(t) returns.
+        return this.script != null ? this.script.getPlannedFrames() : this.jsTest != null ? 0 : this.options.frames();
     }
 
     private @NotNull Map<String, Object> simulate() {
@@ -330,9 +420,10 @@ public final class RunnerMain {
                 report.put("messageLayoutError", error.getClass().getSimpleName() + ": " + error.getMessage());
             }
 
-            if (this.script != null && !this.script.getShots().isEmpty()) {
-                this.shotRenderer = new ShotRenderer(storage, resources, locale);
-            }
+            // The renderer is made at the first shot; GL starts there.
+            this.shotStorage   = storage;
+            this.shotResources = resources;
+            this.shotLocale    = locale;
 
             byte[] mapData = MpqArchive.open(this.options.map()).readFile("staredit\\scenario.chk");
             MeleeGameSetup setup = MeleeGameSetup.createUseMapSettings(mapData, "tester", ScrRaceIds.TERRAN, this.options.slot(), 6);
@@ -366,7 +457,9 @@ public final class RunnerMain {
             this.lastProgressNanos = System.nanoTime();
             this.simulating        = true;
 
-            String stoppedBy = this.script != null ? this.runScript(session) : this.advance(session, this.options.frames());
+            String stoppedBy = this.script != null ? this.runScript(session)
+                               : this.jsTest != null ? this.jsTest.run(this.jsHost(session), this.options.frames())
+                               : this.advance(session, this.options.frames());
 
             this.simulating = false;
 
@@ -524,6 +617,11 @@ public final class RunnerMain {
      * @param runtimeVerdict the script status the runtime decides, or {@code null} when the expects decide
      */
     private void putScript(@NotNull Map<String, Object> report, @Nullable String runtimeVerdict) {
+        if (this.jsTest != null) {
+            report.put("script", this.jsTest.section(runtimeVerdict, JsScriptExtension.errors()));
+            return;
+        }
+
         if (this.script == null) {
             return;
         }
@@ -601,14 +699,9 @@ public final class RunnerMain {
             String stopped = switch (step) {
                 case MtestScript.Wait wait -> this.advance(session, wait.frames());
                 case MtestScript.KeyStep key -> switch (key.action()) {
-                    case HOLD -> {
-                        this.heldKeys.add(key.virtualKey());
-                        String result = this.advance(session, key.frames());
-                        this.releaseKey(game, key.virtualKey());
-                        yield result;
-                    }
+                    case HOLD -> this.holdKey(session, key.virtualKey(), key.frames());
                     case DOWN -> {
-                        this.heldKeys.add(key.virtualKey());
+                        this.keyDown(key.virtualKey());
                         yield null;
                     }
                     case UP -> {
@@ -617,43 +710,22 @@ public final class RunnerMain {
                     }
                 };
                 case MtestScript.MouseStep mouse -> switch (mouse.action()) {
-                    case CLICK -> {
-                        this.pointAt(game, mouse.x(), mouse.y());
-                        this.mouseButtons |= mouse.button();
-                        this.pressOnMap(session, mouse.button());
-                        String result = this.advance(session, mouse.frames());
-                        this.mouseButtons &= ~mouse.button();
-                        this.applyMouse(game);
-                        this.releaseOnMap(mouse.button());
-                        yield result;
-                    }
+                    case CLICK -> this.click(session, mouse.x(), mouse.y(), mouse.button(), mouse.frames());
                     case PRESS -> {
-                        this.pointAt(game, mouse.x(), mouse.y());
-                        this.mouseButtons |= mouse.button();
-                        this.pressOnMap(session, mouse.button());
+                        this.press(session, mouse.x(), mouse.y(), mouse.button());
                         yield null;
                     }
                     case RELEASE -> {
-                        this.mouseButtons &= ~mouse.button();
-                        this.applyMouse(game);
-                        this.releaseOnMap(mouse.button());
+                        this.release(game, mouse.button());
                         yield null;
                     }
                 };
                 case MtestScript.View view -> {
-                    // The pointer keeps its place on the screen; the next frame supplies the moved camera.
-                    this.camera().centerOn(view.x(), view.y());
-                    this.applyMouse(game);
+                    this.view(game, view.x(), view.y());
                     yield null;
                 }
                 case MtestScript.Chat chat -> {
-                    // As the chat box on Enter. A network game's writes the sender's own line at once; a single-player game's checks
-                    // the line as a cheat and writes none. Not recorded for a replay, and no cheat is applied.
-                    if (session.getLive().isNetworkGame()) {
-                        game.getInterfaceLink().getMessageLines()
-                            .writeChat(session.getLive().getLocalPlayer(), chat.text().getBytes(StandardCharsets.UTF_8));
-                    }
-
+                    this.chat(session, chat.text());
                     yield null;
                 }
                 case MtestScript.Expect expect -> {
@@ -661,7 +733,7 @@ public final class RunnerMain {
                     yield null;
                 }
                 case MtestScript.Shot shot -> {
-                    this.shoot(session, shot);
+                    this.shots.add(this.shoot(session, shot.line(), shot.name()));
                     yield null;
                 }
             };
@@ -672,6 +744,144 @@ public final class RunnerMain {
         }
 
         return null;
+    }
+
+    /**
+     * @return the runner's actions for a JavaScript test of this run
+     */
+    private @NotNull JsTest.Host jsHost(@NotNull LiveMapSession session) {
+        Game game = session.getGame();
+
+        return new JsTest.Host() {
+            @Override
+            public @Nullable String advance(int frames) {
+                return RunnerMain.this.advance(session, frames);
+            }
+
+            @Override
+            public @Nullable String holdKey(int virtualKey, int frames) {
+                return RunnerMain.this.holdKey(session, virtualKey, frames);
+            }
+
+            @Override
+            public void keyDown(int virtualKey) {
+                RunnerMain.this.keyDown(virtualKey);
+            }
+
+            @Override
+            public void keyUp(int virtualKey) {
+                RunnerMain.this.releaseKey(game, virtualKey);
+            }
+
+            @Override
+            public @Nullable String click(int x, int y, int button, int frames) {
+                return RunnerMain.this.click(session, x, y, button, frames);
+            }
+
+            @Override
+            public void press(int x, int y, int button) {
+                RunnerMain.this.press(session, x, y, button);
+            }
+
+            @Override
+            public void release(int button) {
+                RunnerMain.this.release(game, button);
+            }
+
+            @Override
+            public void view(int x, int y) {
+                RunnerMain.this.view(game, x, y);
+            }
+
+            @Override
+            public boolean chat(@NotNull String text) {
+                return RunnerMain.this.chat(session, text);
+            }
+
+            @Override
+            public @NotNull Map<String, Object> shot(int line, @NotNull String name) {
+                return RunnerMain.this.shoot(session, line, name);
+            }
+
+            @Override
+            public int frame() {
+                return RunnerMain.this.frame;
+            }
+
+            @Override
+            public @NotNull GameReads reads() {
+                return new GameReads(game);
+            }
+        };
+    }
+
+    /**
+     * Holds a key for some frames, then releases it.
+     *
+     * @return why the run stopped early, or {@code null}
+     */
+    @Nullable String holdKey(@NotNull LiveMapSession session, int virtualKey, int frames) {
+        this.heldKeys.add(virtualKey);
+
+        String result = this.advance(session, frames);
+
+        this.releaseKey(session.getGame(), virtualKey);
+
+        return result;
+    }
+
+    void keyDown(int virtualKey) {
+        this.heldKeys.add(virtualKey);
+    }
+
+    /**
+     * Holds a mouse button at a map pixel for some frames, then releases it.
+     *
+     * @return why the run stopped early, or {@code null}
+     */
+    @Nullable String click(@NotNull LiveMapSession session, int x, int y, int button, int frames) {
+        this.press(session, x, y, button);
+
+        String result = this.advance(session, frames);
+
+        this.release(session.getGame(), button);
+
+        return result;
+    }
+
+    void press(@NotNull LiveMapSession session, int x, int y, int button) {
+        this.pointAt(session.getGame(), x, y);
+        this.mouseButtons |= button;
+        this.pressOnMap(session, button);
+    }
+
+    void release(@NotNull Game game, int button) {
+        this.mouseButtons &= ~button;
+        this.applyMouse(game);
+        this.releaseOnMap(button);
+    }
+
+    void view(@NotNull Game game, int x, int y) {
+        // The pointer keeps its place on the screen; the next frame supplies the moved camera.
+        this.camera().centerOn(x, y);
+        this.applyMouse(game);
+    }
+
+    /**
+     * Enters a chat line as the chat box on Enter. A network game's writes the sender's own line at once; a single-player game's checks the
+     * line as a cheat and writes none. Not recorded for a replay, and no cheat is applied.
+     *
+     * @return {@code true} if the game is a network game and wrote the line
+     */
+    boolean chat(@NotNull LiveMapSession session, @NotNull String text) {
+        if (!session.getLive().isNetworkGame()) {
+            return false;
+        }
+
+        session.getGame().getInterfaceLink().getMessageLines()
+               .writeChat(session.getLive().getLocalPlayer(), text.getBytes(StandardCharsets.UTF_8));
+
+        return true;
     }
 
     /**
@@ -792,30 +1002,50 @@ public final class RunnerMain {
     /**
      * Draws a shot of the current frame. The game does not run meanwhile; a shot that cannot be drawn is reported and the run goes on.
      */
-    private void shoot(@NotNull LiveMapSession session, @NotNull MtestScript.Shot shot) {
+    @NotNull Map<String, Object> shoot(@NotNull LiveMapSession session, int line, @NotNull String name) {
         Path folder = this.options.shotsDir();
-        ShotRenderer renderer = this.shotRenderer;
 
         this.rendering = true;
 
         try {
-            if (folder == null || renderer == null) {
-                throw new IOException("no renderer");
+            if (folder == null) {
+                throw new IOException("no --shots-dir");
             }
 
-            Path file = folder.resolve(shot.name() + ".png").toAbsolutePath();
+            ShotRenderer renderer = this.requireShotRenderer();
+            Path file = folder.resolve(name + ".png").toAbsolutePath();
 
             renderer.shoot(this.requireInterface(session), file);
-            this.shots.add(ordered("line", shot.line(), "name", shot.name(), "frame", this.frame, "file", file.toString(),
-                                   "width", ShotRenderer.WIDTH, "height", ShotRenderer.HEIGHT));
+
+            return ordered("line", line, "name", name, "frame", this.frame, "file", file.toString(), "width", ShotRenderer.WIDTH,
+                           "height", ShotRenderer.HEIGHT);
         } catch (IOException | RuntimeException | LinkageError error) {
             String reason = error instanceof IOException ? error.getMessage() : error.getClass().getSimpleName() + ": " + error.getMessage();
 
-            this.shots.add(ordered("line", shot.line(), "name", shot.name(), "frame", this.frame, "error", "unavailable: " + reason));
+            return ordered("line", line, "name", name, "frame", this.frame, "error", "unavailable: " + reason);
         } finally {
             this.lastProgressNanos = System.nanoTime();
             this.rendering         = false;
         }
+    }
+
+    /**
+     * @return the shot renderer, made at the first shot
+     * @throws IOException if the run has no installed storage to draw with
+     */
+    private @NotNull ShotRenderer requireShotRenderer() throws IOException {
+        ShotRenderer current = this.shotRenderer;
+
+        if (current == null) {
+            if (this.shotStorage == null || this.shotResources == null || this.shotLocale == null) {
+                throw new IOException("no renderer");
+            }
+
+            current           = new ShotRenderer(this.shotStorage, this.shotResources, this.shotLocale);
+            this.shotRenderer = current;
+        }
+
+        return current;
     }
 
     private void releaseKey(@NotNull Game game, int key) {

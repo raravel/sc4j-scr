@@ -21,6 +21,7 @@ import org.jetbrains.annotations.Nullable;
 import org.mozilla.javascript.*;
 
 import java.io.Serial;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 /**
@@ -143,6 +144,27 @@ public final class ScriptRuntime {
      */
     public static @NotNull ScriptRuntime create(@NotNull ScriptPackage scriptPackage, @NotNull Game game, @NotNull ScriptResources resources,
                                                 long seed, int instructionBudget, @NotNull ScriptLogOutput logOutput) {
+        return create(scriptPackage, game, resources, seed, instructionBudget, logOutput, null);
+    }
+
+    /**
+     * Creates a {@link ScriptRuntime} instance as {@link #create(ScriptPackage, Game, ScriptResources, long, int, ScriptLogOutput)} does, and
+     * lets a host add its own globals to the global scope after the game API and before the prelude runs (eud-runner: the map test host).
+     *
+     * @param scriptPackage     the script package
+     * @param game              the game
+     * @param resources         the resource file of the map, which the game API reads
+     * @param seed              the seed of the script RNG, derived from the game seed
+     * @param instructionBudget the instruction budget of one call
+     * @param logOutput         the output of the scripts' {@code log} and of the runtime's warnings and errors
+     * @param globals           adds globals to the global scope in the setup context, or {@code null}
+     * @return the created {@link ScriptRuntime} instance
+     * @throws IllegalArgumentException if the instruction budget is not positive
+     * @throws IllegalStateException    if the prelude cannot be read or fails
+     */
+    public static @NotNull ScriptRuntime create(@NotNull ScriptPackage scriptPackage, @NotNull Game game, @NotNull ScriptResources resources,
+                                                long seed, int instructionBudget, @NotNull ScriptLogOutput logOutput,
+                                                @Nullable BiConsumer<Context, Scriptable> globals) {
         if (instructionBudget <= 0) {
             throw Exceptions.newIllegalArgumentException("The instruction budget {0} is not positive.", instructionBudget);
         }
@@ -153,6 +175,10 @@ public final class ScriptRuntime {
         try (Context context = contextFactory.enterSetupContext()) {
             TopLevel global = ScriptGlobalUtils.createGlobal(context, random);
             ScriptGame scriptGame = ScriptGame.install(context, global, game, resources);
+
+            if (globals != null) {
+                globals.accept(context, global);
+            }
 
             return new ScriptRuntime(context, scriptPackage.getManifest().getMain(), logOutput, contextFactory, random, global,
                                      new ScriptModuleLoader(scriptPackage.getScripts(), global, logOutput), scriptGame);
@@ -380,6 +406,55 @@ public final class ScriptRuntime {
 
             try {
                 this.runCall(context, this.mainName, FRAME_CALL_NAME, () -> this.prelude.frame(context, frame));
+            } finally {
+                this.exitCall();
+            }
+        }
+    }
+
+    /**
+     * The result of {@link #callShared}.
+     *
+     * @param completed whether the call returned; {@code false} if it did not run, threw a script error (logged) or stopped the script
+     * @param value     what the call returned, {@code null} unless it completed
+     */
+    public record SharedCall(boolean completed, @Nullable Object value) {
+    }
+
+    /**
+     * Calls a script function as shared code within one instruction budget, between frames, with the game writable (eud-runner: the steps
+     * of a map test). An uncaught script error ends the call and is logged with the module of the function; an exceeded budget or a stack
+     * overflow stops the script, as in {@link #runFrame(int)}. Does nothing before {@link #start()}, once the script stopped and while another
+     * call runs.
+     *
+     * @param callName   the name of the call for the log
+     * @param function   the function
+     * @param thisObject the {@code this} of the call, or {@code null} for the function's top-level scope
+     * @param arguments  the arguments
+     * @return the result of the call
+     * @throws IllegalStateException if the runtime is disposed
+     */
+    public @NotNull SharedCall callShared(@NotNull String callName, @NotNull Function function, @Nullable Scriptable thisObject,
+                                          @Nullable Object @NotNull [] arguments) {
+        this.checkNotDisposed();
+
+        if (!this.started || this.stopped || this.callDepth > 0) {
+            return new SharedCall(false, null);
+        }
+
+        Object[] value = new Object[1];
+
+        try (Context context = this.contextFactory.enterOwnContext()) {
+            this.enterCall();
+
+            try {
+                Scriptable scope = ScriptableObject.getTopLevelScope(function);
+                ScriptModule module = this.moduleLoader.findModule(scope);
+                String moduleName = module == null ? this.mainName : module.getName();
+                Scriptable self = thisObject != null ? thisObject : scope;
+                CallResult result = this.runCall(context, moduleName, callName, () -> value[0] = function.call(context, scope, self, arguments));
+
+                return new SharedCall(result == CallResult.COMPLETED, result == CallResult.COMPLETED ? value[0] : null);
             } finally {
                 this.exitCall();
             }

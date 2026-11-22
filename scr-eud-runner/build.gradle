@@ -22,6 +22,6 @@ jar {
     archiveFileName = 'eud-runner.jar'
     manifest {
         attributes('Main-Class': 'org.fogofwarlabs.sc4j.scr.eud.runner.RunnerMain',
-                   'Implementation-Version': project.version + '-eud.4')
+                   'Implementation-Version': project.version + '-eud.1')
     }
 }
