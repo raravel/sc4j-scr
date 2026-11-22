@@ -35,10 +35,17 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Runs a map headless as a single-player use-map-settings game, optionally driven by a {@code .mtest} script, and writes one JSON report.
+ * Runs a map headless as a use-map-settings game with one human, optionally driven by a {@code .mtest} script, and writes one JSON report.
  * <p>
  * {@code eud-runner --data <SC:R folder> --map <scx|scm> --out <report.json> [--script <file.mtest>] [--frames N] [--slot N]
- * [--frame-timeout-ms N] [--time-limit-ms N] [--epmap <output.epmap>] [--profile] [--shots-dir <folder>]}
+ * [--frame-timeout-ms N] [--time-limit-ms N] [--epmap <output.epmap>] [--profile] [--shots-dir <folder>] [--lan]}
+ * <p>
+ * The game is a single-player one unless {@code --lan} is given: then it is a network game the player is alone in, as a LAN game created
+ * and started without a second player ({@link LoopbackTransport}). The two differ where the client does: a network game is a multiplayer
+ * session to the map (the multiplayer BYTE {@code 0x57F0B4}, the timeouts of a game speed, Restart Game), it keeps
+ * {@value #LAN_TURNS_IN_TRANSIT} turns in transit, so a command runs later than in a single-player game, its turns start with the Sync
+ * command of the game's Sync records, and its chat box writes the sender's line to the message lines, which a single-player game's never
+ * does.
  * <p>
  * A script's {@code shot} lines write {@code <shots-dir>/<name>.png}: the classic 640x480 screen the local player sees at that point of the run
  * ({@link ShotRenderer}). The window and OpenGL context are made at the first shot only; a shot that cannot be drawn is reported with its
@@ -51,6 +58,14 @@ import java.util.concurrent.atomic.AtomicReference;
  * 2 a usage error.
  */
 public final class RunnerMain {
+    /**
+     * The local turns a {@code --lan} game keeps in transit: what the client's LAN game keeps ({@code Main.DEFAULT_NETWORK_TURNS_IN_TRANSIT}).
+     */
+    static final int LAN_TURNS_IN_TRANSIT = 3;
+    /**
+     * The height of a terrain tile, which a Sync record's camera row counts in.
+     */
+    private static final int SYNC_ROW_HEIGHT = 32;
     /**
      * The report format version.
      */
@@ -108,10 +123,11 @@ public final class RunnerMain {
      * @param profile            whether trigger work is counted
      * @param shotsDir           the folder of the shot pictures, or {@code null}
      * @param js                 the Enhanced Script folder that runs in the game, or {@code null}
+     * @param lan                whether the game is a network game with one human instead of a single-player game
      */
     record Options(@NotNull Path data, @NotNull Path map, @NotNull Path out, @Nullable Path script, int frames, int slot,
                    long frameTimeoutMillis, long timeLimitMillis, @Nullable Path epmap, boolean profile, @Nullable Path shotsDir,
-                   @Nullable Path js) {
+                   @Nullable Path js, boolean lan) {
     }
 
     private RunnerMain(@NotNull Options options, @Nullable MtestScript script) {
@@ -232,7 +248,7 @@ public final class RunnerMain {
         System.err.println("eud-runner: " + message);
         System.err.println("usage: eud-runner --data <SC:R folder> --map <scx|scm> --out <report.json> [--script <file.mtest>] " +
                            "[--frames N] [--slot N] [--frame-timeout-ms N] [--time-limit-ms N] [--epmap <output.epmap>] [--profile] " +
-                           "[--shots-dir <folder>] [--js <script folder>]");
+                           "[--shots-dir <folder>] [--js <script folder>] [--lan]");
         System.exit(2);
     }
 
@@ -321,12 +337,26 @@ public final class RunnerMain {
             byte[] mapData = MpqArchive.open(this.options.map()).readFile("staredit\\scenario.chk");
             MeleeGameSetup setup = MeleeGameSetup.createUseMapSettings(mapData, "tester", ScrRaceIds.TERRAN, this.options.slot(), 6);
             LiveGame live = new LiveGame(setup, 12345);
+
+            if (this.options.lan()) {
+                // Turns start with the Sync command, as a network game's do: a map that queues its own commands (EUD writes to the
+                // outgoing turn) appends them after it.
+                live.attachNetwork(new LoopbackTransport(), LAN_TURNS_IN_TRANSIT, false);
+            }
+
             LiveMapSession session = LiveMapSession.start(gameData, live, this.options.map(), lineLayout);
 
             game            = session.getGame();
             this.game       = game;
             this.viewCamera = new ViewCamera(game);
             this.viewCamera.placeStartScreen(live.getLocalPlayer());
+
+            if (live.isNetworkGame()) {
+                // As the client after the session start: the Sync records take the camera's top tile row for their drawn rows.
+                ViewCamera view = this.viewCamera;
+
+                live.setSyncSource(game, () -> Math.max(0, view.getScreenY() / SYNC_ROW_HEIGHT));
+            }
 
             if (this.options.profile()) {
                 this.profiler = new Profiler(this.trace);
@@ -614,6 +644,16 @@ public final class RunnerMain {
                     // The pointer keeps its place on the screen; the next frame supplies the moved camera.
                     this.camera().centerOn(view.x(), view.y());
                     this.applyMouse(game);
+                    yield null;
+                }
+                case MtestScript.Chat chat -> {
+                    // As the chat box on Enter. A network game's writes the sender's own line at once; a single-player game's checks
+                    // the line as a cheat and writes none. Not recorded for a replay, and no cheat is applied.
+                    if (session.getLive().isNetworkGame()) {
+                        game.getInterfaceLink().getMessageLines()
+                            .writeChat(session.getLive().getLocalPlayer(), chat.text().getBytes(StandardCharsets.UTF_8));
+                    }
+
                     yield null;
                 }
                 case MtestScript.Expect expect -> {
@@ -930,6 +970,7 @@ public final class RunnerMain {
         Path shotsDir = null;
         Path js = null;
         boolean profile = false;
+        boolean lan = false;
         int frames = DEFAULT_FRAMES;
         int slot = 0;
         long frameTimeout = DEFAULT_FRAME_TIMEOUT_MILLIS;
@@ -940,6 +981,11 @@ public final class RunnerMain {
 
             if (name.equals("--profile")) {
                 profile = true;
+                continue;
+            }
+
+            if (name.equals("--lan")) {
+                lan = true;
                 continue;
             }
 
@@ -969,7 +1015,7 @@ public final class RunnerMain {
             throw new IllegalArgumentException("--data, --map and --out are required.");
         }
 
-        return new Options(data, map, out, script, frames, slot, frameTimeout, timeLimit, epmap, profile, shotsDir, js);
+        return new Options(data, map, out, script, frames, slot, frameTimeout, timeLimit, epmap, profile, shotsDir, js, lan);
     }
 
     private static int parsePositive(@NotNull String name, @NotNull String value, int maximum) {

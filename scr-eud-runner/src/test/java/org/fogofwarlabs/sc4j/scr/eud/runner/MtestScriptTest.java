@@ -99,6 +99,28 @@ final class MtestScriptTest {
     }
 
     @Test
+    void chatTakesTheRestOfTheLineWithoutFrames() {
+        assertEquals(new MtestScript.Chat(1, "00ABC def"), only("chat 00ABC def"));
+        assertEquals(new MtestScript.Chat(1, "Hello  World"), only("CHAT   Hello  World  "));
+        assertEquals(new MtestScript.Chat(1, "x".repeat(MtestScript.MAXIMUM_CHAT_BYTES)),
+                     only("chat " + "x".repeat(MtestScript.MAXIMUM_CHAT_BYTES)));
+        assertEquals(0, MtestScript.parse(List.of("chat a", "chat b")).getPlannedFrames());
+    }
+
+    @Test
+    void chatRejectsNoTextAndMoreThanTheChatBoxTakes() {
+        assertEquals(new MtestScript.Problem(1, "missing_argument", "chat", MtestScript.CHAT_USAGE), problem("chat"));
+        assertEquals("out_of_range", problem("chat " + "x".repeat(MtestScript.MAXIMUM_CHAT_BYTES + 1)).code());
+        // Bytes, not characters: a Hangul syllable is three.
+        assertEquals("out_of_range", problem("chat " + "\uAC00".repeat(27)).code());
+        assertEquals(new MtestScript.Chat(1, "\uAC00".repeat(26)), only("chat " + "\uAC00".repeat(26)));
+        assertEquals("bad_text", problem("chat a\tb").code());
+        assertEquals("bad_text", problem("chat a\u0007b").code());
+        // Only a line that starts with # is a comment.
+        assertEquals(new MtestScript.Chat(1, "#hi"), only("chat #hi"));
+    }
+
+    @Test
     void viewRejectsAnythingButOnePoint() {
         assertEquals(new MtestScript.Problem(1, "missing_argument", "view", MtestScript.VIEW_USAGE), problem("view"));
         assertEquals("extra_argument", problem("view 1,2 3").code());

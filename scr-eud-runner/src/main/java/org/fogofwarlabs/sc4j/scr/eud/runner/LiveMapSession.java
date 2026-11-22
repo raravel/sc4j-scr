@@ -25,7 +25,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * A live single-player game on a map file without a client: the interface state a client supplies is filled in before the session starts,
+ * A live game with one human on a map file without a client, single-player or (with a network turn stream attached to the live session
+ * before the start) a network game: the interface state a client supplies is filled in before the session starts,
  * and frames advance in the client's turn-exchange, simulation and outcome order. This follows the scr-game test fixture
  * {@code LiveMapGameScenario}, outside the test sources.
  */
@@ -68,7 +69,7 @@ final class LiveMapSession {
                                                              ChkFile.parseTolerant(live.getSetup().getMapData()),
                                                              gameData,
                                                              live.getLocalPlayer(),
-                                                             false,
+                                                             live.isNetworkGame(),
                                                              live.getTeamSlotRaces(),
                                                              VIEWPORT_WIDTH, VIEWPORT_HEIGHT,
                                                              INSTRUCTION_LIMIT);

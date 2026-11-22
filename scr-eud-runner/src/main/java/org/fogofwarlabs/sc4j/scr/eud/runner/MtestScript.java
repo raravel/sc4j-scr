@@ -3,6 +3,7 @@ package org.fogofwarlabs.sc4j.scr.eud.runner;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -22,6 +23,10 @@ import java.util.regex.Pattern;
  * <li>{@code view X,Y}: the 640x480 game view is centred on the map pixel X,Y, clamped to the map as the client clamps its camera; it
  * clicks nothing, selects nothing and lets no frame pass, and the pointer keeps its place on the screen; like {@code click} it takes the camera
  * over from a trigger Center View that holds it;</li>
+ * <li>{@code chat TEXT}: the local player enters TEXT in the chat box. In a network game ({@code --lan}) the game writes it to its message
+ * lines as that player's own chat line; in a single-player game the chat box writes no line, so nothing happens. The line is neither
+ * applied as a cheat nor recorded for a replay, and no frame passes. TEXT is the rest of the line, at most {@value #MAXIMUM_CHAT_BYTES}
+ * bytes of UTF-8, without control characters;</li>
  * <li>{@code expect deaths P<1-12> <UNIT 0-227> OP VALUE}, {@code expect memory 0x<ADDRESS> OP VALUE},
  * {@code expect text [not] contains "TEXT"}, {@code expect units OP VALUE}: a check of the state reached so far;</li>
  * <li>{@code shot [NAME]}: a picture of what the player sees at that point, without advancing the game; NAME is
@@ -50,6 +55,10 @@ public final class MtestScript {
      * The most {@code shot} lines of a script.
      */
     public static final int MAXIMUM_SHOTS = 16;
+    /**
+     * The most bytes of a {@code chat} text: what the chat box takes.
+     */
+    public static final int MAXIMUM_CHAT_BYTES = 78;
 
     static final @NotNull String WAIT_USAGE = "wait N";
     static final @NotNull String KEY_USAGE = "key NAME [FRAMES]";
@@ -59,6 +68,7 @@ public final class MtestScript {
     static final @NotNull String PRESS_USAGE = "press X,Y [left|right|middle]";
     static final @NotNull String RELEASE_USAGE = "release [left|right|middle]";
     static final @NotNull String VIEW_USAGE = "view X,Y";
+    static final @NotNull String CHAT_USAGE = "chat TEXT  (at most " + MAXIMUM_CHAT_BYTES + " bytes of UTF-8, no control characters)";
     static final @NotNull String EXPECT_DEATHS_USAGE = "expect deaths P<1-12> <UNIT 0-227> <OP> <VALUE>";
     static final @NotNull String EXPECT_MEMORY_USAGE = "expect memory 0x<ADDRESS> <OP> <VALUE>";
     static final @NotNull String EXPECT_TEXT_USAGE = "expect text [not] contains \"TEXT\"";
@@ -66,7 +76,7 @@ public final class MtestScript {
     static final @NotNull String EXPECT_USAGE = EXPECT_DEATHS_USAGE + " | " + EXPECT_MEMORY_USAGE + " | " + EXPECT_TEXT_USAGE + " | " +
                                                EXPECT_UNITS_USAGE;
     static final @NotNull String SHOT_USAGE = "shot [NAME]  (NAME: A-Z a-z 0-9 _ -, at most 40)";
-    static final @NotNull String COMMANDS_USAGE = "wait, key, keydown, keyup, click, press, release, view, expect, shot";
+    static final @NotNull String COMMANDS_USAGE = "wait, key, keydown, keyup, click, press, release, view, chat, expect, shot";
 
     /**
      * The mouse button flags of the classic interface (0x6CDDC0).
@@ -87,7 +97,7 @@ public final class MtestScript {
     /**
      * One step of a script.
      */
-    public sealed interface Step permits Wait, KeyStep, MouseStep, View, Expect, Shot {
+    public sealed interface Step permits Wait, KeyStep, MouseStep, View, Chat, Expect, Shot {
         /**
          * @return the 1-based script line
          */
@@ -150,6 +160,15 @@ public final class MtestScript {
      * @param y    the map pixel Y the view centres on
      */
     public record View(int line, int x, int y) implements Step {
+    }
+
+    /**
+     * {@code chat TEXT}: the local player's chat line, without a frame.
+     *
+     * @param line the script line
+     * @param text the chat text
+     */
+    public record Chat(int line, @NotNull String text) implements Step {
     }
 
     /**
@@ -259,6 +278,7 @@ public final class MtestScript {
                 case KeyStep key -> key.frames();
                 case MouseStep mouse -> mouse.frames();
                 case View ignored -> 0;
+                case Chat ignored -> 0;
                 case Expect ignored -> 0;
                 case Shot ignored -> 0;
             };
@@ -380,6 +400,27 @@ public final class MtestScript {
                 requireCount(words, 2, 2, VIEW_USAGE);
                 int[] point = parsePoint(words[1], VIEW_USAGE);
                 yield new View(line, point[0], point[1]);
+            }
+            case "chat" -> {
+                // The rest of the line as written: a chat line keeps its case and inner spaces.
+                String chat = text.substring(words[0].length()).strip();
+
+                if (chat.isEmpty()) {
+                    throw new LineException("missing_argument", text, CHAT_USAGE);
+                }
+
+                // What a chat box cannot take: a map would read bytes no player can send.
+                if (chat.chars().anyMatch(character -> character < 0x20 || character == 0x7F)) {
+                    throw new LineException("bad_text", chat, CHAT_USAGE);
+                }
+
+                int bytes = chat.getBytes(StandardCharsets.UTF_8).length;
+
+                if (bytes > MAXIMUM_CHAT_BYTES) {
+                    throw new LineException("out_of_range", chat + " (" + bytes + " bytes, at most " + MAXIMUM_CHAT_BYTES + ")", CHAT_USAGE);
+                }
+
+                yield new Chat(line, chat);
             }
             case "expect" -> parseExpect(line, text, words);
             case "shot" -> {
