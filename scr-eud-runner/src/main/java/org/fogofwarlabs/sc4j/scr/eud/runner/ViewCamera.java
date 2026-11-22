@@ -42,6 +42,10 @@ final class ViewCamera {
      * The client's draws per second, each running the interface loop's clock test; a guess at a 60 Hz display.
      */
     private static final int DRAWS_PER_SECOND = 60;
+    /**
+     * The most interface scroll ticks one draw runs, as the client's {@code Main.MAXIMUM_INTERFACE_TICKS}.
+     */
+    private static final int MAXIMUM_INTERFACE_TICKS = 4;
     private static final float CENTER_DIVISOR = 2f;
 
     private final @NotNull Game game;
@@ -229,7 +233,9 @@ final class ViewCamera {
 
             this.draws++;
 
-            if (this.game.getInterfaceLink().getLocalInterface().advanceInterfaceTick(draw) && this.centerViewScroll.isActive()) {
+            int ticks = this.game.getInterfaceLink().getLocalInterface().advanceInterfaceTicks(draw, MAXIMUM_INTERFACE_TICKS);
+
+            for (int tick = 0; tick < ticks && this.centerViewScroll.isActive(); tick++) {
                 this.centerViewScroll.tick(GameScreenCamera.ofWholeView(this.camera, this.viewport, this.mapWidth, this.mapHeight));
             }
         }
