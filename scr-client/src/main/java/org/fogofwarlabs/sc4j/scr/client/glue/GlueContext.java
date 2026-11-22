@@ -1,13 +1,14 @@
 package org.fogofwarlabs.sc4j.scr.client.glue;
 
-import org.fogofwarlabs.sc4j.engine.client.community.ChannelChat;
 import org.fogofwarlabs.sc4j.engine.client.dialog.DialogStack;
 import org.fogofwarlabs.sc4j.engine.client.dialog.TextClipboard;
 import org.fogofwarlabs.sc4j.engine.client.host.HostWindow;
+import org.fogofwarlabs.sc4j.engine.net.beaconlink.community.chat.ChannelChat;
 import org.fogofwarlabs.sc4j.engine.resource.dialog.DialogControl;
 import org.fogofwarlabs.sc4j.scr.client.BeaconLinkAccess;
 import org.fogofwarlabs.sc4j.scr.client.ClientContext;
 import org.fogofwarlabs.sc4j.scr.client.ClientPlayer;
+import org.fogofwarlabs.sc4j.scr.client.ReleaseStatus;
 import org.fogofwarlabs.sc4j.scr.client.configuration.InstallLayout;
 import org.fogofwarlabs.sc4j.scr.client.glue.campaign.CampaignMissionNames;
 import org.fogofwarlabs.sc4j.scr.client.glue.lobby.RoomFilter;
@@ -254,10 +255,10 @@ public final class GlueContext {
     }
 
     /**
-     * @return the folder of the single player IDs
+     * @return the folder of the local IDs ({@link GlueFolders#getLocalIdDirectory()})
      */
-    public @NotNull Path getCharacterDirectory() {
-        return this.folders.getCharacterDirectory();
+    public @NotNull Path getLocalIdDirectory() {
+        return this.folders.getLocalIdDirectory();
     }
 
     /**
@@ -316,8 +317,8 @@ public final class GlueContext {
     }
 
     /**
-     * Returns the run player's character file, which holds the campaign progress; the first call opens it from the character folder
-     * ({@link CharacterFile#open}).
+     * Returns the run player's character file, which holds the campaign progress: the chosen local ID's file, else the file the first call
+     * opens from the player's folder of the character folder ({@link ClientPlayer#getDirectory}, {@link CharacterFile#open}).
      *
      * @return the player's character file
      */
@@ -327,11 +328,30 @@ public final class GlueContext {
         if (opened == null) {
             ClientPlayer player = this.client.getPlayer();
 
-            opened         = CharacterFile.open(this.getCharacterDirectory(), player.getFolderName(), player.getName());
+            opened         = CharacterFile.open(player.getDirectory(this.folders.getCharacterDirectory()), player.getFolderName(), player.getName());
             this.character = opened;
         }
 
         return opened;
+    }
+
+    /**
+     * Makes a local ID the player of a run without an account: its name, its file name as the player's folder name, and its file as the
+     * player's character file.
+     *
+     * @param character the local ID
+     * @throws IllegalStateException if the run has an account
+     */
+    public void setCharacter(@NotNull CharacterFile character) {
+        this.client.chooseLocalId(character.getName(), character.getFileName());
+        this.character = character;
+    }
+
+    /**
+     * @return {@code true} if the run has a player to play as: the run's account or a chosen local ID, {@code false} for a guest
+     */
+    public boolean hasPlayer() {
+        return !this.client.getPlayer().isGuest();
     }
 
     /**
@@ -355,6 +375,13 @@ public final class GlueContext {
      */
     public @NotNull BeaconLinkAccess getBeaconLink() {
         return this.client.getBeaconLink();
+    }
+
+    /**
+     * @return the running SC4J version and how it stands against the latest SC4J release
+     */
+    public @NotNull ReleaseStatus getReleaseStatus() {
+        return this.client.getReleaseStatus();
     }
 
     /**
@@ -441,14 +468,14 @@ public final class GlueContext {
 
 
     /**
-     * @return the run player's name in games, lobbies and Beacon.Link: the account name, or the guest name
+     * @return the run player's name in games, lobbies and Beacon.Link: the account name, the local ID's name, or the guest name
      */
     public @NotNull String getPlayerName() {
         return this.client.getPlayer().getName();
     }
 
     /**
-     * @return the run player's name as the menus show it: the account name with its tag, or the guest name
+     * @return the run player's name as the menus show it: the account name with its tag, the local ID's name, or the guest name
      */
     public @NotNull String getTaggedPlayerName() {
         return this.client.getPlayer().getTaggedName();
@@ -458,6 +485,6 @@ public final class GlueContext {
      * @return the folder of the run player's saved games
      */
     public @NotNull Path getSaveDirectory() {
-        return this.folders.getSaveDirectory(this.client.getPlayer().getFolderName());
+        return this.folders.getSaveDirectory(this.client.getPlayer());
     }
 }

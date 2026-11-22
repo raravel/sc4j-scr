@@ -55,7 +55,7 @@ public final class MessageLines {
      */
     public static final int STYLE_OWN_CHAT_TEXT = 7;
     /**
-     * The color code of a received whisper line (yellow).
+     * The color code of a whisper line (yellow).
      */
     public static final int STYLE_WHISPER = 3;
     /**
@@ -237,6 +237,17 @@ public final class MessageLines {
          * @return the localized text bytes, or {@code null} when the id is unknown
          */
         byte @Nullable [] resolveNumberedText(int textIdentifier);
+    }
+
+    /**
+     * Returns the display duration of trigger text: a duration per character, at least the trigger text minimum and the supplied minimum.
+     *
+     * @param text                the text bytes
+     * @param minimumMilliseconds the least duration, or {@code 0}
+     * @return the duration in milliseconds
+     */
+    private static int getTriggerTextDuration(byte @NotNull [] text, int minimumMilliseconds) {
+        return Math.max(Math.max(text.length * TRIGGER_CHARACTER_DURATION_MILLISECONDS, MINIMUM_TRIGGER_DURATION_MILLISECONDS), minimumMilliseconds);
     }
 
     private static int advanceLine(int line) {
@@ -653,23 +664,15 @@ public final class MessageLines {
     }
 
     /**
-     * Writes resolved trigger text when subtitles are enabled or the action forces display.
+     * Writes resolved trigger text when subtitles are enabled or the action forces display ({@link #writeTriggerText(byte[], boolean, int)}).
      *
      * @param stringIndex         the map string index
      * @param forced              whether the action forces display
      * @param minimumMilliseconds the transmission duration, or {@code 0}
      */
     public void writeTriggerString(int stringIndex, boolean forced, int minimumMilliseconds) {
-        if (!forced) {
-            if (this.subtitles == null) {
-                this.markUnknown("trigger text without the subtitle option");
-
-                return;
-            }
-
-            if (!this.subtitles) {
-                return;
-            }
+        if (!this.acceptsTriggerText(forced)) {
+            return;
         }
 
         byte[] text;
@@ -697,9 +700,44 @@ public final class MessageLines {
             text = this.mapStrings[stringIndex - FIRST_MAP_STRING_INDEX];
         }
 
-        this.writeTriggerText(text,
-                              Math.max(Math.max(text.length * TRIGGER_CHARACTER_DURATION_MILLISECONDS, MINIMUM_TRIGGER_DURATION_MILLISECONDS),
-                                       minimumMilliseconds));
+        this.writeTriggerText(text, getTriggerTextDuration(text, minimumMilliseconds));
+    }
+
+    /**
+     * Writes trigger text as Display Text Message writes a map string: when subtitles are enabled or the display is forced, nonempty text shows
+     * for a duration that grows with its length, at least the minimum.
+     *
+     * @param text                the UTF-8 text bytes
+     * @param forced              whether the display is forced
+     * @param minimumMilliseconds the least duration, or {@code 0}
+     */
+    public void writeTriggerText(byte @NotNull [] text, boolean forced, int minimumMilliseconds) {
+        if (!this.acceptsTriggerText(forced) || text.length == 0) {
+            return;
+        }
+
+        this.writeTriggerText(text, getTriggerTextDuration(text, minimumMilliseconds));
+    }
+
+    /**
+     * Tests whether trigger text shows: forced text always, other text when the subtitle option is on; an unknown subtitle option marks the
+     * lines unknown.
+     *
+     * @param forced whether the display is forced
+     * @return {@code true} if the text shows, {@code false} otherwise
+     */
+    private boolean acceptsTriggerText(boolean forced) {
+        if (forced) {
+            return true;
+        }
+
+        if (this.subtitles == null) {
+            this.markUnknown("trigger text without the subtitle option");
+
+            return false;
+        }
+
+        return this.subtitles;
     }
 
     /**
@@ -856,7 +894,19 @@ public final class MessageLines {
      */
     public void writeWhisper(@NotNull String format, int sender, byte @NotNull [] text) {
         byte[] name = sender >= 0 && sender < this.playerNames.length ? this.playerNames[sender] : new byte[0];
-        byte[] prefix = format.replace("%s", new String(name, StandardCharsets.UTF_8)).getBytes(StandardCharsets.UTF_8);
+
+        this.writeWhisper(format, new String(name, StandardCharsets.UTF_8), text);
+    }
+
+    /**
+     * Writes a whisper line with a localized prefix that names the other player, a space and the text, all in the whisper style.
+     *
+     * @param format the localized prefix format with one {@code %s} for the name, for example {@code "<From: %s>"} or {@code "<To: %s>"}
+     * @param name   the other player's name
+     * @param text   the text bytes
+     */
+    public void writeWhisper(@NotNull String format, @NotNull String name, byte @NotNull [] text) {
+        byte[] prefix = format.replace("%s", name).getBytes(StandardCharsets.UTF_8);
 
         this.writeChatLine(joinWithSeparator(prefix, text), STYLE_WHISPER, 0);
     }
@@ -965,7 +1015,8 @@ public final class MessageLines {
             TerminatedStringUtils.putText(text, start, end - start, this.lines, line * LINE_SIZE, LINE_SIZE);
 
             this.deadlines[line] = deadline;
-                                   start = end;
+
+            start = end;
         }
     }
 
@@ -1089,7 +1140,8 @@ public final class MessageLines {
             this.styles[line]       = pieceStyle;
             this.colors[line]       = pieceColor;
             this.triggerFlags[line] = (byte) triggerFlag;
-                                      line = advanceLine(line);
+
+            line = advanceLine(line);
 
             int nextStyle = pieceStyle;
 

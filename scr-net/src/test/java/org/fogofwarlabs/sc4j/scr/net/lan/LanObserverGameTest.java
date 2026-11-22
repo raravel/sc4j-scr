@@ -4,12 +4,12 @@ import org.fogofwarlabs.sc4j.scr.core.test.ExternalInput;
 import org.fogofwarlabs.sc4j.scr.core.test.RequiresInstallation;
 import org.fogofwarlabs.sc4j.scr.data.format.chk.ChkFile;
 import org.fogofwarlabs.sc4j.scr.data.format.mpq.MpqArchive;
-import org.fogofwarlabs.sc4j.scr.data.format.replay.ReplayCommandIds;
 import org.fogofwarlabs.sc4j.scr.game.frame.GameSpeed;
 import org.fogofwarlabs.sc4j.scr.game.player.PlayerTable;
 import org.fogofwarlabs.sc4j.scr.game.replay.ReplayRuntime;
 import org.fogofwarlabs.sc4j.scr.game.replay.ReplaySession;
 import org.fogofwarlabs.sc4j.scr.game.session.LiveGame;
+import org.fogofwarlabs.sc4j.scr.game.session.SyncChecksumUtils;
 import org.fogofwarlabs.sc4j.scr.game.state.Game;
 import org.fogofwarlabs.sc4j.scr.game.state.GameData;
 import org.jetbrains.annotations.NotNull;
@@ -20,8 +20,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
- * Verifies that an observer of an in-memory LAN game joins with its identifier, sends Keep Alive turns and leaves while
- * the host's game goes on.
+ * Verifies that an observer of an in-memory LAN game joins with its identifier, runs the game in step with the host as the
+ * first observer slot and leaves while the host's game goes on.
  */
 @RequiresInstallation
 final class LanObserverGameTest {
@@ -61,9 +61,81 @@ final class LanObserverGameTest {
     private static final int STATE_GAME = 9;
     private static final int NO_COUNTDOWN = -1;
 
+    private static final class Client {
+        private final @NotNull LiveGame live;
+        private final @NotNull ReplayRuntime runtime;
+        private final @NotNull Game game;
+
+        private Client(@NotNull LiveGame live, @NotNull ReplayRuntime runtime) {
+            this.live    = live;
+            this.runtime = runtime;
+            this.game    = runtime.getGame();
+        }
+
+        /**
+         * Exchanges the turn of the current frame and runs the frame when every player's turn arrived.
+         *
+         * @param now the network clock
+         */
+        private void step(int now) {
+            if (!this.live.exchangeTurn(this.game.getCurrentFrame())) {
+                return;
+            }
+
+            this.runtime.step(FRAME_MILLISECONDS, now);
+
+            Assertions.assertNull(this.runtime.getFailure(), () -> "frame " + this.game.getCurrentFrame() + ": " + this.runtime.getFailure());
+        }
+    }
+
     /**
-     * Plays the host's game for {@code 400} frames while client {@code 1} sends Keep Alive turns as an observer and leaves
-     * at frame {@code 200}.
+     * Starts a client's game from its lobby at the game start.
+     *
+     * @param network  the in-memory LAN of the started game
+     * @param client   the client
+     * @param scenario the map's scenario
+     * @param mapData  the map's scenario bytes
+     * @param data     the installed game data
+     * @return the started game of the client
+     * @throws Exception if the game cannot be started
+     */
+    private static @NotNull Client start(@NotNull InMemoryLanScenario network, int client,
+                                         @NotNull ChkFile scenario, byte @NotNull [] mapData,
+                                         @NotNull GameData data) throws Exception {
+        LanLobby lobby = network.lobbies[client];
+
+        Assertions.assertNotNull(lobby);
+
+        LiveGame live = new LiveGame(lobby.createGameSetup(mapData, GameSpeed.FASTEST, true), lobby.getSeed(),
+                                     network.sessions[client].getLocalIdentifier());
+
+        live.attachNetwork(new LanTurnTransport(network.sessions[client], network::deliver), TURNS_IN_TRANSIT, false);
+
+        ReplayRuntime runtime = ReplayRuntime.createLiveGame(live.getReplay(), scenario,
+                                                             data,
+                                                             live.getLocalPlayer(), live.getLocalSlot(),
+                                                             true, live.getTeamSlotRaces(),
+                                                             VIEWPORT_WIDTH, VIEWPORT_HEIGHT,
+                                                             INSTRUCTION_LIMIT);
+
+        live.startSession(runtime.getGame(), runtime.getFrameTiming());
+        live.setSyncSource(runtime.getGame(), () -> 0);
+        runtime.start(0, network.now);
+
+        Assertions.assertNull(runtime.getFailure());
+
+        ReplaySession session = runtime.getSession();
+
+        Assertions.assertNotNull(session);
+
+        live.attachReplaySession(session);
+
+        return new Client(live, runtime);
+    }
+
+    /**
+     * Plays the host's game for {@code 400} frames while client {@code 1} plays the same game as an observer and leaves at
+     * frame {@code 200}; both games hash alike while the observer plays.
      *
      * @param network          the in-memory LAN of the started game
      * @param scenario         the map's scenario
@@ -74,64 +146,41 @@ final class LanObserverGameTest {
     private static void play(@NotNull InMemoryLanScenario network,
                              @NotNull ChkFile scenario, byte @NotNull [] mapData,
                              @NotNull Path installationPath) throws Exception {
-        LanLobby host = network.lobbies[HOST];
-        LanTurnTransport observer = new LanTurnTransport(network.sessions[OBSERVER_CLIENT], network::deliver);
-
         try (GameData data = GameData.loadFrom(installationPath)) {
-            Assertions.assertNotNull(host);
-
-            LiveGame live = new LiveGame(host.createGameSetup(mapData, GameSpeed.FASTEST, true), host.getSeed(), HOST);
-
-            live.attachNetwork(new LanTurnTransport(network.sessions[HOST], network::deliver), TURNS_IN_TRANSIT, false);
-
-            ReplayRuntime runtime = ReplayRuntime.createLiveGame(live.getReplay(), scenario,
-                                                                 data,
-                                                                 live.getLocalPlayer(), true,
-                                                                 VIEWPORT_WIDTH, VIEWPORT_HEIGHT,
-                                                                 INSTRUCTION_LIMIT);
-            Game game = runtime.getGame();
+            Client host = start(network, HOST, scenario, mapData, data);
+            Client observer = start(network, OBSERVER_CLIENT, scenario, mapData, data);
+            Game game = host.game;
             boolean observerLeft = false;
 
-            live.setSyncSource(game, () -> 0);
-            runtime.start(0, network.now);
-
-            Assertions.assertNull(runtime.getFailure());
-
-            ReplaySession session = runtime.getSession();
-
-            Assertions.assertNotNull(session);
-
-            live.attachReplaySession(session);
+            Assertions.assertEquals(PlayerTable.FIRST_OBSERVER_SLOT, observer.live.getLocalPlayer(), "the observer plays the first observer slot");
+            Assertions.assertEquals(PlayerTable.FIRST_OBSERVER_SLOT, observer.live.getLocalSlot());
+            Assertions.assertTrue(observer.game.getLocalVision().isObserver(), "the observer's game has an observer's view");
 
             for (int iteration = 0; iteration < ITERATION_LIMIT && game.getCurrentFrame() < FRAMES; iteration++) {
                 network.now++;
 
-                if (!observerLeft) {
-                    // The observer's game: its turns carry Keep Alive only, one turn step per frame.
-                    while (observer.getTurnsInTransit() < TURNS_IN_TRANSIT) {
-                        observer.sendTurn(new byte[]{ReplayCommandIds.KEEP_ALIVE});
-                    }
-
-                    observer.receiveTurns();
-                }
-
-                if (game.getCurrentFrame() == OBSERVER_LEAVE_FRAME && !observerLeft) {
+                if (!observerLeft && observer.game.getCurrentFrame() == OBSERVER_LEAVE_FRAME) {
                     network.sessions[OBSERVER_CLIENT].leave(LiveGame.LEAVE_REASON);
                     observerLeft = true;
                 }
 
-                if (!live.exchangeTurn(game.getCurrentFrame())) {
-                    continue;
+                if (!observerLeft) {
+                    observer.step(network.now);
                 }
 
-                runtime.step(FRAME_MILLISECONDS, network.now);
+                host.step(network.now);
 
-                Assertions.assertNull(runtime.getFailure(), () -> "frame " + game.getCurrentFrame() + ": " + runtime.getFailure());
+                if (!observerLeft && observer.game.getCurrentFrame() == game.getCurrentFrame()) {
+                    Assertions.assertEquals(SyncChecksumUtils.calculateUnitHash(game), SyncChecksumUtils.calculateUnitHash(observer.game),
+                                            "unit hash at frame " + game.getCurrentFrame());
+                }
             }
 
+            Assertions.assertEquals(OBSERVER_LEAVE_FRAME, observer.game.getCurrentFrame(), "the observer's game ran until it left");
+            Assertions.assertEquals(0, observer.live.getSyncMismatches());
             Assertions.assertEquals(FRAMES, game.getCurrentFrame(), "the host's game ran on with the observer and after it left");
-            Assertions.assertEquals(NO_COUNTDOWN, live.getWaitCountdown(), "no waiting for players");
-            Assertions.assertEquals(0, live.getSyncMismatches());
+            Assertions.assertEquals(NO_COUNTDOWN, host.live.getWaitCountdown(), "no waiting for players");
+            Assertions.assertEquals(0, host.live.getSyncMismatches());
         }
     }
 

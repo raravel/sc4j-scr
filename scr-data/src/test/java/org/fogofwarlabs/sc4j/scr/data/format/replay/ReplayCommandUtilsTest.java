@@ -132,4 +132,30 @@ final class ReplayCommandUtilsTest {
         Assertions.assertEquals(1, ReplayCommandUtils.walkReplayTurn(turn, 0, turn.length, (data, offset, commandLength) -> {
         }));
     }
+
+    @Test
+    void get_stored_length_should_take_the_mod_command_length_from_its_length_byte() {
+        byte modCommand = (byte) ReplayCommandIds.MOD_COMMAND;
+
+        Assertions.assertTrue(ReplayCommandUtils.isDispatched(ReplayCommandIds.MOD_COMMAND));
+        Assertions.assertEquals(-1, ReplayCommandUtils.getFixedLength(ReplayCommandIds.MOD_COMMAND));
+        Assertions.assertEquals(ReplayModCommand.HEADER_SIZE, ReplayCommandUtils.getStoredLength(new byte[]{modCommand, 0}, 0));
+        Assertions.assertEquals(ReplayModCommand.HEADER_SIZE + ReplayModCommand.MAXIMUM_DATA_LENGTH,
+                                ReplayCommandUtils.getStoredLength(new byte[]{modCommand, (byte) ReplayModCommand.MAXIMUM_DATA_LENGTH}, 0));
+        Assertions.assertEquals(-1, ReplayCommandUtils.getStoredLength(new byte[]{modCommand, (byte) (ReplayModCommand.MAXIMUM_DATA_LENGTH + 1)}, 0));
+        Assertions.assertEquals(-1, ReplayCommandUtils.getStoredLength(new byte[]{modCommand}, 0));
+    }
+
+    @Test
+    void walk_should_run_a_mod_command_that_fits_and_stop_at_a_truncated_one() {
+        byte modCommand = (byte) ReplayCommandIds.MOD_COMMAND;
+        byte[] buffer = {modCommand, 2, 7, 8, ReplayCommandIds.STOP, 0, modCommand, 3, 1};
+        List<int[]> walked = new ArrayList<>();
+
+        int length = ReplayCommandUtils.walk(buffer, 0, buffer.length, (data, offset, commandLength) -> walked.add(new int[]{offset, commandLength}));
+
+        Assertions.assertEquals(6, length);
+        Assertions.assertEquals(2, walked.size());
+        Assertions.assertArrayEquals(new int[]{0, 4}, walked.get(0));
+    }
 }

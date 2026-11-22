@@ -659,10 +659,11 @@ final class ComputerRegions {
         this.states[index] = (byte) nextState;
 
         switch (nextState) {
-            case ComputerRegionStates.IDLE -> this.stateTimers[index] =
-                    (byte) ((previousFlags & ComputerRegionStates.FLAG_KEEP_REQUIRED_STRENGTH) != 0 && !campaign
-                            ? TIMER_DEFENDED_IDLE
-                            : TIMER_DEFAULT);
+            case ComputerRegionStates.IDLE -> {
+                boolean keepsRequiredStrength = (previousFlags & ComputerRegionStates.FLAG_KEEP_REQUIRED_STRENGTH) != 0 && !campaign;
+
+                this.stateTimers[index] = (byte) (keepsRequiredStrength ? TIMER_DEFENDED_IDLE : TIMER_DEFAULT);
+            }
             case ComputerRegionStates.ATTACK,
                  ComputerRegionStates.ATTACK_ENGAGED -> this.stateTimers[index] = (byte) (campaign ? TIMER_CAMPAIGN_ATTACK : TIMER_ATTACK);
             case ComputerRegionStates.DEFENDER_WANTED -> {
@@ -819,7 +820,8 @@ final class ComputerRegions {
         }
 
         this.firstMilitaryRecords[index] = record;
-                                           record.regionIndex = index;
+
+        record.regionIndex = index;
 
         if (ground) {
             this.militaryCounts[index]++;

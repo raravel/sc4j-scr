@@ -262,7 +262,8 @@ public final class RecordWriter implements Closeable {
 
             this.sectionOffsets[sectionIndex] = this.stagedBytes;
             this.sectionLengths[sectionIndex] = RecordFormatUtils.SAMPLE_HEADER_BYTES + payloadBytes;
-                                                this.stagedBytes = (int) nextBytes;
+
+            this.stagedBytes = (int) nextBytes;
             this.stagedSections++;
         } catch (IOException | RuntimeException exception) {
             this.stageFaulted = true;
@@ -305,7 +306,8 @@ public final class RecordWriter implements Closeable {
 
             this.sectionOffsets[sectionIndex] = this.stagedBytes;
             this.sectionLengths[sectionIndex] = RecordFormatUtils.SAMPLE_HEADER_BYTES;
-                                                this.stagedBytes = nextBytes;
+
+            this.stagedBytes = nextBytes;
             this.stagedSections++;
             this.stagedUnavailableSamples++;
         } catch (IOException | RuntimeException exception) {

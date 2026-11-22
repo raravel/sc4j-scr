@@ -33,23 +33,23 @@ import org.fogofwarlabs.sc4j.scr.content.ScrUnitIds;
 import org.fogofwarlabs.sc4j.scr.content.load.ScrContentImporter;
 import org.fogofwarlabs.sc4j.scr.core.GameSettings;
 import org.fogofwarlabs.sc4j.scr.core.LcgRandom;
+import org.fogofwarlabs.sc4j.scr.data.format.replay.ReplayFile;
 import org.fogofwarlabs.sc4j.scr.game.ability.*;
 import org.fogofwarlabs.sc4j.scr.game.ai.*;
 import org.fogofwarlabs.sc4j.scr.game.combat.*;
 import org.fogofwarlabs.sc4j.scr.game.creep.CreepField;
 import org.fogofwarlabs.sc4j.scr.game.creep.CreepFramePhase;
 import org.fogofwarlabs.sc4j.scr.game.creep.CreepRecession;
+import org.fogofwarlabs.sc4j.scr.game.extension.*;
 import org.fogofwarlabs.sc4j.scr.game.frame.*;
-import org.fogofwarlabs.sc4j.scr.game.map.MapSpriteEffectLoader;
-import org.fogofwarlabs.sc4j.scr.game.map.MapUnitLoader;
-import org.fogofwarlabs.sc4j.scr.game.map.ScrTerrainGrid;
-import org.fogofwarlabs.sc4j.scr.game.map.StartingUnitLoader;
+import org.fogofwarlabs.sc4j.scr.game.map.*;
 import org.fogofwarlabs.sc4j.scr.game.modifier.*;
 import org.fogofwarlabs.sc4j.scr.game.movement.*;
 import org.fogofwarlabs.sc4j.scr.game.order.*;
 import org.fogofwarlabs.sc4j.scr.game.path.*;
 import org.fogofwarlabs.sc4j.scr.game.player.*;
 import org.fogofwarlabs.sc4j.scr.game.presentation.InterfaceLink;
+import org.fogofwarlabs.sc4j.scr.game.presentation.StatTextOverrides;
 import org.fogofwarlabs.sc4j.scr.game.presentation.UnitSounds;
 import org.fogofwarlabs.sc4j.scr.game.production.*;
 import org.fogofwarlabs.sc4j.scr.game.replay.ReplayFrameRunner;
@@ -64,6 +64,7 @@ import org.fogofwarlabs.sc4j.scr.game.terrain.Foliage;
 import org.fogofwarlabs.sc4j.scr.game.terrain.GameMap;
 import org.fogofwarlabs.sc4j.scr.game.terrain.TerrainContours;
 import org.fogofwarlabs.sc4j.scr.game.trigger.*;
+import org.fogofwarlabs.sc4j.scr.game.trigger.eud.ClassicMemorySource;
 import org.fogofwarlabs.sc4j.scr.game.unit.*;
 import org.fogofwarlabs.sc4j.scr.game.unit.finder.ScrSpatialIndex;
 import org.fogofwarlabs.sc4j.scr.game.unit.finder.UnitPositioning;
@@ -72,7 +73,9 @@ import org.fogofwarlabs.sc4j.scr.game.visibility.*;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * The game: the SC:R game system of an engine game ({@link #SYSTEM_KEY}), created from an explicit {@link GameSetup}
@@ -116,6 +119,10 @@ public final class Game implements GameSystem, StateHashContributor {
      * The cheat option byte that permits cheats.
      */
     private static final int CHEATS_PERMITTED = 1;
+    /**
+     * The one-based {@code stat_txt} identifier of the name of unit type {@code 0}; the names of the other types follow.
+     */
+    private static final int FIRST_UNIT_NAME_STRING = 1;
 
     /**
      * The definition of SC:R games without game data, as {@link #register} sets it up; games with game data use the
@@ -253,6 +260,7 @@ public final class Game implements GameSystem, StateHashContributor {
     private @Nullable GameData gameData;
     private final @NotNull GameMap map;
     private final @NotNull ScrTerrainGrid terrain;
+    private final @NotNull MapTileChanges mapTileChanges;
     private @Nullable MapModel mapModel;
     private final @NotNull LcgRandom random;
     private final @NotNull RuntimeRandom runtimeRandom;
@@ -262,12 +270,17 @@ public final class Game implements GameSystem, StateHashContributor {
     private boolean replayPlayback;
     private @Nullable PlayerSlots playerSlots;
 
-    /* The engine game, attached after creation, its frame clock, which holds the frame counter, the hook points the SC:R systems call and
-       the SC:R modifier of each stat. */
+    /* The engine game, attached after creation, its frame clock, which holds the frame counter, the hook points the SC:R systems call,
+       the SC:R modifier of each stat, the plugins and memory sources of the mod's game extensions, the plugins of its simulation
+       extensions and the mod sections of the replay written of this game. */
     private org.fogofwarlabs.sc4j.engine.game.@Nullable Game engineGame;
     private @Nullable FrameClock clock;
     private @Nullable ScrHooks hooks;
     private @Nullable ScrStatModifier @NotNull [] statModifiers;
+    private @NotNull ScrGamePlugin @NotNull [] plugins;
+    private @NotNull ClassicMemorySource @NotNull [] memorySources;
+    private @Nullable ScrSimulationPlugins simulationPlugins;
+    private final @NotNull Map<String, byte @NotNull []> replaySections;
 
     /* Frame counters and world lifecycle. */
     private int turnCount;
@@ -451,6 +464,7 @@ public final class Game implements GameSystem, StateHashContributor {
         this.gameData       = gameData;
         this.map            = map;
         this.terrain        = new ScrTerrainGrid(this);
+        this.mapTileChanges = new MapTileChanges(this);
         this.mapModel       = null;
         this.random         = setup.getRandom();
         this.runtimeRandom  = setup.getRuntimeRandom();
@@ -460,10 +474,14 @@ public final class Game implements GameSystem, StateHashContributor {
         this.replayPlayback = false;
         this.playerSlots    = null;
 
-        this.engineGame    = null;
-        this.clock         = null;
-        this.hooks         = null;
-        this.statModifiers = new ScrStatModifier[0];
+        this.engineGame        = null;
+        this.clock             = null;
+        this.hooks             = null;
+        this.statModifiers     = new ScrStatModifier[0];
+        this.plugins           = new ScrGamePlugin[0];
+        this.memorySources     = new ClassicMemorySource[0];
+        this.simulationPlugins = null;
+        this.replaySections    = new LinkedHashMap<>();
 
         this.turnCount                  = 0;
         this.commandDispatchMarkerCount = 0;
@@ -669,7 +687,8 @@ public final class Game implements GameSystem, StateHashContributor {
      * ({@link UnitDamage#getShieldLayer}) to every unit type, and replaces the setup's game
      * data with the game's own copy over the engine content ({@link GameData#createGameCopy(GameContent)}), which starts
      * with the values of the setup's tables. The systems created with this game read the game data only after it
-     * attaches.
+     * attaches. Last it creates the plugins and memory sources of the mod's game extensions ({@link ScrGameExtensionUtils}) and the plugins of
+     * its simulation extensions ({@link ScrSimulationExtensionUtils}).
      *
      * @param game the game
      */
@@ -715,6 +734,10 @@ public final class Game implements GameSystem, StateHashContributor {
         if (setupData != null) {
             this.gameData = setupData.createGameCopy(game.getContent());
         }
+
+        this.plugins           = ScrGameExtensionUtils.createPlugins(this);
+        this.memorySources     = ScrGameExtensionUtils.createMemorySources(this);
+        this.simulationPlugins = ScrSimulationExtensionUtils.createPlugins(this);
     }
 
     private void addModifier(@NotNull GameContent content, @NotNull Stat stat, @NotNull ScrStatModifier modifier) {
@@ -804,6 +827,13 @@ public final class Game implements GameSystem, StateHashContributor {
      */
     public @NotNull ScrTerrainGrid getTerrain() {
         return this.terrain;
+    }
+
+    /**
+     * @return the tile changes of the map, which the frame's trigger step applies, the same instance for the whole game
+     */
+    public @NotNull MapTileChanges getMapTileChanges() {
+        return this.mapTileChanges;
     }
 
     /**
@@ -1531,12 +1561,14 @@ public final class Game implements GameSystem, StateHashContributor {
     }
 
     /**
-     * Sets the trigger scheduling context.
+     * Sets the trigger scheduling context and binds it to this world ({@link TriggerContext#setWorld}).
      *
      * @param triggerContext the trigger scheduling and record state
      */
     public void setTriggerContext(@NotNull TriggerContext triggerContext) {
         this.triggerContext = triggerContext;
+
+        triggerContext.setWorld(this);
     }
 
     /**
@@ -1669,6 +1701,69 @@ public final class Game implements GameSystem, StateHashContributor {
         }
 
         return attached;
+    }
+
+    /**
+     * @return the plugins of the running mod's game extensions, created when the game system attached ({@link ScrGameExtensionUtils}); empty
+     * without extensions
+     */
+    public @NotNull ScrGamePlugin @NotNull [] getPlugins() {
+        return this.plugins;
+    }
+
+    /**
+     * @return the memory sources of the running mod's game extensions, created when the game system attached
+     * ({@link ScrGameExtensionUtils#createMemorySources}); empty without extensions that provide memory
+     */
+    public @NotNull ClassicMemorySource @NotNull [] getMemorySources() {
+        return this.memorySources;
+    }
+
+    /**
+     * Returns the plugins of the running mod's simulation extensions, created when the game system attached
+     * ({@link ScrSimulationExtensionUtils#createPlugins}), which the simulation routines report to and ask.
+     *
+     * @return the plugins, or {@code null} if no extension created one
+     */
+    public @Nullable ScrSimulationPlugins getSimulationPlugins() {
+        return this.simulationPlugins;
+    }
+
+    /**
+     * @return a copy of the replay sections ({@link #setReplaySection}) by tag, in first-set order; the data arrays are shared
+     */
+    public @NotNull Map<String, byte @NotNull []> getReplaySections() {
+        synchronized (this.replaySections) {
+            return new LinkedHashMap<>(this.replaySections);
+        }
+    }
+
+    /**
+     * Sets a replay section of this game: the SC:R mod writes it as a mod section of the replay it writes of a live game
+     * ({@link ReplayFile#readModSection}), and the setup of a game that plays the replay back offers it ({@link GameSetup#readReplaySection}).
+     * Mods choose their own tags; a section of a tag set before is replaced. A replay played back writes no replay.
+     *
+     * @param tag  the section tag: four printable ASCII characters other than SC:R's own tags ({@link ReplayFile#isModSectionTag})
+     * @param data the section data, retained, not copied
+     * @throws IllegalArgumentException if the tag is not a mod section tag
+     */
+    public void setReplaySection(@NotNull String tag, byte @NotNull [] data) {
+        if (!ReplayFile.isModSectionTag(tag)) {
+            throw Exceptions.newIllegalArgumentException("\"{0}\" is not a mod section tag.", tag);
+        }
+
+        synchronized (this.replaySections) {
+            this.replaySections.put(tag, data);
+        }
+    }
+
+    /**
+     * Checks whether this game can be saved: every simulation plugin allows it ({@link ScrSimulationPlugin#allowsSave()}).
+     *
+     * @return {@code true} if the game can be saved, {@code false} otherwise
+     */
+    public boolean isSaveAllowed() {
+        return this.simulationPlugins == null || this.simulationPlugins.allowsSave();
     }
 
     /**
@@ -2370,7 +2465,8 @@ public final class Game implements GameSystem, StateHashContributor {
      * (unsigned) has an empty name, a type whose map string index ({@code units.dat} {@code Unit Map String}, set by the map's
      * {@code UNIS}/{@code UNIx} settings of a type without its use-default byte) is nonzero is named by that map string, and every other type by
      * its default name. The status panel name (which names a building in progress by its build type), the unit button text and the
-     * placement-failure messages {@code errCANTPLACE_sdd} use it.
+     * placement-failure messages {@code errCANTPLACE_sdd} use it. A type whose {@code stat_txt} name a plugin overrides
+     * ({@link StatTextOverrides}) has its default name, the overridden text.
      *
      * @param unitType the unit type
      * @return the map's name, the registered name of an added type, empty for any other type id from {@link ScrUnitIds#NONE} on or a missing
@@ -2389,7 +2485,7 @@ public final class Game implements GameSystem, StateHashContributor {
 
         int stringIndex = gameData.getUnitTypes().getMapStringIndex(unitType);
 
-        if (stringIndex == 0) {
+        if (stringIndex == 0 || this.interfaceLink.getStatTextOverrides().find(unitType + FIRST_UNIT_NAME_STRING) != null) {
             return null;
         }
 
@@ -2567,6 +2663,12 @@ public final class Game implements GameSystem, StateHashContributor {
 
         if (this.triggerContext != null) {
             hash = mix(hash, this.triggerContext.computeStateHash(0));
+        }
+
+        MapStringSection mapStrings = this.interfaceLink.getMessageLines().getMapStringSection();
+
+        if (mapStrings != null && mapStrings.getRegisteredStringCount() != 0) {
+            hash = mix(hash, mapStrings.computeRegisteredStringHash(0));
         }
 
         hash = mix(hash, this.executionScope == null ? 0 : 1);

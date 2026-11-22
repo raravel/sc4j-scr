@@ -84,8 +84,8 @@ final class ExtendedDeathsUtils {
     }
 
     /**
-     * Counts deaths as the Deaths condition does: the loss counters through the player selector, or the address space in
-     * EUD mode ({@link #readExtendedDeaths(TriggerContext, int, int, int)}).
+     * Counts deaths as the Deaths condition does: the deaths of every player the selector selects ({@link #readPlayerDeaths}); in EUD mode a
+     * selector that is not a player group ({@link #isPlayerGroup}) names one player index ({@link #getPlayerIndex}).
      *
      * @param context  the trigger context
      * @param selector the player operand
@@ -94,33 +94,36 @@ final class ExtendedDeathsUtils {
      * @return the counted deaths
      */
     static int countDeaths(@NotNull TriggerContext context, int selector, int unitType, int mask) {
-        return context.extendedDeathsMode == 0 ? TriggerConditions.sumPlayers(context, selector, unitType, TriggerConditions.COUNTER_DEATHS)
-                                               : readExtendedDeaths(context, selector, unitType, mask);
+        if (context.extendedDeathsMode != 0 && !isPlayerGroup(selector)) {
+            return readPlayerDeaths(context, getPlayerIndex(context, selector), unitType, mask);
+        }
+
+        int total = 0;
+
+        for (int player = TriggerPlayersUtils.getNextSelectedPlayer(context, selector, TriggerContext.WALK_START); player < PlayerTable.PLAYER_SLOTS;
+             player = TriggerPlayersUtils.getNextSelectedPlayer(context, selector, player)) {
+            total += readPlayerDeaths(context, player, unitType, mask);
+        }
+
+        return total;
     }
 
     /**
-     * Reads the extended deaths of an EUD map: player groups ({@code 14..26}) sum the per-player value over their
-     * players, the current player ({@code 13}) and every other operand act as one player; unit groups {@code 229..231}
-     * keep the counter sums (zero for a player operand above 11), and every other unit reads the address space, masked
-     * by the location DWORD when the condition carries the {@code 'S','C'} marker.
+     * Reads the deaths of one player as the Deaths condition reads them: outside EUD mode the loss counter (a unit operand above the unit
+     * groups reads zero); in EUD mode the unit groups {@code 229..231} keep the counter sums (zero for a player index above 11), and every other
+     * unit reads the address space, masked by the location DWORD of a condition with the {@code 'S','C'} marker.
+     *
+     * @param context  the trigger context
+     * @param player   the player index
+     * @param unitType the unit operand
+     * @param mask     the location DWORD of a masked condition, else {@code -1}
+     * @return the deaths
      */
-    private static int readExtendedDeaths(@NotNull TriggerContext context, int selector, int unitType, int mask) {
-        if (isPlayerGroup(selector)) {
-            int total = 0;
-
-            for (int player = TriggerPlayersUtils.getNextSelectedPlayer(context, selector, TriggerContext.WALK_START);
-                 player < PlayerTable.PLAYER_SLOTS;
-                 player = TriggerPlayersUtils.getNextSelectedPlayer(context, selector, player)) {
-                total += readPlayerExtendedDeaths(context, player, unitType, mask);
-            }
-
-            return total;
+    static int readPlayerDeaths(@NotNull TriggerContext context, int player, int unitType, int mask) {
+        if (context.extendedDeathsMode == 0) {
+            return TriggerConditions.readPlayerCounter(context, player, unitType, TriggerConditions.COUNTER_DEATHS);
         }
 
-        return readPlayerExtendedDeaths(context, getPlayerIndex(context, selector), unitType, mask);
-    }
-
-    private static int readPlayerExtendedDeaths(@NotNull TriggerContext context, int player, int unitType, int mask) {
         if (unitType >= TriggerUnitGroups.ANY_UNIT && unitType <= TriggerUnitGroups.BUILDINGS) {
             return Integer.compareUnsigned(player, PlayerTable.PLAYER_SLOTS) >= 0
                    ? 0
@@ -131,9 +134,8 @@ final class ExtendedDeathsUtils {
     }
 
     /**
-     * Applies Set Deaths: the set, add and subtract modifiers through the player selector; outside EUD mode only players
-     * below 8 are modified, in EUD mode {@link #writeExtendedDeaths(TriggerContext, int, int, int, int, int, boolean)}
-     * writes; other modifiers do nothing.
+     * Applies Set Deaths for the set, add and subtract modifiers (other modifiers do nothing): the deaths of every player the selector selects
+     * ({@link #writePlayerDeaths}); in EUD mode a selector that is not a player group names one player index.
      *
      * @param context  the trigger context
      * @param selector the player operand
@@ -148,53 +150,39 @@ final class ExtendedDeathsUtils {
             return;
         }
 
-        if (context.extendedDeathsMode != 0) {
-            writeExtendedDeaths(context, selector, unitType, modifier, amount, mask, masked);
+        if (context.extendedDeathsMode != 0 && !isPlayerGroup(selector)) {
+            writePlayerDeaths(context, getPlayerIndex(context, selector), unitType, modifier, amount, mask, masked);
 
             return;
         }
-
-        PlayerScores scores = context.requireAccounting().getScores();
 
         for (int selected = TriggerPlayersUtils.getNextSelectedPlayer(context, selector, TriggerContext.WALK_START);
              selected < PlayerTable.PLAYER_SLOTS;
              selected = TriggerPlayersUtils.getNextSelectedPlayer(context, selector, selected)) {
-            if (selected < PlayerTable.PLAYABLE_PLAYER_SLOTS) {
-                scores.modifyDeaths(selected, unitType, modifier, amount);
-            }
+            writePlayerDeaths(context, selected, unitType, modifier, amount, mask, masked);
         }
     }
 
     /**
-     * Writes the extended deaths of an EUD map for the set, add and subtract modifiers: player groups modify each of
-     * their players, the unit groups {@code 229..232} modify the loss counters of players below 8, and every other unit
-     * writes the address space. With the {@code 'S','C'} marker the write keeps the unmasked bits of the old value and
-     * computes the masked part from the masked old value and amount (subtraction clamps at zero).
+     * Writes the deaths of one player as Set Deaths does: outside EUD mode only the loss counters of players below 8; in EUD mode the unit
+     * groups {@code 229..232} modify the loss counters of players below 8, and every other unit writes the address space. With the
+     * {@code 'S','C'} marker the write keeps the unmasked bits of the old value and computes the masked part from the masked old value and
+     * amount (subtraction clamps at zero).
+     *
+     * @param context  the trigger context
+     * @param player   the player index
+     * @param unitType the unit operand
+     * @param modifier the set, add or subtract modifier
+     * @param amount   the amount
+     * @param mask     the location DWORD of a masked action, else {@code -1}
+     * @param masked   whether the action carries the {@code 'S','C'} marker
      */
-    private static void writeExtendedDeaths(@NotNull TriggerContext context,
-                                            int selector,
-                                            int unitType,
-                                            int modifier, int amount,
-                                            int mask, boolean masked) {
-        if (isPlayerGroup(selector)) {
-            for (int player = TriggerPlayersUtils.getNextSelectedPlayer(context, selector, TriggerContext.WALK_START);
-                 player < PlayerTable.PLAYER_SLOTS;
-                 player = TriggerPlayersUtils.getNextSelectedPlayer(context, selector, player)) {
-                writePlayerExtendedDeaths(context, player, unitType, modifier, amount, mask, masked);
-            }
-
-            return;
-        }
-
-        writePlayerExtendedDeaths(context, getPlayerIndex(context, selector), unitType, modifier, amount, mask, masked);
-    }
-
-    private static void writePlayerExtendedDeaths(@NotNull TriggerContext context,
-                                                  int player,
-                                                  int unitType,
-                                                  int modifier, int amount,
-                                                  int mask, boolean masked) {
-        if (isCounterWrite(unitType)) {
+    static void writePlayerDeaths(@NotNull TriggerContext context,
+                                  int player,
+                                  int unitType,
+                                  int modifier, int amount,
+                                  int mask, boolean masked) {
+        if (context.extendedDeathsMode == 0 || isCounterWrite(unitType)) {
             if (Integer.compareUnsigned(player, PlayerTable.PLAYABLE_PLAYER_SLOTS) < 0) {
                 context.requireAccounting().getScores().modifyDeaths(player, unitType, modifier, amount);
             }

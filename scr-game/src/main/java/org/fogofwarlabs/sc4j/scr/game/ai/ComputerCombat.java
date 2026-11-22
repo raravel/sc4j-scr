@@ -9,6 +9,7 @@ import org.fogofwarlabs.sc4j.scr.data.type.ScrUnitTypeView;
 import org.fogofwarlabs.sc4j.scr.data.type.constant.UnitGroupFlags;
 import org.fogofwarlabs.sc4j.scr.data.type.constant.UnitTypeFlags;
 import org.fogofwarlabs.sc4j.scr.game.combat.UnitTargeting;
+import org.fogofwarlabs.sc4j.scr.game.extension.ScrSimulationPlugins;
 import org.fogofwarlabs.sc4j.scr.game.order.OrderPool;
 import org.fogofwarlabs.sc4j.scr.game.order.UnitOrderEligibility;
 import org.fogofwarlabs.sc4j.scr.game.player.Player;
@@ -1018,7 +1019,8 @@ public final class ComputerCombat {
 
     /**
      * Finds the acquisition target of a computer unit: the acquisition range is at least the sight range, a Scourge
-     * prefers the healthiest target and targets claimed by other computer units are skipped.
+     * prefers the healthiest target and targets claimed by other computer units are skipped. The simulation plugins decide a found target
+     * ({@link ScrSimulationPlugins#decideAcquiredTarget}).
      *
      * @param unit the searching unit
      * @return the target of the best priority, or {@code null}
@@ -1112,7 +1114,9 @@ public final class ComputerCombat {
                 }
             }
 
-            return best;
+            ScrSimulationPlugins simulation = this.game.getSimulationPlugins();
+
+            return simulation != null ? simulation.decideAcquiredTarget(unit, best) : best;
         }
 
         return null;

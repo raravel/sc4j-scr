@@ -17,6 +17,10 @@ public interface GlueNavigator {
          */
         MAIN_MENU,
         /**
+         * The local ID choice of a run without an account, followed by the main menu.
+         */
+        LOGIN,
+        /**
          * The campaign selection for the chosen game.
          */
         CAMPAIGN,

@@ -798,10 +798,12 @@ public final class ComputerAttack {
 
                     if (marks[neighbor] == MARK_ENEMY) {
                         marks[neighbor] = MARK_REACHED_ENEMY;
-                                          changed = true;
+
+                        changed = true;
                     } else if (marks[neighbor] == MARK_NONE) {
                         marks[neighbor] = MARK_REACHED_EMPTY;
-                                          changed = true;
+
+                        changed = true;
                     }
                 }
             }

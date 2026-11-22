@@ -10,6 +10,7 @@ import org.fogofwarlabs.sc4j.scr.data.format.dat.UpgradesDat;
 import org.fogofwarlabs.sc4j.scr.data.type.ScrTechTypeView;
 import org.fogofwarlabs.sc4j.scr.data.type.ScrUpgradeTypeView;
 import org.fogofwarlabs.sc4j.scr.data.type.constant.UnitTypeFlags;
+import org.fogofwarlabs.sc4j.scr.game.extension.ScrSimulationPlugins;
 import org.fogofwarlabs.sc4j.scr.game.order.UnitSelection;
 import org.fogofwarlabs.sc4j.scr.game.player.Player;
 import org.fogofwarlabs.sc4j.scr.game.player.PlayerTechnology;
@@ -290,6 +291,12 @@ public final class UnitResearch {
 
             this.game.getInterfaceLink().getNotificationEvents().raise(NotificationEvents.Kind.RESEARCH_COMPLETE, unit);
             technologies.setResearched(unit.getOwnerIndex(), technology, true);
+
+            ScrSimulationPlugins simulation = this.game.getSimulationPlugins();
+
+            if (simulation != null) {
+                simulation.reportResearchCompleted(unit, technology);
+            }
         }
 
         unit.setResearchType(NO_TECHNOLOGY);
@@ -331,6 +338,12 @@ public final class UnitResearch {
             if (!alreadyUpgraded && upgrades.getMaximumLevel(owner, upgrade) >= unit.getUpgradeLevel()) {
                 upgrades.setLevel(owner, upgrade, unit.getUpgradeLevel());
                 this.applyToPlayerUnits(owner, instructionLimit);
+
+                ScrSimulationPlugins simulation = this.game.getSimulationPlugins();
+
+                if (simulation != null) {
+                    simulation.reportUpgradeCompleted(unit, upgrade, unit.getUpgradeLevel());
+                }
             }
         }
 

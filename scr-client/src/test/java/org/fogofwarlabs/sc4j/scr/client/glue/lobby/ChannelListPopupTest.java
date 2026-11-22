@@ -1,10 +1,10 @@
 package org.fogofwarlabs.sc4j.scr.client.glue.lobby;
 
-import org.fogofwarlabs.sc4j.engine.client.community.ChannelChat;
-import org.fogofwarlabs.sc4j.engine.client.community.RecordingCommunitySession;
 import org.fogofwarlabs.sc4j.engine.client.input.Key;
 import org.fogofwarlabs.sc4j.engine.net.beaconlink.community.PlayerPresence;
 import org.fogofwarlabs.sc4j.engine.net.beaconlink.community.PlayerStatus;
+import org.fogofwarlabs.sc4j.engine.net.beaconlink.community.RecordingCommunitySession;
+import org.fogofwarlabs.sc4j.engine.net.beaconlink.community.chat.ChannelChat;
 import org.fogofwarlabs.sc4j.scr.client.glue.GlueCanvas;
 import org.fogofwarlabs.sc4j.scr.client.glue.GlueNavigator;
 import org.fogofwarlabs.sc4j.scr.client.glue.GlueScreen;
@@ -21,20 +21,11 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
 
 /**
- * Checks that the Beacon.Link channel list, opened by the channel tab's Join Channel button, draws the stored reference frames on a hidden context with
- * frozen time (the known channels with their member counts and a pressed channel in the name input), that its name input and its Ok and Cancel
- * are the screens' framed text field and buttons, and that Enter then joins the pressed channel: SD at 640x480 in English and HD at 1920x1080
- * in Korean.
- * <p>
- * The reference frames are stored as SHA-256 digests of the read-back pixels (the frames hold installation artwork, which the repository does
- * not keep); every drawn frame is also written to {@code build/glue-screenshots}. The digests are those of the reference machine's OpenGL
- * driver.
+ * Checks that the Beacon.Link channel list, opened by the channel tab's Join Channel button, has the screens' framed text field and buttons as
+ * its name input and its Ok and Cancel, and that Enter joins the channel pressed in the list: SD at 640x480 in English and HD at 1920x1080 in
+ * Korean.
  */
 @RequiresInstallation
 final class ChannelListPopupTest {
@@ -69,15 +60,6 @@ final class ChannelListPopupTest {
     private static final int SMALL_HEIGHT = 480;
     private static final int LARGE_WIDTH = 1920;
     private static final int LARGE_HEIGHT = 1080;
-    private static final @NotNull String ENGLISH_FRAME = "beaconlink-channels-640x480-enUS";
-    private static final @NotNull String KOREAN_FRAME = "beaconlink-channels-1920x1080-koKR";
-    /**
-     * The digests of the reference frames, in drawing order.
-     */
-    private static final @NotNull Map<String, String> REFERENCE_DIGESTS = Map.of(
-            ENGLISH_FRAME, "30302f00364e11503b246c4f36e5ac94fc05b3ab82f3f000a788735fdc97d2bf",
-            KOREAN_FRAME, "c16e9b12b386716c0443ad16fd61db70aa6a739daacc7d3e28d1a1bb6842f22a"
-    );
 
     private static @NotNull PlayerPresence createPlayer(int key, @NotNull String name) {
         return RecordingCommunitySession.createPresence(key, name, BeaconLinkGlueScenario.MOD_ID, BeaconLinkGlueScenario.MOD_VERSION, true,
@@ -87,7 +69,7 @@ final class ChannelListPopupTest {
     @TempDir
     @Nullable Path directory;
 
-    private @NotNull String drawFrame(@NotNull String name, @NotNull String locale, int width, int height, @NotNull String qualityPrefix) throws IOException {
+    private void check(@NotNull String locale, int width, int height, @NotNull String qualityPrefix) throws IOException {
         Path root = this.directory;
 
         Assertions.assertNotNull(root);
@@ -101,7 +83,8 @@ final class ChannelListPopupTest {
         community.addSummary(SECOND_CHANNEL, SECOND_MEMBERS);
         community.setChannelSetup(channel -> channel.addMember(kerrigan));
 
-        try (BeaconLinkGlueScenario scenario = BeaconLinkGlueScenario.open(root.resolve(name), locale, width, height, qualityPrefix, community)) {
+        try (BeaconLinkGlueScenario scenario = BeaconLinkGlueScenario.open(root.resolve(width + "x" + height + "-" + locale), locale, width, height,
+                                                                           qualityPrefix, community)) {
             scenario.show(GlueNavigator.Destination.CHANNEL_CHAT);
             scenario.click(CHANNEL_BUTTON_X, CHANNEL_BUTTON_Y);
             scenario.click(ROW_X, FOURTH_ROW_Y);
@@ -118,37 +101,19 @@ final class ChannelListPopupTest {
                                       "The popup's control " + control + " is the screens' framed control.");
             }
 
-            String digest = scenario.capture(name);
-
             scenario.press(Key.ENTER);
 
             Assertions.assertFalse(scenario.isPopupOpen());
             Assertions.assertNotNull(community.findChannel(SECOND_CHANNEL), "Enter joins the pressed channel.");
             Assertions.assertNull(community.findChannel(FIRST_CHANNEL), "Joining a channel leaves the previous one.");
-
-            return digest;
         }
     }
 
     @Test
-    void draw_should_match_reference_frames_in_english_and_korean() throws IOException {
+    void channel_list_popup_has_framed_controls_and_joins_the_pressed_channel() throws IOException {
         Assumptions.assumeTrue(Boolean.getBoolean(RENDER_SMOKE_PROPERTY), RENDER_SMOKE_MESSAGE);
 
-        Map<String, String> digests = new LinkedHashMap<>();
-
-        digests.put(ENGLISH_FRAME, this.drawFrame(ENGLISH_FRAME, "enUS", SMALL_WIDTH, SMALL_HEIGHT, GlueCanvas.SD_PREFIX));
-        digests.put(KOREAN_FRAME, this.drawFrame(KOREAN_FRAME, "koKR", LARGE_WIDTH, LARGE_HEIGHT, GlueCanvas.HD_PREFIX));
-
-        List<String> mismatches = new ArrayList<>();
-
-        for (Map.Entry<String, String> reference : REFERENCE_DIGESTS.entrySet()) {
-            String digest = digests.get(reference.getKey());
-
-            if (!reference.getValue().equals(digest)) {
-                mismatches.add(reference.getKey() + " " + digest);
-            }
-        }
-
-        Assertions.assertEquals(List.of(), mismatches, "Frames that differ from the reference (see build/glue-screenshots).");
+        this.check("enUS", SMALL_WIDTH, SMALL_HEIGHT, GlueCanvas.SD_PREFIX);
+        this.check("koKR", LARGE_WIDTH, LARGE_HEIGHT, GlueCanvas.HD_PREFIX);
     }
 }

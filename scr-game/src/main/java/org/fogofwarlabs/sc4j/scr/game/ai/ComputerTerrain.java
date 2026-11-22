@@ -2,6 +2,7 @@ package org.fogofwarlabs.sc4j.scr.game.ai;
 
 import org.fogofwarlabs.sc4j.base.exception.Exceptions;
 import org.fogofwarlabs.sc4j.scr.content.ScrUnitIds;
+import org.fogofwarlabs.sc4j.scr.game.path.PathSystem;
 import org.fogofwarlabs.sc4j.scr.game.player.PlayerRelations;
 import org.fogofwarlabs.sc4j.scr.game.player.PlayerTable;
 import org.fogofwarlabs.sc4j.scr.game.sprite.Sprite;
@@ -143,11 +144,11 @@ public final class ComputerTerrain {
     }
 
     /**
-     * @return the terrain regions of the game's path system
+     * @return the terrain regions the game started with ({@link PathSystem#getStartTerrainContours}), which the regional records index
      * @throws UnsupportedOperationException if the terrain regions are not initialized
      */
     @NotNull TerrainRegions getRegions() {
-        TerrainContours contours = this.game.getPathSystem().getTerrainContours();
+        TerrainContours contours = this.game.getPathSystem().getStartTerrainContours();
 
         if (contours == null) {
             throw Exceptions.newUnsupportedOperationException("Computer region queries require initialized terrain regions.");
@@ -778,7 +779,8 @@ public final class ComputerTerrain {
 
             if (value != 0 && best <= value) {
                 this.searchResults[resultIndex] = region;
-                                                  best = value;
+
+                best = value;
             }
         }
 

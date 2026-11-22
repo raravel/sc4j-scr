@@ -14,7 +14,7 @@ import java.util.function.IntSupplier;
 
 /**
  * Supplies message-line wrapping and the host clock used by the in-game message model.
- * The layout retains byte offsets for decoded text and clips each piece to the message byte limit.
+ * The layout retains byte offsets for decoded text; the message model truncates a piece longer than a line ({@link MessageLines#write}).
  */
 public final class MessageAreaUtils {
     /**
@@ -39,10 +39,6 @@ public final class MessageAreaUtils {
     private static final int TWO_BYTE_LENGTH = 2;
     private static final int THREE_BYTE_LENGTH = 3;
     private static final int SURROGATE_PAIR_BYTES = 4;
-    /**
-     * The longest piece of a message line in bytes.
-     */
-    private static final int MAXIMUM_PIECE_BYTES = 217;
 
     /**
      * Creates an {@link IntSupplier} instance that reads the millisecond host clock of the message deadlines.
@@ -55,7 +51,7 @@ public final class MessageAreaUtils {
 
     /**
      * Creates a {@link MessageLines.TextLayout} instance that wraps messages by bytes for the supplied font and width.
-     * Word and character breaks come from the shared interface-text wrapper; the final piece ends at the input byte length.
+     * Word and character breaks come from the shared interface-text wrapper, without a byte limit; the final piece ends at the input byte length.
      *
      * @param font  the message font
      * @param width the current wrap width in interface pixels
@@ -65,7 +61,7 @@ public final class MessageAreaUtils {
         return text -> {
             String decoded = LegacyTextUtils.decode(text, 0, text.length);
             int[] byteOffsets = calculateByteOffsets(text, decoded);
-            int[] breaks = InterfaceText.wrapBreaks(font, decoded, width.getAsInt(), byteOffsets, MAXIMUM_PIECE_BYTES);
+            int[] breaks = InterfaceText.wrapBreaks(font, decoded, width.getAsInt());
             int[] ends = new int[breaks.length];
 
             for (int index = 0; index < ends.length; index++) {

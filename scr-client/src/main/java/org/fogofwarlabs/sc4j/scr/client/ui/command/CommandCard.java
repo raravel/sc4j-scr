@@ -10,6 +10,7 @@ import org.fogofwarlabs.sc4j.scr.data.type.constant.ButtonSetIds;
 import org.fogofwarlabs.sc4j.scr.data.type.constant.UnitGroupFlags;
 import org.fogofwarlabs.sc4j.scr.data.type.constant.UnitTypeFlags;
 import org.fogofwarlabs.sc4j.scr.game.presentation.HostButtonSets;
+import org.fogofwarlabs.sc4j.scr.game.presentation.ScrButtonStates;
 import org.fogofwarlabs.sc4j.scr.game.unit.Unit;
 import org.fogofwarlabs.sc4j.scr.game.unit.UnitStatusFlags;
 import org.jetbrains.annotations.NotNull;
@@ -95,7 +96,8 @@ public final class CommandCard {
         ButtonDefinition[] converted = new ButtonDefinition[buttons.length];
         int count = 0;
 
-        for (HostButtonSets.Button button : buttons) {
+        for (int index = 0; index < buttons.length; index++) {
+            HostButtonSets.Button button = buttons[index];
             ButtonCondition condition = ButtonCondition.ofNativeAddress(button.getCondition());
             ButtonAction action = ButtonAction.ofNativeAddress(button.getAction());
 
@@ -104,7 +106,8 @@ public final class CommandCard {
             }
 
             converted[count++] = new ButtonDefinition(button.getPosition(), button.getIcon(), condition, button.getConditionValue(),
-                                                      action, button.getActionValue(), button.getEnabledString(), button.getDisabledString());
+                                                      action, button.getActionValue(), button.getEnabledString(), button.getDisabledString(),
+                                                      button.getEnabledText(), button.getDisabledText(), index);
         }
 
         return count == converted.length ? converted : Arrays.copyOf(converted, count);
@@ -113,9 +116,10 @@ public final class CommandCard {
     private final @NotNull ScrGameView view;
     private final @NotNull ButtonConditionEvaluator conditions;
     /**
-     * Converted host button arrays cached by source array identity.
+     * Converted host button arrays cached by source array identity, for the host table's revision {@link #hostRevision}.
      */
     private final @NotNull Map<HostButtonSets.Button[], ButtonDefinition[]> hostSets;
+    private int hostRevision;
     /**
      * The button arrays of the sets that show train buttons of added unit types, by set: the source array and the array with the train buttons.
      */
@@ -151,6 +155,8 @@ public final class CommandCard {
         this.view       = view;
         this.conditions = new ButtonConditionEvaluator(view);
         this.hostSets   = new IdentityHashMap<>();
+
+        this.hostRevision = 0;
 
         this.trainButtonSets = new HashMap<>();
 
@@ -266,7 +272,47 @@ public final class CommandCard {
             return this.addTrainButtons(set, NO_BUTTONS);
         }
 
+        // A changed table drops the conversions of the arrays it no longer holds.
+        if (host.getRevision() != this.hostRevision) {
+            this.hostRevision = host.getRevision();
+            this.hostSets.keySet().removeIf(array -> !isHeld(host, array));
+        }
+
         return this.addTrainButtons(set, this.hostSets.computeIfAbsent(buttons, CommandCard::convertHostButtons));
+    }
+
+    private static boolean isHeld(@NotNull HostButtonSets host, HostButtonSets.@NotNull Button @NotNull [] array) {
+        for (int set = 0; set < HostButtonSets.SET_COUNT; set++) {
+            if (host.getButtons(set) == array) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Finds the index of a shown button in its set's table: the entry of the game's changed table, else of the default table.
+     *
+     * @param set    the button set the button was shown in
+     * @param button the button
+     * @return the index, or {@link ButtonDefinition#NO_TABLE_INDEX} for a button that is no entry of the set's table
+     */
+    public int findTableIndex(int set, @NotNull ButtonDefinition button) {
+        if (button.getTableIndex() != ButtonDefinition.NO_TABLE_INDEX || set >= ButtonSetTable.SET_COUNT ||
+            this.view.getGameContext().getHostButtonSets().isReplaced()) {
+            return button.getTableIndex();
+        }
+
+        ButtonDefinition[] buttons = ButtonSetTable.getButtons(set);
+
+        for (int index = 0; index < buttons.length; index++) {
+            if (buttons[index] == button) {
+                return index;
+            }
+        }
+
+        return ButtonDefinition.NO_TABLE_INDEX;
     }
 
     /**
@@ -378,6 +424,12 @@ public final class CommandCard {
 
             // A changed selection recomputes the card, which resets the shown set to 0xE4.
             this.displayedSet = ButtonSetTable.NO_SET;
+        }
+
+        int requestedSet = this.view.getButtonStates().takeRequestedButtonSet();
+
+        if (requestedSet != ScrButtonStates.NO_REQUEST) {
+            this.changeButtons(requestedSet);
         }
 
         // Entering placement sets button set 230 and targeting sets 229 whatever card was shown, including a
@@ -602,7 +654,10 @@ public final class CommandCard {
 
                 boolean unavailable = this.conditions.getRequirements().getFailureCode() == RequirementEvaluator.UNAVAILABLE_FAILURE;
 
-                this.slotDisabledStrings[slot] = unavailable ? UNAVAILABLE_STRING : buttons[index].getDisabledString();
+                // A disabled text of a changed table takes the place of the disabled string.
+                this.slotDisabledStrings[slot] = unavailable
+                                                 ? UNAVAILABLE_STRING
+                                                 : buttons[index].getDisabledText() != null ? 0 : buttons[index].getDisabledString();
             } else {
                 this.slotStates[slot] = ENABLED;
             }

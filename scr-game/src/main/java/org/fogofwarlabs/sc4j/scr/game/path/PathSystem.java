@@ -10,10 +10,13 @@ import org.jetbrains.annotations.Nullable;
  * Owns the path storage of one game: the terrain contours (collision boundaries and regions), the persistent path pool, the local path search and
  * unit path workspaces and the region path search of resource queries.
  * <p>
- * World initialization installs the terrain and unit path storage. Resource queries allocate their region search workspace lazily.
+ * World initialization installs the terrain and unit path storage. Resource queries allocate their region search workspace lazily. Contours
+ * built again for changed map tiles ({@link #replaceTerrainContours}) replace the current ones; the contours the game started with stay for the
+ * computer players ({@link #getStartTerrainContours}).
  */
 public final class PathSystem {
     private @Nullable TerrainContours terrainContours;
+    private @Nullable TerrainContours startTerrainContours;
 
     private @Nullable PathPool pathPool;
     private @Nullable LocalPathSearch localPathSearch;
@@ -25,7 +28,8 @@ public final class PathSystem {
      * Creates a {@link PathSystem} instance without storage.
      */
     public PathSystem() {
-        this.terrainContours = null;
+        this.terrainContours      = null;
+        this.startTerrainContours = null;
 
         this.pathPool        = null;
         this.localPathSearch = null;
@@ -39,6 +43,13 @@ public final class PathSystem {
      */
     public @Nullable TerrainContours getTerrainContours() {
         return this.terrainContours;
+    }
+
+    /**
+     * @return the terrain contours the game started with, which the computer players' regional records index, or {@code null} before initialization
+     */
+    public @Nullable TerrainContours getStartTerrainContours() {
+        return this.startTerrainContours;
     }
 
     /**
@@ -68,7 +79,23 @@ public final class PathSystem {
             throw Exceptions.newIllegalStateException("Native terrain collision is already initialized.");
         }
 
-        this.terrainContours = terrainContours;
+        this.terrainContours      = terrainContours;
+        this.startTerrainContours = terrainContours;
+    }
+
+    /**
+     * Replaces the current terrain contours with contours built for changed map tiles; the start contours stay.
+     *
+     * @param terrainContours the terrain contours of the changed map
+     * @throws IllegalStateException if no contours are installed
+     */
+    public void replaceTerrainContours(@NotNull TerrainContours terrainContours) {
+        if (this.terrainContours == null) {
+            throw Exceptions.newIllegalStateException("Native terrain collision is not initialized.");
+        }
+
+        this.terrainContours    = terrainContours;
+        this.resourcePathSearch = null;
     }
 
     /**

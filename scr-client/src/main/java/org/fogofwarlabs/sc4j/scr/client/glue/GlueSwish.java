@@ -8,13 +8,20 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Consumer;
 
 /**
  * Slides glue panels in after a delay on a {@code 25}-millisecond timer, moving one quarter of the remaining distance and
  * snapping below four pixels.
  * Controls following the highest listed panel identifier remain hidden until the panels lock.
- * Leaving doubles the outward step each tick. Sounds play at the first move, lock and start of leaving.
+ * Leaving doubles each panel's outward step each tick. Sounds play at the first move, lock and start of leaving.
+ * <p>
+ * Each panel moves by its own motion. Opening the screen sets every listed panel except the held ones entering; a panel stops once it is in
+ * place or, leaving, after a step it took from outside the screen, and the lock sound plays when no entering panel moved in a tick.
+ * Afterwards a listed panel slides in or out alone, from where it is, while the screen stays locked and the other panels keep their motion.
  */
 final class GlueSwish {
     private static final int TICK_MILLISECONDS = 25;
@@ -58,7 +65,7 @@ final class GlueSwish {
     }
 
     /**
-     * The phase of the slide.
+     * The phase of the screen's slide.
      */
     enum Phase {
         /**
@@ -70,7 +77,7 @@ final class GlueSwish {
          */
         ENTERING,
         /**
-         * In place; the controls show.
+         * In place; the controls show. One panel may slide in or out alone.
          */
         LOCKED,
         /**
@@ -84,7 +91,25 @@ final class GlueSwish {
     }
 
     /**
-     * One listed panel and its offset from its place.
+     * The move of one panel.
+     */
+    private enum Motion {
+        /**
+         * The panel stands where it is.
+         */
+        NONE,
+        /**
+         * The panel moves toward its place.
+         */
+        ENTERING,
+        /**
+         * The panel moves out.
+         */
+        LEAVING
+    }
+
+    /**
+     * One listed panel, its offset from its place and its move.
      */
     private static final class Panel {
         private final @NotNull DialogControl control;
@@ -93,6 +118,7 @@ final class GlueSwish {
         private int offsetX;
         private int offsetY;
         private int outStep;
+        private @NotNull Motion motion;
 
         private Panel(@NotNull DialogControl control, @NotNull Direction direction) {
             this.control   = control;
@@ -101,6 +127,7 @@ final class GlueSwish {
             this.offsetX = 0;
             this.offsetY = 0;
             this.outStep = FIRST_OUT_STEP;
+            this.motion  = Motion.ENTERING;
         }
     }
 
@@ -115,27 +142,32 @@ final class GlueSwish {
     }
 
     private final @NotNull List<Panel> panels;
+    /**
+     * The listed panel each attached control moves with, by control identifier.
+     */
+    private final @NotNull Map<Integer, Integer> attachments;
 
     private int delayTicks;
     private int highestControl;
     private @NotNull Phase phase;
-    private boolean moved;
+    private boolean entrySoundPending;
 
     private boolean armed;
     private int interfaceWidth;
-    private @Nullable GlueAudio audio;
+    private @Nullable Consumer<GlueAudio.Sound> sounds;
 
     GlueSwish() {
-        this.panels = new ArrayList<>();
+        this.panels      = new ArrayList<>();
+        this.attachments = new HashMap<>();
 
-        this.delayTicks     = 0;
-        this.highestControl = Integer.MIN_VALUE;
-        this.phase          = Phase.NONE;
-        this.moved          = false;
+        this.delayTicks        = 0;
+        this.highestControl    = Integer.MIN_VALUE;
+        this.phase             = Phase.NONE;
+        this.entrySoundPending = true;
 
         this.armed          = false;
         this.interfaceWidth = 0;
-        this.audio          = null;
+        this.sounds         = null;
     }
 
     /**
@@ -147,20 +179,20 @@ final class GlueSwish {
 
     /**
      * @param control a control identifier
-     * @return the control's horizontal offset from its place
+     * @return the control's horizontal offset from its place: the offset of the listed panel it is or is attached to
      */
     int getOffsetX(int control) {
-        Panel panel = this.findPanel(control);
+        Panel panel = this.findPanel(this.attachments.getOrDefault(control, control));
 
         return panel == null ? 0 : panel.offsetX;
     }
 
     /**
      * @param control a control identifier
-     * @return the control's vertical offset from its place
+     * @return the control's vertical offset from its place: the offset of the listed panel it is or is attached to
      */
     int getOffsetY(int control) {
-        Panel panel = this.findPanel(control);
+        Panel panel = this.findPanel(this.attachments.getOrDefault(control, control));
 
         return panel == null ? 0 : panel.offsetY;
     }
@@ -188,6 +220,50 @@ final class GlueSwish {
     }
 
     /**
+     * @param control a listed panel's identifier
+     * @return {@code true} if the panel is listed and at least partly inside the screen, {@code false} otherwise
+     */
+    boolean isPanelOnScreen(int control) {
+        Panel panel = this.findPanel(control);
+
+        return panel != null && !this.isOut(panel);
+    }
+
+    /**
+     * @return {@code true} if a panel is listed, {@code false} otherwise
+     */
+    boolean hasPanels() {
+        return !this.panels.isEmpty();
+    }
+
+    /**
+     * @return {@code true} if the timer runs: the screen enters or a panel moves, {@code false} otherwise
+     */
+    boolean isMoving() {
+        return this.phase == Phase.ENTERING || this.hasMotion(Motion.ENTERING) || this.hasMotion(Motion.LEAVING);
+    }
+
+    /**
+     * @param control a listed panel's identifier
+     * @return {@code true} if the panel is listed and moves, {@code false} otherwise
+     */
+    boolean isPanelMoving(int control) {
+        Panel panel = this.findPanel(control);
+
+        return panel != null && panel.motion != Motion.NONE;
+    }
+
+    private boolean hasMotion(@NotNull Motion motion) {
+        for (Panel panel : this.panels) {
+            if (panel.motion == motion) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Finds the first listed panel of a control.
      *
      * @param control a control identifier
@@ -203,9 +279,38 @@ final class GlueSwish {
         return null;
     }
 
+    /**
+     * Tests whether a panel is out of the screen in its direction: its far edge is past the screen's edge.
+     *
+     * @param panel the panel
+     * @return {@code true} if the panel is out, {@code false} otherwise
+     */
+    private boolean isOut(@NotNull Panel panel) {
+        DialogControl control = panel.control;
+        int left = control.getX() + panel.offsetX;
+        int top = control.getY() + panel.offsetY;
+
+        return switch (panel.direction) {
+            case LEFT -> left + control.getWidth() - 1 <= 0;
+            case UP -> top + control.getHeight() - 1 <= 0;
+            case RIGHT -> left >= this.interfaceWidth;
+            case DOWN -> top >= GlueCanvas.INTERFACE_HEIGHT;
+        };
+    }
+
 
     /**
-     * Lists the panels and moves them off-screen.
+     * Makes a control move with a listed panel: it is drawn at the panel's offset.
+     *
+     * @param control the control identifier
+     * @param panel   the listed panel's identifier
+     */
+    void attach(int control, int panel) {
+        this.attachments.put(control, panel);
+    }
+
+    /**
+     * Lists the panels, moves them off-screen and sets them all entering.
      *
      * @param dialog         the dialog
      * @param entries        pairs of control identifier and direction code
@@ -215,6 +320,7 @@ final class GlueSwish {
      */
     void startEntering(@NotNull DialogDefinition dialog, int @NotNull [] entries, int delay, int dialogLeft, int interfaceWidth) {
         this.panels.clear();
+        this.interfaceWidth = interfaceWidth;
 
         for (int index = 0; index + 1 < entries.length; index += ENTRY_SIZE) {
             DialogControl control = ScrDialogControlUtils.findControl(dialog, entries[index]);
@@ -240,24 +346,80 @@ final class GlueSwish {
 
         this.delayTicks = delay / TICK_MILLISECONDS;
         this.phase      = this.panels.isEmpty() ? Phase.NONE : Phase.ENTERING;
-        this.moved      = false;
     }
 
     /**
-     * Starts leaving: the panels slide out.
+     * Keeps a listed panel out while the other panels enter: it stays off-screen until {@link #startPanelEntering} brings it in.
      *
-     * @param audio the glue audio
+     * @param control the listed panel's identifier
+     */
+    void holdPanel(int control) {
+        Panel panel = this.findPanel(control);
+
+        if (panel != null) {
+            panel.motion = Motion.NONE;
+        }
+    }
+
+    /**
+     * Starts sliding one listed panel in from where it is. A panel in place that is not leaving stays as it is.
+     *
+     * @param control the listed panel's identifier
+     */
+    void startPanelEntering(int control) {
+        Panel panel = this.findPanel(control);
+
+        if (panel == null || this.phase == Phase.LEAVING || this.phase == Phase.GONE) {
+            return;
+        }
+
+        if (panel.motion != Motion.LEAVING && panel.offsetX == 0 && panel.offsetY == 0) {
+            return;
+        }
+
+        panel.motion = Motion.ENTERING;
+    }
+
+    /**
+     * Starts sliding one listed panel out from where it is.
+     *
+     * @param control the listed panel's identifier
+     * @param sounds  plays a glue sound
+     * @return {@code true} if the panel slides out, {@code false} if it is not listed or the screen leaves
+     */
+    boolean startPanelLeaving(int control, @NotNull Consumer<GlueAudio.Sound> sounds) {
+        Panel panel = this.findPanel(control);
+
+        if (panel == null || this.phase == Phase.LEAVING || this.phase == Phase.GONE) {
+            return false;
+        }
+
+        panel.motion  = Motion.LEAVING;
+        panel.outStep = FIRST_OUT_STEP;
+        sounds.accept(GlueAudio.Sound.SWISH_OUT);
+
+        return true;
+    }
+
+    /**
+     * Starts leaving: every listed panel slides out.
+     *
+     * @param sounds plays a glue sound
      * @return {@code true} if there are panels to slide, {@code false} otherwise
      */
-    boolean startLeaving(@NotNull GlueAudio audio) {
+    boolean startLeaving(@NotNull Consumer<GlueAudio.Sound> sounds) {
         if (this.panels.isEmpty()) {
             this.phase = Phase.GONE;
 
             return false;
         }
 
-        audio.stopSounds();
-        audio.play(GlueAudio.Sound.SWISH_OUT);
+        for (Panel panel : this.panels) {
+            panel.motion  = Motion.LEAVING;
+            panel.outStep = FIRST_OUT_STEP;
+        }
+
+        sounds.accept(GlueAudio.Sound.SWISH_OUT);
         this.phase = Phase.LEAVING;
 
         return true;
@@ -268,14 +430,14 @@ final class GlueSwish {
      *
      * @param time           the time in milliseconds
      * @param interfaceWidth the interface width
-     * @param audio          the glue audio
+     * @param sounds         plays a glue sound
      * @param timers         the client's timer list
      */
-    void update(long time, int interfaceWidth, @NotNull GlueAudio audio, @NotNull InterfaceTimers timers) {
+    void update(long time, int interfaceWidth, @NotNull Consumer<GlueAudio.Sound> sounds, @NotNull InterfaceTimers timers) {
         this.interfaceWidth = interfaceWidth;
-        this.audio          = audio;
+        this.sounds         = sounds;
 
-        boolean running = this.phase == Phase.ENTERING || this.phase == Phase.LEAVING;
+        boolean running = this.isMoving();
 
         if (running && !this.armed) {
             // The 25 ms swish timer 7 in the client's timer list; the list's pump fires it at most once per frame.
@@ -288,44 +450,59 @@ final class GlueSwish {
     }
 
     private void tick(@NotNull InterfaceTimers timers) {
-        GlueAudio output = this.audio;
+        Consumer<GlueAudio.Sound> output = this.sounds;
 
         if (output == null) {
             return;
         }
 
-        if (this.phase == Phase.ENTERING) {
+        if (this.phase == Phase.ENTERING || this.hasMotion(Motion.ENTERING)) {
             this.advanceEntering(output);
-        } else if (this.phase == Phase.LEAVING) {
+        }
+
+        if (this.hasMotion(Motion.LEAVING)) {
             this.advanceLeaving();
         }
 
-        if (this.phase != Phase.ENTERING && this.phase != Phase.LEAVING) {
+        if (!this.isMoving()) {
             timers.kill(this, SWISH_TIMER);
             this.armed = false;
         }
     }
 
 
-    private void advanceEntering(@NotNull GlueAudio audio) {
+    /**
+     * Moves the entering panels a step toward their places after the delay; a panel in place stops. A tick in which no entering panel
+     * moved plays the lock sound and locks an entering screen.
+     *
+     * @param sounds plays a glue sound
+     */
+    private void advanceEntering(@NotNull Consumer<GlueAudio.Sound> sounds) {
         if (this.delayTicks > 0) {
             this.delayTicks--;
 
             return;
         }
 
-        if (!this.moved) {
-            this.moved = true;
-            audio.play(GlueAudio.Sound.SWISH_IN);
+        if (this.entrySoundPending) {
+            this.entrySoundPending = false;
+            sounds.accept(GlueAudio.Sound.SWISH_IN);
         }
 
         boolean moving = false;
 
         for (Panel panel : this.panels) {
-            if (panel.offsetX != 0 || panel.offsetY != 0) {
-                moving = true;
+            if (panel.motion != Motion.ENTERING) {
+                continue;
             }
 
+            if (panel.offsetX == 0 && panel.offsetY == 0) {
+                panel.motion = Motion.NONE;
+
+                continue;
+            }
+
+            moving = true;
             panel.offsetX += findEnteringStep(panel.offsetX);
             panel.offsetY += findEnteringStep(panel.offsetY);
         }
@@ -334,27 +511,25 @@ final class GlueSwish {
             return;
         }
 
-        audio.play(GlueAudio.Sound.SWISH_LOCK);
-        this.phase = Phase.LOCKED;
+        sounds.accept(GlueAudio.Sound.SWISH_LOCK);
+        this.entrySoundPending = true;
+
+        if (this.phase == Phase.ENTERING) {
+            this.phase = Phase.LOCKED;
+        }
     }
 
+    /**
+     * Moves the leaving panels out with their doubling steps; a panel that was out of the screen before its step stops after it. A leaving
+     * screen is gone once no panel leaves.
+     */
     private void advanceLeaving() {
-        boolean gone = true;
-
         for (Panel panel : this.panels) {
-            DialogControl control = panel.control;
-            int left = control.getX() + panel.offsetX;
-            int top = control.getY() + panel.offsetY;
-            int right = left + control.getWidth() - 1;
-            int bottom = top + control.getHeight() - 1;
-            boolean out = switch (panel.direction) {
-                case LEFT -> right <= 0;
-                case UP -> bottom <= 0;
-                case RIGHT -> left >= this.interfaceWidth;
-                case DOWN -> top >= GlueCanvas.INTERFACE_HEIGHT;
-            };
+            if (panel.motion != Motion.LEAVING) {
+                continue;
+            }
 
-            gone &= out;
+            boolean out = this.isOut(panel);
 
             switch (panel.direction) {
                 case LEFT -> panel.offsetX -= panel.outStep;
@@ -364,9 +539,13 @@ final class GlueSwish {
             }
 
             panel.outStep *= OUT_STEP_MULTIPLIER;
+
+            if (out) {
+                panel.motion = Motion.NONE;
+            }
         }
 
-        if (gone) {
+        if (this.phase == Phase.LEAVING && !this.hasMotion(Motion.LEAVING)) {
             this.phase = Phase.GONE;
         }
     }

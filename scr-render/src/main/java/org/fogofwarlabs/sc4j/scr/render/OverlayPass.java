@@ -26,10 +26,6 @@ public final class OverlayPass implements AutoCloseable {
      * The default level of visible tiles, the game's visible level BYTE (set to {@code 0x1F} at game start).
      */
     public static final int DEFAULT_VISIBLE_LEVEL = 31;
-    /**
-     * The highest alpha of the observer table (unexplored ground keeps {@code 1 - 218 / 255} of its brightness).
-     */
-    static final int OBSERVER_FOG_ALPHA = 218;
 
     /**
      * The number of bytes of an RGBA pixel.
@@ -91,47 +87,9 @@ public final class OverlayPass implements AutoCloseable {
      */
     private static final int BYTE_MASK = 0xFF;
     /**
-     * The position of the not-explored player bits in a tile flag DWORD.
-     */
-    private static final int UNEXPLORED_FLAGS_SHIFT = 8;
-    /**
-     * The highest level the fog tables of {@code 32} entries hold.
-     */
-    private static final int MAXIMUM_FOG_LEVEL = 31;
-    /**
-     * The fog cells per tile and axis: cells of {@code 8} pixels.
-     */
-    private static final int FOG_CELLS_PER_TILE = 4;
-    /**
      * The fog cell size in game pixels.
      */
     private static final int FOG_CELL_SIZE = 8;
-    /**
-     * The highest alpha of the player table.
-     */
-    private static final int MAXIMUM_FOG_ALPHA = 255;
-    /**
-     * The weight of the {@code 3x3} filter's center row and column (kernel {@code [1 2 1; 2 4 2; 1 2 1]}).
-     */
-    private static final int FILTER_CENTER_WEIGHT = 2;
-    /**
-     * The shift of the {@code 3x3} filter's divisor {@code 16}.
-     */
-    private static final int FILTER_SHIFT = 4;
-    /**
-     * The fraction bits of the cell interpolation's fixed-point values.
-     */
-    private static final int FIXED_POINT_SHIFT = 8;
-    /**
-     * The fixed-point one of the cell interpolation.
-     */
-    private static final int FIXED_POINT_ONE = 1 << FIXED_POINT_SHIFT;
-    /**
-     * The darkness curve of the fog tables: {@code (sqrt(1 + offset - level / 31) - base) / scale}.
-     */
-    private static final float FOG_CURVE_OFFSET = 0.04f;
-    private static final float FOG_CURVE_BASE = 0.2f;
-    private static final float FOG_CURVE_SCALE = 0.8198f;
     private static final @NotNull String VERTEX_SHADER = """
                                                          #version 330 core
                                                          layout(location = 0) in vec2 position;
@@ -213,24 +171,6 @@ public final class OverlayPass implements AutoCloseable {
         return texture;
     }
 
-    /**
-     * Returns the darkness alpha of a fog level with a configurable alpha cap: the player table with cap {@code 255} and the observer table with cap
-     * {@link #OBSERVER_FOG_ALPHA}.
-     *
-     * @param level the fog level, {@code 0} (unexplored) to {@code 31} (visible)
-     * @param cap   the table's highest alpha
-     * @return the alpha, {@code 0} to {@code cap}
-     */
-    static int getFogAlpha(int level, int cap) {
-        float value = ((float) Math.sqrt(1.0f - level / (float) MAXIMUM_FOG_LEVEL + FOG_CURVE_OFFSET) - FOG_CURVE_BASE) / FOG_CURVE_SCALE;
-
-        if (!(value > 0)) {
-            return 0;
-        }
-
-        return Math.min(cap, Math.round(Math.min(1.0f, value) * CHANNEL_MAXIMUM));
-    }
-
     private final @NotNull WorldRenderer world;
 
     private final @NotNull ShaderProgram program;
@@ -243,14 +183,8 @@ public final class OverlayPass implements AutoCloseable {
 
     private final int whiteTexture;
 
-    private int @NotNull [] fogLevels;
-    private int @NotNull [] fogFiltered;
-    private int @NotNull [] fogPreviousLevels;
-    private int @NotNull [] fogCells;
+    private final @NotNull FogCellGrid fogGrid;
     private @NotNull ByteBuffer fogValues;
-    private int fogCellColumns;
-    private int fogCellRows;
-    private boolean fogObserver;
     private int fogTexture;
     private int fogWidth;
     private int fogHeight;
@@ -294,17 +228,11 @@ public final class OverlayPass implements AutoCloseable {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, new int[]{WHITE_PIXEL});
 
-        this.fogLevels         = new int[0];
-        this.fogFiltered       = new int[0];
-        this.fogPreviousLevels = new int[0];
-        this.fogCells          = new int[0];
-        this.fogValues         = MemoryUtil.memAlloc(1);
-        this.fogCellColumns    = 0;
-        this.fogCellRows       = 0;
-        this.fogObserver       = false;
-        this.fogTexture        = 0;
-        this.fogWidth          = 0;
-        this.fogHeight         = 0;
+        this.fogGrid    = new FogCellGrid();
+        this.fogValues  = MemoryUtil.memAlloc(1);
+        this.fogTexture = 0;
+        this.fogWidth   = 0;
+        this.fogHeight  = 0;
 
         this.batchMode    = 0;
         this.batchTexture = 0;
@@ -422,110 +350,18 @@ public final class OverlayPass implements AutoCloseable {
         }
 
         this.flush();
-
-        int tileCount = mapWidth * mapHeight;
-        int cellColumns = mapWidth * FOG_CELLS_PER_TILE;
-        int cellRows = mapHeight * FOG_CELLS_PER_TILE;
-
-        if (this.fogLevels.length < tileCount) {
-            this.fogLevels         = new int[tileCount];
-            this.fogFiltered       = new int[tileCount];
-            this.fogPreviousLevels = new int[tileCount];
-        }
-
-        int mask = visionMask & BYTE_MASK;
-        int visible = visibleLevel & BYTE_MASK;
-        boolean changed = this.fogCellColumns != cellColumns || this.fogCellRows != cellRows || this.fogObserver != observer;
-
-        for (int tileIndex = 0; tileIndex < tileCount; tileIndex++) {
-            int flags = tileFlags.applyAsInt(tileIndex);
-            int level = (~flags & mask) != 0 ? visible : (~(flags >>> UNEXPLORED_FLAGS_SHIFT) & mask) != 0 ? visible >>> 1 : 0;
-
-                                        changed |= level != this.fogPreviousLevels[tileIndex];
-            this.fogLevels[tileIndex] = level;
-        }
-
-        if (changed) {
-            this.updateFogCells(mapWidth, mapHeight, cellColumns, cellRows, observer, tileCount);
-        }
-
-        this.uploadFog(cellColumns, cellRows);
-    }
-
-    /**
-     * Rebuilds the fog cells from the tile levels: the {@code 3x3} filter, the cell interpolation and the darkness table.
-     *
-     * @param mapWidth    the map width in tiles
-     * @param mapHeight   the map height in tiles
-     * @param cellColumns the fog cell columns of the map
-     * @param cellRows    the fog cell rows of the map
-     * @param observer    whether the observer table is used
-     * @param tileCount   the number of map tiles
-     */
-    private void updateFogCells(int mapWidth, int mapHeight, int cellColumns, int cellRows, boolean observer, int tileCount) {
-        System.arraycopy(this.fogLevels, 0, this.fogPreviousLevels, 0, tileCount);
-        this.fogCellColumns = cellColumns;
-        this.fogCellRows    = cellRows;
-        this.fogObserver    = observer;
-
-        if (this.fogCells.length < cellColumns * cellRows) {
-            this.fogCells = new int[cellColumns * cellRows];
-        }
-
-        int cap = observer ? OBSERVER_FOG_ALPHA : MAXIMUM_FOG_ALPHA;
-
-        for (int row = 0; row < mapHeight; row++) {
-            for (int column = 0; column < mapWidth; column++) {
-                int sum = 0;
-
-                for (int rowOffset = -1; rowOffset <= 1; rowOffset++) {
-                    int sampleRow = Math.clamp(row + rowOffset, 0, mapHeight - 1);
-
-                    for (int columnOffset = -1; columnOffset <= 1; columnOffset++) {
-                        int sampleColumn = Math.clamp(column + columnOffset, 0, mapWidth - 1);
-
-                        sum += this.fogLevels[sampleRow * mapWidth + sampleColumn] *
-                               (columnOffset == 0 ? FILTER_CENTER_WEIGHT : 1) * (rowOffset == 0 ? FILTER_CENTER_WEIGHT : 1);
-                    }
-                }
-
-                this.fogFiltered[row * mapWidth + column] = Math.min(sum >>> FILTER_SHIFT, MAXIMUM_FOG_LEVEL);
-            }
-        }
-
-        for (int row = 0; row < mapHeight; row++) {
-            int below = Math.min(row + 1, mapHeight - 1);
-
-            for (int column = 0; column < mapWidth; column++) {
-                int right = Math.min(column + 1, mapWidth - 1);
-                int topLeft = this.fogFiltered[row * mapWidth + column] << FIXED_POINT_SHIFT;
-                int topRight = this.fogFiltered[row * mapWidth + right] << FIXED_POINT_SHIFT;
-                int leftStep = ((this.fogFiltered[below * mapWidth + column] << FIXED_POINT_SHIFT) - topLeft) / FOG_CELLS_PER_TILE;
-                int rightStep = ((this.fogFiltered[below * mapWidth + right] << FIXED_POINT_SHIFT) - topRight) / FOG_CELLS_PER_TILE;
-
-                for (int cellRow = 0; cellRow < FOG_CELLS_PER_TILE; cellRow++) {
-                    int from = topLeft + cellRow * leftStep >> FIXED_POINT_SHIFT;
-                    int to = topRight + cellRow * rightStep >> FIXED_POINT_SHIFT;
-
-                    for (int cell = 0; cell < FOG_CELLS_PER_TILE; cell++) {
-                        int level = Math.floorDiv(from * FIXED_POINT_ONE + cell * (to - from) * (FIXED_POINT_ONE / FOG_CELLS_PER_TILE),
-                                                  FIXED_POINT_ONE) & BYTE_MASK;
-
-                        this.fogCells[(row * FOG_CELLS_PER_TILE + cellRow) * cellColumns + column * FOG_CELLS_PER_TILE + cell] =
-                                getFogAlpha(Math.min(level, MAXIMUM_FOG_LEVEL), cap);
-                    }
-                }
-            }
-        }
+        this.fogGrid.update(tileFlags, mapWidth, mapHeight, visionMask, visibleLevel, observer);
+        this.uploadFog(this.fogGrid.getCells(), this.fogGrid.getCellColumns(), this.fogGrid.getCellRows());
     }
 
     /**
      * Resamples the fog cells to texels of {@code 8} pixels aligned to the view, at the camera's offset inside a cell, and draws them.
      *
+     * @param cells       the darkness alpha of each fog cell
      * @param cellColumns the fog cell columns of the map
      * @param cellRows    the fog cell rows of the map
      */
-    private void uploadFog(int cellColumns, int cellRows) {
+    private void uploadFog(int @NotNull [] cells, int cellColumns, int cellRows) {
         float cameraX = this.world.getCameraX();
         float cameraY = this.world.getCameraY();
         float scale = this.world.getScale();
@@ -567,11 +403,11 @@ public final class OverlayPass implements AutoCloseable {
                 int cellColumn = firstColumn + startColumn + column;
                 int left = Math.clamp(cellColumn, 0, cellColumns - 1);
                 int right = Math.clamp(cellColumn + 1, 0, cellColumns - 1);
-                float upper = this.fogCells[top + left] + (this.fogCells[top + right] - this.fogCells[top + left]) * fractionX;
-                float lower = this.fogCells[bottom + left] + (this.fogCells[bottom + right] - this.fogCells[bottom + left]) * fractionX;
+                float upper = cells[top + left] + (cells[top + right] - cells[top + left]) * fractionX;
+                float lower = cells[bottom + left] + (cells[bottom + right] - cells[bottom + left]) * fractionX;
                 int alpha = Math.round(upper + (lower - upper) * fractionY);
 
-                this.fogValues.put(row * textureWidth + column, (byte) (MAXIMUM_FOG_ALPHA - alpha));
+                this.fogValues.put(row * textureWidth + column, (byte) (FogCellGrid.MAXIMUM_FOG_ALPHA - alpha));
             }
         }
 

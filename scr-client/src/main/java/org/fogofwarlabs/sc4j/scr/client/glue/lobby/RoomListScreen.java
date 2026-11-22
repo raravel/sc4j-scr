@@ -2,21 +2,18 @@ package org.fogofwarlabs.sc4j.scr.client.glue.lobby;
 
 import org.fogofwarlabs.sc4j.base.exception.Exceptions;
 import org.fogofwarlabs.sc4j.base.log.Logger;
-import org.fogofwarlabs.sc4j.engine.client.community.ChannelChat;
-import org.fogofwarlabs.sc4j.engine.client.community.CommunityText;
 import org.fogofwarlabs.sc4j.engine.net.beaconlink.BeaconLinkSession;
 import org.fogofwarlabs.sc4j.engine.net.beaconlink.FoundRoom;
 import org.fogofwarlabs.sc4j.engine.net.beaconlink.LatencyClass;
 import org.fogofwarlabs.sc4j.engine.net.beaconlink.RoomSettings;
 import org.fogofwarlabs.sc4j.engine.net.beaconlink.community.ChatChannel;
 import org.fogofwarlabs.sc4j.engine.net.beaconlink.community.PlayerPresence;
+import org.fogofwarlabs.sc4j.engine.net.beaconlink.community.chat.ChannelChat;
+import org.fogofwarlabs.sc4j.engine.net.beaconlink.community.chat.CommunityText;
 import org.fogofwarlabs.sc4j.engine.net.lobby.JoinRefusal;
 import org.fogofwarlabs.sc4j.engine.resource.dialog.DialogControl;
 import org.fogofwarlabs.sc4j.engine.resource.dialog.DialogDefinition;
-import org.fogofwarlabs.sc4j.scr.client.glue.GlueCanvas;
-import org.fogofwarlabs.sc4j.scr.client.glue.GlueContext;
-import org.fogofwarlabs.sc4j.scr.client.glue.GlueNavigator;
-import org.fogofwarlabs.sc4j.scr.client.glue.GlueScreen;
+import org.fogofwarlabs.sc4j.scr.client.glue.*;
 import org.fogofwarlabs.sc4j.scr.client.glue.popup.GlueEditPopup;
 import org.fogofwarlabs.sc4j.scr.client.ui.dialog.*;
 import org.fogofwarlabs.sc4j.scr.client.ui.text.GluText;
@@ -413,7 +410,7 @@ public final class RoomListScreen extends GlueScreen {
 
         this.addSlider(LATENCY_SLIDER).setRange(0, LATENCY_STEPS.length - 1);
         this.addSlider(PLAYERS_SLIDER).setRange(RoomFilter.MINIMUM_PLAYERS, RoomFilter.MAXIMUM_PLAYERS);
-        this.bindControl(VERSIONS_CHECK).setReplacedText(BeaconLinkText.SHOW_CLOSED_GAMES.get(locale));
+        this.bindControl(VERSIONS_CHECK).setReplacedText(OwnText.SHOW_CLOSED_GAMES.get(locale));
 
         this.chatInput = this.setEditText(CHAT_INPUT, "", ChatChannel.MAXIMUM_TEXT_LENGTH, "");
         this.search    = this.setEditText(SEARCH, this.filter.getQuery(), RoomSettings.MAXIMUM_NAME_LENGTH, "");
@@ -776,8 +773,8 @@ public final class RoomListScreen extends GlueScreen {
     private void followJoin(@NotNull LanClient client) {
         GlueContext glueContext = this.getContext();
 
+        // The join stays pending while the screen slides away, so that no second join starts.
         if (GameListScreen.isLobbyReady(client)) {
-            this.joining = false;
             this.leave(() -> glueContext.getNavigator().show(GlueNavigator.Destination.GAME_LOBBY));
         } else if (client.getState() == LanClient.State.FAILED) {
             this.joining = false;
@@ -813,9 +810,9 @@ public final class RoomListScreen extends GlueScreen {
     }
 
     /**
-     * Called first for every press of the screen that no open popup or open combo box takes.
+     * Called first for every press of the screen that no open popup or open combo box takes, while the screen takes input.
      * <p>
-     * Takes presses on the scroll bars, and selects the room under a press on the list; a double press joins it.
+     * Takes presses on the scroll bars and the chat text (a selection), and selects the room under a press on the list; a double press joins it.
      *
      * @param x the interface x
      * @param y the interface y
@@ -823,7 +820,7 @@ public final class RoomListScreen extends GlueScreen {
      */
     @Override
     protected boolean onPointerPressed(float x, float y) {
-        if (this.chatLog.press(x, y) || (!this.filterShown && this.rows.press(x, y))) {
+        if (this.chatLog.press(this.getContext().getCanvas(), x, y, this.isExtendingPress(), this.isDoublePress()) || (!this.filterShown && this.rows.press(x, y))) {
             return true;
         }
 
@@ -856,21 +853,21 @@ public final class RoomListScreen extends GlueScreen {
     /**
      * Called for every pointer move of the screen (after an open combo box or popup takes it).
      * <p>
-     * Drags the scroll bars.
+     * Drags the scroll bars or the chat selection.
      *
      * @param x the interface x
      * @param y the interface y
      */
     @Override
     protected void onPointerMoved(float x, float y) {
-        this.chatLog.drag(y);
+        this.chatLog.drag(this.getContext().getCanvas(), x, y);
         this.rows.drag(y);
     }
 
     /**
      * Called for every release of the left button of the screen.
      * <p>
-     * Releases the scroll bars.
+     * Releases the scroll bars and the chat selection.
      *
      * @param x the interface x
      * @param y the interface y
@@ -879,6 +876,19 @@ public final class RoomListScreen extends GlueScreen {
     protected void onPointerReleased(float x, float y) {
         this.chatLog.release();
         this.rows.release();
+    }
+
+    /**
+     * Called first for a copy (Ctrl+C or the edit menu's Copy): a screen whose read-only text (a chat log) holds a selection copies it here,
+     * before the focused edit control.
+     * <p>
+     * Copies the chat log's selection.
+     *
+     * @return {@code true} if the copy was consumed, {@code false} otherwise
+     */
+    @Override
+    protected boolean onCopy() {
+        return this.chatLog.copy(this.getContext().getClipboard());
     }
 
     /**
@@ -1173,7 +1183,7 @@ public final class RoomListScreen extends GlueScreen {
                               {text.get("infoPane_size"),
                                data == null ? unknown : String.format(Locale.ROOT, SIZE_FORMAT, data.getMapWidth(), data.getMapHeight())},
                               {text.get("infoPane_speed"), data == null ? unknown : GameListScreen.getSpeedName(glueContext, data.getSpeed())},
-                              {BeaconLinkText.MOD.get(locale), mod}};
+                              {OwnText.MOD.get(locale), mod}};
         float middle = innerLeft + innerWidth / CENTER_DIVISOR;
         float valueWidth = innerLeft + innerWidth - middle;
 

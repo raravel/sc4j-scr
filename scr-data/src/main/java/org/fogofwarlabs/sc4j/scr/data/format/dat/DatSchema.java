@@ -69,7 +69,7 @@ public final class DatSchema {
         /**
          * @return the element type
          */
-        @NotNull DatType getType() {
+        public @NotNull DatType getType() {
             return this.type;
         }
 

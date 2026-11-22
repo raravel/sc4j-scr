@@ -356,6 +356,16 @@ public final class ClassicDynamicRegionsUtils {
         @Override
         public void writeByte(int offset, int value) {
         }
+
+        /**
+         * Tells whether the region is served from the emulation's own storage.
+         *
+         * @return {@code true}: the buffer holds zero and no game state
+         */
+        @Override
+        public boolean isEmulatorStorage() {
+            return true;
+        }
     }
 
     /**
@@ -675,9 +685,9 @@ public final class ClassicDynamicRegionsUtils {
     }
 
     /**
-     * Adds a list of zeroed node buffers at aligned addresses. The first two nodes are adjacent; later nodes follow
-     * the buffer of the node two positions earlier. Each node except the last holds its next link, buffer address and
-     * three marker DWORDs, including two unaligned markers.
+     * Adds a list of zeroed node buffers at aligned addresses, as the emulation's own storage. The first two nodes are adjacent; later nodes
+     * follow the buffer of the node two positions earlier. Each node except the last holds its next link, buffer address and three marker
+     * DWORDs, including two unaligned markers.
      *
      * @param regions receives the node regions
      * @param first   the first node's classic address, which the list pointer holds
@@ -710,7 +720,7 @@ public final class ClassicDynamicRegionsUtils {
         }
 
         for (int index = 0; index < count; index++) {
-            regions.add(new ClassicStorageRegion(bases[index], nodes[index]));
+            regions.add(ClassicStorageRegion.createEmulatorStorageRegion(bases[index], nodes[index]));
         }
     }
 

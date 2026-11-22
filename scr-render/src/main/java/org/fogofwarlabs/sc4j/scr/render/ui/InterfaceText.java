@@ -1,5 +1,6 @@
 package org.fogofwarlabs.sc4j.scr.render.ui;
 
+import org.fogofwarlabs.sc4j.engine.client.render.Canvas;
 import org.fogofwarlabs.sc4j.engine.client.text.Font;
 import org.fogofwarlabs.sc4j.engine.client.text.TextStyle;
 import org.fogofwarlabs.sc4j.scr.render.RenderAssets;
@@ -307,6 +308,67 @@ public final class InterfaceText {
         }
     }
 
+    /**
+     * Draws a text from an anchor without wrapping or fitting: the lines, broken at line and form feeds, go down from {@code y}, each placed on
+     * {@code x} by the horizontal alignment of the format ({@link #LEFT} starts at {@code x}, {@link #CENTER} centers on it, {@link #RIGHT} ends
+     * at it). Inline alignment codes do not move the pen; the color carries across the lines as in {@link #draw}.
+     *
+     * @param canvas     the interface renderer between {@code begin} and {@code end}
+     * @param transform  the interface-to-screen transform
+     * @param font       the font
+     * @param text       the text
+     * @param x          the x the lines align on
+     * @param y          the top of the first line
+     * @param format     the format bits: {@link #LEFT}, {@link #CENTER} or {@link #RIGHT}, and {@link #NO_KERNING}
+     * @param color      the packed {@code 0xRRGGBBAA} starting color
+     * @param codeColors the packed colors by code ({@code 32} entries)
+     */
+    public static void drawAligned(@NotNull Canvas canvas, @NotNull InterfaceTransform transform,
+                                   @NotNull InterfaceFont font, @NotNull String text,
+                                   float x, float y,
+                                   int format,
+                                   int color, int @NotNull [] codeColors) {
+        if (text.isEmpty()) {
+            return;
+        }
+
+        boolean kerning = (format & NO_KERNING) == 0;
+        TextStyle style = createStyle(transform, codeColors, kerning);
+
+        drawLines(canvas, transform, font, breakLines(font, text, kerning), x, x, y, format, Float.NaN, color, style);
+    }
+
+    /**
+     * Measures a text as {@link #drawAligned} draws it: the width of its widest line.
+     *
+     * @param font   the font
+     * @param text   the text
+     * @param format the format bits; {@link #NO_KERNING} drops the kerning
+     * @return the width in interface pixels
+     */
+    public static float measureAligned(@NotNull InterfaceFont font, @NotNull String text, int format) {
+        boolean kerning = (format & NO_KERNING) == 0;
+        float width = 0;
+
+        for (String line : breakLines(font, text, kerning)) {
+            width = Math.max(width, measureWithoutCaretGlyph(font, line, kerning));
+        }
+
+        return width;
+    }
+
+    /**
+     * Breaks a text into lines at line and form feeds only; a form feed or a drawing-stop control byte ends the text.
+     *
+     * @param font    the font
+     * @param text    the text
+     * @param kerning whether the one-pixel kerning is added
+     * @return the lines
+     */
+    private static @NotNull List<String> breakLines(@NotNull InterfaceFont font, @NotNull String text, boolean kerning) {
+        return truncateLines(text, wrap(font, text, 0, kerning, WrapMode.WORD), 0);
+    }
+
     private static void layout(@NotNull InterfaceRenderer renderer, @NotNull InterfaceTransform transform,
                                @NotNull InterfaceFont font, @NotNull String text,
                                float left, float top, float width, float height,
@@ -384,7 +446,41 @@ public final class InterfaceText {
             }
         }
 
-        for (String line : lines) {
+        drawLines(renderer, transform, font, lines, left, right, y, format, alignmentRight, color, style);
+
+        if (clip) {
+            renderer.setClip(0, 0, -1, -1);
+        }
+    }
+
+    /**
+     * Draws laid-out lines down from {@code top}, each placed by the horizontal alignment of the format between {@code left} and {@code right}.
+     * The colour carries across the lines ({@link #carryColorCodes}).
+     *
+     * @param canvas         the interface renderer between {@code begin} and {@code end}
+     * @param transform      the interface-to-screen transform
+     * @param font           the font
+     * @param lines          the laid-out lines
+     * @param left           the left of the lines
+     * @param right          the right of the lines
+     * @param top            the top of the first line
+     * @param format         the format bits
+     * @param alignmentRight the inclusive clip right the inline alignment codes align against, or {@code NaN} for none
+     * @param color          the packed {@code 0xRRGGBBAA} starting color
+     * @param style          the style of the layout ({@link #createStyle})
+     */
+    private static void drawLines(@NotNull Canvas canvas, @NotNull InterfaceTransform transform,
+                                  @NotNull InterfaceFont font, @NotNull List<String> lines,
+                                  float left, float right, float top,
+                                  int format,
+                                  float alignmentRight,
+                                  int color, @NotNull TextStyle style) {
+        boolean kerning = style.isKerning();
+        List<String> drawnLines = carryColorCodes(lines);
+        float y = top;
+
+        for (int index = 0; index < lines.size(); index++) {
+            String line = lines.get(index);
             float x = left;
 
             if ((format & CENTER) != 0) {
@@ -393,13 +489,33 @@ public final class InterfaceText {
                 x = right - measureWithoutCaretGlyph(font, line, kerning);
             }
 
-            drawLine(renderer, transform, font, line, x, y, alignmentRight, color, style);
+            drawLine(canvas, transform, font, drawnLines.get(index), x, y, alignmentRight, color, style);
             y += font.getTextHeight(line) + LINE_GAP;
         }
+    }
 
-        if (clip) {
-            renderer.setClip(0, 0, -1, -1);
+    /**
+     * Returns lines as they are drawn: each line starts with the color codes of the lines before it, so that the pen color of the end of a line
+     * is the color of the start of the next one and code {@code 1} switches back across line breaks.
+     *
+     * @param lines the laid-out lines
+     * @return the lines with the color codes of the lines before them
+     */
+    static @NotNull List<String> carryColorCodes(@NotNull List<String> lines) {
+        List<String> drawnLines = new ArrayList<>(lines.size());
+        StringBuilder colorCodes = new StringBuilder();
+
+        for (String line : lines) {
+            drawnLines.add(colorCodes.isEmpty() ? line : colorCodes + line);
+
+            for (int index = 0; index < line.length(); index++) {
+                if (InterfaceFont.isColorCode(line.charAt(index))) {
+                    colorCodes.append(line.charAt(index));
+                }
+            }
         }
+
+        return drawnLines;
     }
 
     /**
@@ -419,17 +535,17 @@ public final class InterfaceText {
      * Draws one line with inline alignment jumps and persistent color codes. The caret does not advance the pen and is drawn after the line at its
      * saved position. Each segment is drawn through the engine {@link Font} form in the layout's style, with its pen in screen pixels.
      *
-     * @param renderer  the interface renderer between {@code begin} and {@code end}
+     * @param canvas    the interface renderer between {@code begin} and {@code end}
      * @param transform the interface-to-screen transform
      * @param font      the font
      * @param line      the line
      * @param x         the pen x
      * @param y         the pen y (line top)
-     * @param right     the inclusive clip right the inline alignment codes align against, or {@code NaN} for none
+     * @param right     the inclusive clip right the inline alignment codes align against, or {@code NaN} for none (no jumps)
      * @param color     the packed {@code 0xRRGGBBAA} starting color
      * @param style     the style of the layout ({@link #createStyle})
      */
-    private static void drawLine(@NotNull InterfaceRenderer renderer, @NotNull InterfaceTransform transform,
+    private static void drawLine(@NotNull Canvas canvas, @NotNull InterfaceTransform transform,
                                  @NotNull InterfaceFont font, @NotNull String line,
                                  float x, float y, float right,
                                  int color, @NotNull TextStyle style) {
@@ -456,14 +572,14 @@ public final class InterfaceText {
             }
 
             if (!segment.isEmpty()) {
-                font.draw(renderer, colorCodes + segment, transform.toScreenX(pen), screenY, color, style);
+                font.draw(canvas, colorCodes + segment, transform.toScreenX(pen), screenY, color, style);
             }
 
             if (index == drawn.length()) {
                 break;
             }
 
-            pen += font.measure(segment, kerning) + shifts[shift++];
+            pen += font.measure(segment, kerning) + (shift < shifts.length ? shifts[shift++] : 0);
 
             for (int code = 0; code < segment.length(); code++) {
                 if (InterfaceFont.isColorCode(segment.charAt(code))) {
@@ -484,7 +600,7 @@ public final class InterfaceText {
                 }
             }
 
-            font.draw(renderer, caretCodes + CARET_GLYPH, transform.toScreenX(caretPen), screenY, color, style);
+            font.draw(canvas, caretCodes + CARET_GLYPH, transform.toScreenX(caretPen), screenY, color, style);
         }
     }
 
@@ -648,8 +764,9 @@ public final class InterfaceText {
             }
 
             shifts[shift++] = jump;
-                              pen += jump;
-                              start = index + 1;
+
+            pen += jump;
+            start = index + 1;
         }
 
         return shifts;
@@ -681,7 +798,7 @@ public final class InterfaceText {
 
 
     /**
-     * Wraps a text; see {@link #wrapBreaks}. A line or form feed ends its piece and is not part of the line.
+     * Wraps a text; see {@link #wrapBreaks(String, float, ToDoubleFunction)}. A line or form feed ends its piece and is not part of the line.
      *
      * @param font  the font
      * @param text  the text
@@ -697,7 +814,7 @@ public final class InterfaceText {
         List<String> lines = new ArrayList<>();
         int start = 0;
 
-        for (int end : wrapBreaks(font, text, width, null, Integer.MAX_VALUE, kerning, mode)) {
+        for (int end : wrapBreaks(text, width, mode, piece -> measureWithoutCaretGlyph(font, piece, kerning))) {
             String piece = text.substring(start, end);
 
             if (!piece.isEmpty() && (piece.charAt(piece.length() - 1) == LINE_FEED || piece.charAt(piece.length() - 1) == FORM_FEED)) {
@@ -712,26 +829,33 @@ public final class InterfaceText {
     }
 
     /**
-     * Returns word-wrap piece ends, falling back to character wrapping when the first word does not fit. Line and form feeds end pieces, and
-     * piece lengths are measured in caller units (for example bytes) when offsets are given: {@code offsets[i]} is the unit offset of character
-     * {@code i}, {@code offsets[length]} the total.
+     * Returns the word-wrap piece ends of a text in the font, falling back to character wrapping when the first word does not fit; see
+     * {@link #wrapBreaks(String, float, ToDoubleFunction)}.
      *
-     * @param font          the font
-     * @param text          the text
-     * @param width         the wrap width; {@code 0} or less only breaks at line and form feeds
-     * @param offsets       the unit offsets, or {@code null} to count characters
-     * @param maximumLength the maximum piece length in units
-     * @return the end index of each piece (character indexes), the last one {@code text.length()}
+     * @param font  the font
+     * @param text  the text
+     * @param width the wrap width; {@code 0} or less only breaks at line and form feeds
+     * @return the end index of each piece, the last one {@code text.length()}
      */
-    public static int @NotNull [] wrapBreaks(@NotNull InterfaceFont font, @NotNull String text,
-                                             float width, int @Nullable [] offsets, int maximumLength) {
-        return wrapBreaks(font, text, width, offsets, maximumLength, true, WrapMode.WORD);
+    public static int @NotNull [] wrapBreaks(@NotNull InterfaceFont font, @NotNull String text, float width) {
+        return wrapBreaks(text, width, piece -> measureWithoutCaretGlyph(font, piece, true));
     }
 
-    private static int @NotNull [] wrapBreaks(@NotNull InterfaceFont font, @NotNull String text,
-                                              float width, int @Nullable [] offsets, int maximumLength,
-                                              boolean kerning, @NotNull WrapMode mode) {
-        ToDoubleFunction<String> measure = piece -> measureWithoutCaretGlyph(font, piece, kerning);
+    /**
+     * Returns the word-wrap piece ends of a text, falling back to character wrapping when the first word does not fit. Each piece starts at
+     * pen {@code 0} and ends where the wrap stops; line and form feeds end pieces. A piece has no length limit: codes that advance nothing,
+     * such as carriage returns, stay in the piece of the text before them.
+     *
+     * @param text    the text
+     * @param width   the wrap width; {@code 0} or less only breaks at line and form feeds
+     * @param measure the advance of a text in interface pixels
+     * @return the end index of each piece, the last one {@code text.length()}
+     */
+    public static int @NotNull [] wrapBreaks(@NotNull String text, float width, @NotNull ToDoubleFunction<String> measure) {
+        return wrapBreaks(text, width, WrapMode.WORD, measure);
+    }
+
+    private static int @NotNull [] wrapBreaks(@NotNull String text, float width, @NotNull WrapMode mode, @NotNull ToDoubleFunction<String> measure) {
         float right = width > 0 ? width : Float.NaN;
         List<Integer> ends = new ArrayList<>();
         int start = 0;
@@ -746,18 +870,6 @@ public final class InterfaceText {
 
             if (end == start) {
                 end = start + 1;
-            }
-
-            if ((offsets == null ? end - start : offsets[end] - offsets[start]) > maximumLength) {
-                int fitting = start + 1;
-
-                while (fitting < end && (offsets == null ? fitting + 1 - start : offsets[fitting + 1] - offsets[start]) <= maximumLength) {
-                    fitting++;
-                }
-
-                int wordStart = text.lastIndexOf(SPACE, fitting - 1) + 1;
-
-                end = wordStart > start ? wordStart : fitting;
             }
 
             ends.add(end);

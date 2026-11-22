@@ -1,6 +1,7 @@
 package org.fogofwarlabs.sc4j.scr.game.map;
 
 import org.fogofwarlabs.sc4j.base.binary.LittleEndianUtils;
+import org.fogofwarlabs.sc4j.base.exception.Exceptions;
 import org.fogofwarlabs.sc4j.scr.data.format.text.LegacyTextUtils;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -8,12 +9,18 @@ import org.jetbrains.annotations.Nullable;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.nio.ByteOrder;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
 /**
  * Holds the map string section the loader keeps ({@code STR } or {@code STRx}) as mutable bytes.
  * <p>
  * Trigger text resolves through it, and the EUD emulation serves it as one region (the pointee of the classic string pointer), so a write through the
  * emulation changes the text later actions show.
+ * <p>
+ * It also holds registered strings ({@link #registerString}): strings outside the section bytes under string indices the map does not use, which
+ * every lookup ({@link #getStringBytes}) resolves as map strings.
  */
 public final class MapStringSection {
     /**
@@ -28,6 +35,14 @@ public final class MapStringSection {
      * The index of the first string; string indices are one-based.
      */
     private static final int FIRST_STRING_INDEX = 1;
+    /**
+     * The last string index a registered string can take, the largest WORD, which every trigger string field holds.
+     */
+    private static final int LAST_REGISTERED_INDEX = 0xFFFF;
+    /**
+     * The multiplier that combines the registered strings in {@link #computeRegisteredStringHash(int)}.
+     */
+    private static final int HASH_MULTIPLIER = 31;
     /**
      * The log2 of the byte span that shares one change stamp.
      */
@@ -62,7 +77,16 @@ public final class MapStringSection {
     private final long @NotNull [] groupChangeCounts;
 
     /**
-     * Creates a {@link MapStringSection} instance with a copy of a section payload and no changes.
+     * The string index of the first registered string, {@code 0} before the first registration.
+     */
+    private int firstRegisteredIndex;
+    /**
+     * The registered strings in index order from {@link #firstRegisteredIndex}.
+     */
+    private final @NotNull List<byte[]> registeredStrings;
+
+    /**
+     * Creates a {@link MapStringSection} instance with a copy of a section payload, no changes and no registered strings.
      *
      * @param payload  the section payload, copied
      * @param extended whether the section is {@code STRx} (DWORD count and offsets)
@@ -74,6 +98,9 @@ public final class MapStringSection {
         this.changeCount       = 0;
         this.blockChangeCounts = new long[(this.bytes.length >>> CHANGE_BLOCK_SHIFT) + 1];
         this.groupChangeCounts = new long[(this.bytes.length >>> CHANGE_GROUP_SHIFT) + 1];
+
+        this.firstRegisteredIndex = 0;
+        this.registeredStrings    = new ArrayList<>();
     }
 
     /**
@@ -98,20 +125,34 @@ public final class MapStringSection {
     }
 
     /**
-     * Resolves a string as the loader's lookup: no string for a section shorter than one entry, an index below {@code 1} or past the count, an offset
-     * entry past the section or an offset at or past the section size; otherwise the bytes up to the first NUL.
+     * @return the number of registered strings ({@link #registerString})
+     */
+    public int getRegisteredStringCount() {
+        return this.registeredStrings.size();
+    }
+
+    /**
+     * Resolves a string: a registered string ({@link #registerString}) answers its index; otherwise the loader's lookup finds no string for a section
+     * shorter than one entry, an index below {@code 1} or past the count, an offset entry past the section or an offset at or past the section
+     * size, and else the bytes up to the first NUL.
      *
      * @param stringIndex the one-based string index
      * @return the string bytes, or {@code null} when the lookup finds no string
      */
     public byte @Nullable [] getStringBytes(int stringIndex) {
+        int registered = stringIndex - this.firstRegisteredIndex;
+
+        if (this.firstRegisteredIndex != 0 && registered >= 0 && registered < this.registeredStrings.size()) {
+            return this.registeredStrings.get(registered).clone();
+        }
+
         int entrySize = this.extended ? EXTENDED_ENTRY_SIZE : ENTRY_SIZE;
 
         if (this.bytes.length < entrySize || stringIndex < FIRST_STRING_INDEX) {
             return null;
         }
 
-        long count = this.extended ? LittleEndianUtils.readUnsigned32(this.bytes, 0) : LittleEndianUtils.readUnsigned16(this.bytes, 0);
+        long count = this.readStringCount();
         long entryOffset = (long) stringIndex * entrySize;
 
         if (stringIndex > count || entryOffset + entrySize > this.bytes.length) {
@@ -146,6 +187,63 @@ public final class MapStringSection {
         byte[] text = this.getStringBytes(stringIndex);
 
         return text == null ? "" : LegacyTextUtils.decode(text, 0, text.length);
+    }
+
+    /**
+     * Registers a string under the next string index the map does not use: the first registration takes the index after the section's string
+     * count, every later one the index after the previous registration. Every lookup ({@link #getStringBytes}) then resolves the index to the
+     * string, so trigger text, sound paths, mission objectives and leaderboard labels can name it.
+     * <p>
+     * The same registrations in the same order give the same indices. Registered strings are simulation state, which
+     * {@link #computeRegisteredStringHash} hashes; they are not part of the section bytes, which the EUD emulation and saved games hold.
+     *
+     * @param text the string bytes, without a NUL
+     * @return the string index assigned to the string, at most {@code 65535}
+     * @throws IllegalArgumentException if the text holds a NUL
+     * @throws IllegalStateException    if no string index up to {@code 65535} is left
+     */
+    public int registerString(byte @NotNull [] text) {
+        for (byte value : text) {
+            if (value == 0) {
+                throw Exceptions.newIllegalArgumentException("A registered string holds no NUL.");
+            }
+        }
+
+        if (this.firstRegisteredIndex == 0) {
+            long count = this.bytes.length < (this.extended ? EXTENDED_ENTRY_SIZE : ENTRY_SIZE) ? 0 : this.readStringCount();
+
+            if (count >= LAST_REGISTERED_INDEX) {
+                throw Exceptions.newIllegalStateException("The map uses every string index up to {0}.", LAST_REGISTERED_INDEX);
+            }
+
+            this.firstRegisteredIndex = (int) count + 1;
+        }
+
+        int stringIndex = this.firstRegisteredIndex + this.registeredStrings.size();
+
+        if (stringIndex > LAST_REGISTERED_INDEX) {
+            throw Exceptions.newIllegalStateException("Every string index up to {0} is registered.", LAST_REGISTERED_INDEX);
+        }
+
+        this.registeredStrings.add(text.clone());
+
+        return stringIndex;
+    }
+
+    /**
+     * Mixes the registered strings ({@link #registerString}) and their indices into a state hash.
+     *
+     * @param hash the hash so far
+     * @return the hash with the registered strings mixed in
+     */
+    public int computeRegisteredStringHash(int hash) {
+        hash = HASH_MULTIPLIER * hash + this.firstRegisteredIndex;
+
+        for (byte[] text : this.registeredStrings) {
+            hash = HASH_MULTIPLIER * hash + Arrays.hashCode(text);
+        }
+
+        return hash;
     }
 
     /**
@@ -258,5 +356,14 @@ public final class MapStringSection {
             this.blockChangeCounts[offset + index >>> CHANGE_BLOCK_SHIFT] = this.changeCount;
             this.groupChangeCounts[offset + index >>> CHANGE_GROUP_SHIFT] = this.changeCount;
         }
+    }
+
+    /**
+     * Reads the string count of a section at least one entry long: the WORD of {@code STR }, the DWORD of {@code STRx}.
+     *
+     * @return the unsigned string count
+     */
+    private long readStringCount() {
+        return this.extended ? LittleEndianUtils.readUnsigned32(this.bytes, 0) : LittleEndianUtils.readUnsigned16(this.bytes, 0);
     }
 }

@@ -438,6 +438,21 @@ public final class GameAccelerators {
         return identifier >= base && identifier < base + GROUP_RANGE;
     }
 
+    /**
+     * Tells whether a play accelerator acts on the game rather than on the interface: the control group keys, the stored screen positions,
+     * centering on the active unit and the speed keys. {@link #INCREASE_SPEED_OR_CHAT_HISTORY} is resolved before, as it opens the chat history
+     * in a network game.
+     *
+     * @param identifier the accelerator id
+     * @return {@code true} if the accelerator acts on the game, {@code false} if it opens a menu or dialog or switches an interface setting
+     */
+    public static boolean isGameAction(int identifier) {
+        return isInGroupRange(identifier, GROUP_ADD) || isInGroupRange(identifier, GROUP_ASSIGN) || isInGroupRange(identifier, GROUP_RECALL) ||
+               isInGroupRange(identifier, GROUP_CENTER) ||
+               identifier >= VIEW_STORE && identifier < VIEW_RECALL + VIEW_SLOTS ||
+               identifier == CENTER_ON_UNIT || identifier == INCREASE_SPEED || identifier == DECREASE_SPEED;
+    }
+
     private GameAccelerators() {
     }
 }

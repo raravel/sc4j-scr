@@ -45,16 +45,23 @@ public final class SaveGameUtils {
      * after them ({@link UnitPsi#restoreProviders}). Every sprite loses its selection images and their flags before the
      * pool parts ({@link SelectionImages#detachBeforeSave}); after them the local selection and the teammates' selections mark
      * their units again ({@link SelectionImages#restoreAfterSave}), while flashing circles stay off.
+     * <p>
+     * A game whose simulation plugins do not allow a save ({@link Game#isSaveAllowed()}) is refused before anything is written or changed.
      *
      * @param context     the running game
      * @param description the banner
      * @param saveGameId  the Save command's time DWORD, the save id of the game information
      * @return the saved game
-     * @throws IllegalStateException if the game has no game header
+     * @throws IllegalStateException if the game cannot be saved or has no game header
      * @throws UncheckedIOException  if the written file cannot be parsed back
      */
     public static @NotNull SaveGameFile write(@NotNull SaveGameContext context, @NotNull SaveGameDescription description, int saveGameId) {
         Game game = context.getGame();
+
+        if (!game.isSaveAllowed()) {
+            throw Exceptions.newIllegalStateException("The game cannot be saved: a simulation plugin does not allow it.");
+        }
+
         byte[] header = require(game.getGameContext().getGameHeaderSection(), "game header");
         SaveFileWriter output = new SaveFileWriter();
 

@@ -757,7 +757,7 @@ public final class UnitConstruction {
 
     /**
      * Spends the building cost and transforms the landed Drone into the incomplete building. An Extractor converts the geyser and removes the Drone;
-     * every other building morphs the Drone itself. Placement, supply or resource failure restores ground collision.
+     * every other building morphs the Drone itself. A Drone off its target, or a placement, supply or resource failure, restores ground collision.
      *
      * @param drone            the landed Drone
      * @param instructionLimit the order, ownership, morph, image and construction image budget
@@ -773,9 +773,15 @@ public final class UnitConstruction {
             throw Exceptions.newIllegalStateException("Drone construction requires its sprite.");
         }
 
-        // A blocked site or a Drone off its target shows "You can't build there."; the cost and supply test shows its own error.
-        if (sprite.getX() != drone.getOrderTargetX() || sprite.getY() != drone.getOrderTargetY() ||
-            !this.game.getUnitPlacement().canPlaceBuilding(drone,
+        // A Drone off its target stops without a message.
+        if (sprite.getX() != drone.getOrderTargetX() || sprite.getY() != drone.getOrderTargetY()) {
+            this.finishDroneBuildFailure(drone, instructionLimit);
+
+            return;
+        }
+
+        // A blocked site shows "You can't build there."; the cost and supply test shows its own error.
+        if (!this.game.getUnitPlacement().canPlaceBuilding(drone,
                                                            drone.getOwnerIndex(),
                                                            buildType,
                                                            (short) sprite.getX(), (short) sprite.getY(),

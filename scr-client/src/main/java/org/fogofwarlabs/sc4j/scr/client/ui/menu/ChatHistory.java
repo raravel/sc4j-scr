@@ -1,6 +1,8 @@
 package org.fogofwarlabs.sc4j.scr.client.ui.menu;
 
+import org.fogofwarlabs.sc4j.engine.resource.dialog.DialogControl;
 import org.fogofwarlabs.sc4j.scr.client.ui.dialog.ListBox;
+import org.fogofwarlabs.sc4j.scr.render.ui.InterfaceFont;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -10,7 +12,8 @@ import java.util.function.ToDoubleFunction;
 
 /**
  * Keeps formatted message records and appends wrapped rows while the history list is open.
- * Rows retain the message color and continuation color codes. A full list drops its first row.
+ * Rows retain the message color and continuation color codes and fit the list's row width ({@link #getRowWidth}).
+ * A full list drops its first row and keeps its shown rows in view.
  * Appending selects the new last row when the list was already at its end.
  */
 public final class ChatHistory {
@@ -19,9 +22,9 @@ public final class ChatHistory {
      */
     public static final int MAXIMUM_ROWS = 0xFF;
     /**
-     * The highest inline color code a continuation row carries over (codes {@code 1..0x1f}).
+     * The pixels a row keeps clear before the list's right edge.
      */
-    private static final int LAST_COLOR_CODE = 0x1f;
+    private static final int ROW_RIGHT_MARGIN = 50;
 
     /**
      * One kept message record: its formatted text, its color code and its starting color.
@@ -39,7 +42,19 @@ public final class ChatHistory {
     }
 
     /**
-     * Wraps text before a character exceeds the row width. Continuation rows retain the preceding row's last color code.
+     * Returns the row width of a history list: the list's right edge relative to its dialog (its left plus its width less one) less
+     * {@link #ROW_RIGHT_MARGIN}, for rows measured from a pen at {@code 0}.
+     *
+     * @param control the list control
+     * @return the row width in interface pixels
+     */
+    public static float getRowWidth(@NotNull DialogControl control) {
+        return control.getX() + control.getWidth() - 1 - ROW_RIGHT_MARGIN;
+    }
+
+    /**
+     * Wraps text before a code point exceeds the row width. Continuation rows retain the preceding row's last color code
+     * ({@link InterfaceFont#isColorCode}).
      *
      * @param text    the text
      * @param measure measures a text in the list's font
@@ -56,31 +71,31 @@ public final class ChatHistory {
         }
 
         StringBuilder row = new StringBuilder();
+        int rowStart = 0;
         char carried = 0;
+        int index = 0;
 
-        for (int index = 0; index < text.length(); index++) {
-            char character = text.charAt(index);
+        while (index < text.length()) {
+            int codePoint = text.codePointAt(index);
+            int length = row.length();
 
-            row.append(character);
+            row.appendCodePoint(codePoint);
 
-            if (row.length() > 1 && measure.applyAsDouble(row.toString()) > width) {
-                row.setLength(row.length() - 1);
+            // A row keeps at least one code point after its carried color code.
+            if (length > rowStart && measure.applyAsDouble(row.toString()) > width) {
+                row.setLength(length);
 
                 String finished = row.toString();
 
                 rows.add(finished);
 
-                char lastCode = carried;
-
                 for (int colorIndex = 0; colorIndex < finished.length(); colorIndex++) {
                     char colorCharacter = finished.charAt(colorIndex);
 
-                    if (colorCharacter >= 1 && colorCharacter <= LAST_COLOR_CODE) {
-                        lastCode = colorCharacter;
+                    if (InterfaceFont.isColorCode(colorCharacter)) {
+                        carried = colorCharacter;
                     }
                 }
-
-                carried = lastCode;
 
                 row.setLength(0);
 
@@ -88,8 +103,11 @@ public final class ChatHistory {
                     row.append(carried);
                 }
 
-                row.append(character);
+                rowStart = row.length();
+                row.appendCodePoint(codePoint);
             }
+
+            index += Character.charCount(codePoint);
         }
 
         if (!row.isEmpty()) {
@@ -161,34 +179,39 @@ public final class ChatHistory {
     }
 
     /**
-     * Opens the dialog's list: the rows of every kept record are added, the last row in view.
+     * Opens the dialog's list: the rows of every kept record are added at the list's row width ({@link #getRowWidth}), the last row in
+     * view.
      *
      * @param list    the dialog's list control (control {@code 1})
      * @param measure measures a text in the list's font, in interface pixels
-     * @param width   the wrap width of a row in interface pixels
      * @param rows    the rows the list shows
      */
-    public void open(@NotNull ListBox list, @NotNull ToDoubleFunction<String> measure, float width, int rows) {
+    public void open(@NotNull ListBox list, @NotNull ToDoubleFunction<String> measure, int rows) {
         this.list    = list;
         this.measure = measure;
-        this.width   = width;
+        this.width   = getRowWidth(list.getDefinition());
         this.rows    = rows;
 
         list.setItems(List.of());
 
         for (Entry entry : this.entries) {
-            this.append(list, measure, width, entry);
+            this.append(list, measure, this.width, entry);
         }
     }
 
     private void append(@NotNull ListBox list, @NotNull ToDoubleFunction<String> measure, float width, @NotNull Entry entry) {
         for (String row : wrap(entry.text, measure, width)) {
+            // Select and keep the new row in view when the list was at its end before the row.
+            boolean atEnd = list.getTopRow() + this.rows >= list.getCount();
+
             if (list.getCount() >= MAXIMUM_ROWS) {
                 list.removeItem(0);
-            }
 
-            // Select and keep the new row in view when the list was already at its end.
-            boolean atEnd = list.getTopRow() + this.rows >= list.getCount();
+                // The shown rows stay in view.
+                if (list.getTopRow() > 0) {
+                    list.scrollTo(list.getTopRow() - 1, this.rows);
+                }
+            }
 
             list.addItem(row, entry.code, entry.color);
 

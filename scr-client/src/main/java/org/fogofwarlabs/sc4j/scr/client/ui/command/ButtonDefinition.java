@@ -9,13 +9,18 @@ import org.jetbrains.annotations.Nullable;
  * <p>
  * The fields follow the 32-byte native button record: position, icon, condition, action, condition value, action value,
  * enabled string and disabled string. String identifiers are one-based {@code stat_txt} indices; zero means none. A button a mod adds
- * ({@link ScrAddedUnitType.TrainButton}) carries its texts instead.
+ * ({@link ScrAddedUnitType.TrainButton}) carries its texts instead, and so may a button of a table a game plugin changed: the enabled text in
+ * the {@code stat_txt} button string format (hotkey, button kind, text) and the plain disabled text.
  */
 public final class ButtonDefinition {
     /**
      * The button kind character of a unit production button string, the second character after the hotkey.
      */
     public static final char UNIT_PRODUCTION_KIND = 1;
+    /**
+     * The table index of a button that is no entry of a set's table.
+     */
+    public static final int NO_TABLE_INDEX = -1;
 
     private final int position;
     private final int icon;
@@ -30,6 +35,9 @@ public final class ButtonDefinition {
     private final int disabledString;
     private final ScrAddedUnitType.@Nullable TrainButton addedButton;
     private final @Nullable String enabledText;
+    private final @Nullable String disabledText;
+
+    private final int tableIndex;
 
     /**
      * Creates a {@link ButtonDefinition} instance whose strings are {@code stat_txt} strings.
@@ -48,7 +56,33 @@ public final class ButtonDefinition {
                             @NotNull ButtonCondition condition, int conditionValue,
                             @NotNull ButtonAction action, int actionValue,
                             int enabledString, int disabledString) {
-        this(position, icon, condition, conditionValue, action, actionValue, enabledString, disabledString, null);
+        this(position, icon, condition, conditionValue, action, actionValue, enabledString, disabledString, null, null, null, NO_TABLE_INDEX);
+    }
+
+    /**
+     * Creates a {@link ButtonDefinition} instance of an entry of a changed table, whose texts replace its {@code stat_txt} strings when given.
+     *
+     * @param position       the command card position from {@code 1} through {@code 9}
+     * @param icon           the {@code cmdicons} frame
+     * @param condition      the condition function
+     * @param conditionValue the value passed to the condition
+     * @param action         the action function
+     * @param actionValue    the value passed to the action
+     * @param enabledString  the one-based {@code stat_txt} string of the enabled button
+     * @param disabledString the one-based {@code stat_txt} string of the disabled button, or {@code 0}
+     * @param enabledText    the enabled button string (hotkey, kind, text), or {@code null} for the enabled string
+     * @param disabledText   the disabled text, or {@code null} for the disabled string
+     * @param tableIndex     the index of the entry in its set's table
+     */
+    public ButtonDefinition(int position,
+                            int icon,
+                            @NotNull ButtonCondition condition, int conditionValue,
+                            @NotNull ButtonAction action, int actionValue,
+                            int enabledString, int disabledString,
+                            @Nullable String enabledText, @Nullable String disabledText,
+                            int tableIndex) {
+        this(position, icon, condition, conditionValue, action, actionValue, enabledString, disabledString, null, enabledText, disabledText,
+             tableIndex);
     }
 
     /**
@@ -67,14 +101,17 @@ public final class ButtonDefinition {
                             @NotNull ButtonCondition condition, int conditionValue,
                             @NotNull ButtonAction action, int actionValue,
                             ScrAddedUnitType.@NotNull TrainButton addedButton) {
-        this(position, icon, condition, conditionValue, action, actionValue, 0, 0, addedButton);
+        this(position, icon, condition, conditionValue, action, actionValue, 0, 0, addedButton,
+             String.valueOf(addedButton.getHotkey()) + UNIT_PRODUCTION_KIND + addedButton.getText(), null, NO_TABLE_INDEX);
     }
 
     private ButtonDefinition(int position,
                              int icon,
                              @NotNull ButtonCondition condition, int conditionValue,
                              @NotNull ButtonAction action, int actionValue,
-                             int enabledString, int disabledString, ScrAddedUnitType.@Nullable TrainButton addedButton) {
+                             int enabledString, int disabledString, ScrAddedUnitType.@Nullable TrainButton addedButton,
+                             @Nullable String enabledText, @Nullable String disabledText,
+                             int tableIndex) {
         this.position = position;
         this.icon     = icon;
 
@@ -87,7 +124,10 @@ public final class ButtonDefinition {
         this.enabledString  = enabledString;
         this.disabledString = disabledString;
         this.addedButton    = addedButton;
-        this.enabledText    = addedButton == null ? null : String.valueOf(addedButton.getHotkey()) + UNIT_PRODUCTION_KIND + addedButton.getText();
+        this.enabledText    = enabledText;
+        this.disabledText   = disabledText;
+
+        this.tableIndex = tableIndex;
     }
 
     /**
@@ -154,10 +194,26 @@ public final class ButtonDefinition {
     }
 
     /**
-     * @return the enabled button string in the {@code stat_txt} button string format (hotkey, button kind, text of the default language), or
-     * {@code null} if the button uses its enabled {@code stat_txt} string
+     * Returns the enabled button string in the {@code stat_txt} button string format (hotkey, button kind, text), of the default language for a
+     * button a mod adds.
+     *
+     * @return the enabled button string, or {@code null} if the button uses its enabled {@code stat_txt} string
      */
     public @Nullable String getEnabledText() {
         return this.enabledText;
+    }
+
+    /**
+     * @return the disabled text of an entry of a changed table, or {@code null} for the disabled {@code stat_txt} string or a mod's button
+     */
+    public @Nullable String getDisabledText() {
+        return this.disabledText;
+    }
+
+    /**
+     * @return the index of the entry in its set's changed table, {@link #NO_TABLE_INDEX} for a default table button or a mod's button
+     */
+    public int getTableIndex() {
+        return this.tableIndex;
     }
 }

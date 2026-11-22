@@ -155,6 +155,21 @@ final class GameViewportTest {
     }
 
     @Test
+    void to_interface_x_and_y_should_invert_to_screen_x_and_y_at_any_window() {
+        int[][] sizes = {{640, 480}, {1920, 1080}, {960, 1000}, {1366, 2000}, {2560, 1080}};
+
+        for (int[] size : sizes) {
+            GameViewport viewport = createViewport(size[0], size[1], true, true);
+            String label = size[0] + "x" + size[1];
+
+            for (int unit = 0; unit <= GameViewport.INTERFACE_HEIGHT; unit += GameViewport.INTERFACE_HEIGHT / 4) {
+                Assertions.assertEquals(unit, viewport.toInterfaceX(viewport.toScreenX(unit)), PIXEL_TOLERANCE, label + " column " + unit);
+                Assertions.assertEquals(unit, viewport.toInterfaceY(viewport.toScreenY(unit)), PIXEL_TOLERANCE, label + " row " + unit);
+            }
+        }
+    }
+
+    @Test
     void camera_limits_follow_game_view_at_any_zoom() {
         int mapWidth = MAP_SIZE;
         int mapHeight = MAP_SIZE;
@@ -307,6 +322,23 @@ final class GameViewportTest {
         viewport.setSurface(UiSurface.of(TALL_WINDOW_WIDTH, TALL_WINDOW_HEIGHT, DisplayScale.ONE));
 
         assertClip(0, 0, TALL_WINDOW_WIDTH, TALL_WINDOW_HEIGHT, viewport.getScreenClip(), PIXEL_TOLERANCE);
+    }
+
+    @Test
+    void play_clip_should_end_at_the_play_view_rows_of_the_game_screen() {
+        // The selection box clip of the 4:3 frame in a 1920x1080 window: the game screen columns and the 383 of 480 rows above the console.
+        GameViewport viewport = createViewport(WIDE_WINDOW_WIDTH, WIDE_WINDOW_HEIGHT, false, true);
+
+        assertClip(240, 0, 1680, PLAY_VIEW_ROWS * WIDE_WINDOW_HEIGHT / NATIVE_ROWS, viewport.getPlayClip(), PIXEL_TOLERANCE);
+
+        // The replay console's full-height play view and a hidden console leave the whole game screen.
+        viewport.setInterface(false, true, true);
+
+        assertClip(240, 0, 1680, WIDE_WINDOW_HEIGHT, viewport.getPlayClip(), PIXEL_TOLERANCE);
+
+        viewport.setInterface(false, false, false);
+
+        assertClip(0, 0, WIDE_WINDOW_WIDTH, WIDE_WINDOW_HEIGHT, viewport.getPlayClip(), PIXEL_TOLERANCE);
     }
 
     @Test

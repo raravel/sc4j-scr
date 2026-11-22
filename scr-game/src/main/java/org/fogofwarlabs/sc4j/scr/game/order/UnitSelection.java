@@ -424,7 +424,7 @@ public final class UnitSelection {
      */
     public boolean canExecute(@NotNull Game game, @NotNull SelectionRequest command, int playerIndex) {
         try {
-            this.apply(game, command, playerIndex, false);
+            this.apply(game, command, playerIndex, false, false);
 
             return true;
         } catch (UnsupportedOperationException exception) {
@@ -445,7 +445,50 @@ public final class UnitSelection {
      * @throws IllegalStateException         if a requested unit to insert, other than a Nuclear Missile of a replacing selection, has no sprite
      */
     public void execute(@NotNull Game game, @NotNull SelectionRequest command, int playerIndex) {
-        this.apply(game, command, playerIndex, true);
+        this.apply(game, command, playerIndex, true, true);
+    }
+
+    /**
+     * Replaces the selection of a player slot with units outside a command, as a replacing selection command of the slot's player changes it: the
+     * command owner is the command player of the slot's record (the force leader in a team game), the units are taken in order by the rules of
+     * the command (a hidden unit, a Nuclear Missile, a unit already taken, and in a selection of more than one unit a unit that cannot join one
+     * or that the owner does not own are left out), and the team marks and the selection-history record change as the command changes them.
+     * No command ran, so the scope accounting counts nothing. The command identities of a running dispatch are kept.
+     *
+     * @param game  the game
+     * @param slot  the player slot from {@code 0..7} whose selection changes
+     * @param units the units in selection order, at most {@link #MAXIMUM_SELECTED}; units of this game's pool
+     * @throws IllegalArgumentException      if more than {@link #MAXIMUM_SELECTED} units are given
+     * @throws IndexOutOfBoundsException     if the slot is outside the playable player slots
+     * @throws UnsupportedOperationException if the command player is not playable, a team record is missing or every history timestamp is {@code 0xFFFF}
+     * @throws NullPointerException          if the world was built without game data
+     */
+    public void select(@NotNull Game game, int slot, @NotNull Unit @NotNull [] units) {
+        Objects.checkIndex(slot, PlayerTable.PLAYABLE_PLAYER_SLOTS);
+
+        if (units.length > MAXIMUM_SELECTED) {
+            throw Exceptions.newIllegalArgumentException("A selection holds at most {0} units, not {1}.", MAXIMUM_SELECTED, units.length);
+        }
+
+        long[] handles = new long[units.length];
+
+        for (int index = 0; index < units.length; index++) {
+            handles[index] = Integer.toUnsignedLong(this.unitPool.getHandle(units[index].getIndex()));
+        }
+
+        Player record = game.getPlayerTable().getPlayer(slot);
+        int owner = record != null ? record.getCommandPlayerIndex() : slot;
+        int dispatchOwner = this.commandOwner;
+        int dispatchSlot = this.commandSlot;
+
+        this.beginCommand(owner, slot);
+
+        try {
+            this.apply(game, new SelectionRequest(SelectionRequest.Operation.REPLACE, Integer.BYTES, handles), owner, true, false);
+        } finally {
+            this.commandOwner = dispatchOwner;
+            this.commandSlot  = dispatchSlot;
+        }
     }
 
 
@@ -943,19 +986,20 @@ public final class UnitSelection {
 
     /**
      * Checks a selection request and, if {@code commit} is {@code true}, applies its effects: the selection change, the team marks, the
-     * selection-history record and the scope accounting.
+     * selection-history record and, if {@code accounted} is {@code true}, the scope accounting.
      *
      * @param game        the game
      * @param command     the decoded selection request
      * @param playerIndex the full resolved command player DWORD
      * @param commit      whether to apply the effects after the checks
+     * @param accounted   whether a committed request counts in the scope accounting
      * @throws UnsupportedOperationException if the command player is outside the playable player slots, a legacy selection request holds more than
      *                                       {@code 12} WORD handles, the local slot of a team selection names no represented player record or every
      *                                       history timestamp is {@code 0xFFFF}
      * @throws NullPointerException          if the world was built without game data
      * @throws IllegalStateException         if a requested unit to insert, other than a Nuclear Missile of a replacing selection, has no sprite
      */
-    private void apply(@NotNull Game game, @NotNull SelectionRequest command, int playerIndex, boolean commit) {
+    private void apply(@NotNull Game game, @NotNull SelectionRequest command, int playerIndex, boolean commit, boolean accounted) {
         if (playerIndex < 0 || playerIndex >= PlayerTable.PLAYABLE_PLAYER_SLOTS) {
             throw Exceptions.newUnsupportedOperationException("Selection command player {0} lies outside the represented player slots.", playerIndex);
         }
@@ -1051,7 +1095,8 @@ public final class UnitSelection {
                 }
 
                 selected[selectedCount++] = poolIndex;
-                                            markedChanged = true;
+
+                markedChanged = true;
             }
 
             if (operation != SelectionRequest.Operation.REMOVE) {
@@ -1113,7 +1158,7 @@ public final class UnitSelection {
             this.timestamps[slot * HISTORY_COUNT + historyIndex] = game.getTurnCount() & WORD_MASK;
         }
 
-        if (this.scopeAccountingEnabled) {
+        if (this.scopeAccountingEnabled && accounted) {
             if (this.statistics != null) {
                 this.statistics.record(slot, markedChanged ? ProductionStatistics.SUMMED_CATEGORY : ProductionStatistics.TOTAL_CATEGORY, 1);
 

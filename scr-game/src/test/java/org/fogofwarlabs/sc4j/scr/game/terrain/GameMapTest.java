@@ -193,6 +193,19 @@ final class GameMapTest {
     }
 
     @Test
+    void set_tile_visibility_should_replace_only_the_low_word_of_one_tile() {
+        GameMap map = new GameMap(2, 2, 0, new int[4], new int[]{0x10000, 0x40000, 0x2001FFFF, 0x04010000});
+
+        map.setTileVisibility(0, 1, 0x12345);
+
+        Assertions.assertEquals(0x20012345, map.getTileFlags(0, 1));
+        Assertions.assertEquals(0x10000, map.getTileFlags(0, 0));
+        Assertions.assertEquals(0x04010000, map.getTileFlags(1, 1));
+        Assertions.assertThrows(IndexOutOfBoundsException.class, () -> map.setTileVisibility(2, 0, 0));
+        Assertions.assertThrows(IllegalStateException.class, () -> new GameMap(2, 2, 0, new int[4]).setTileVisibility(0, 0, 0));
+    }
+
+    @Test
     void game_map_rejects_terrain_buffers_with_mismatched_extents() {
         Assertions.assertThrows(IllegalArgumentException.class, () -> new GameMap(2, 2, 0, new int[4], new int[3]));
         Assertions.assertThrows(IllegalArgumentException.class, () -> new GameMap(2, 2, 0, new int[3], new int[4]));
@@ -362,5 +375,50 @@ final class GameMapTest {
 
         Assertions.assertEquals(0x00410000 | 0x0F0F, map.getTileFlags(0));
         Assertions.assertEquals(0x0001FFFF, map.getTileFlags(1));
+    }
+
+    @Test
+    void apply_terrain_border_should_match_initialize_terrain_borders() {
+        int[] flags = new int[BORDER_MAP_TILE_COUNT];
+
+        Arrays.fill(flags, 0xFFFFFFFF);
+
+        GameMap map = new GameMap(BORDER_MAP_WIDTH, BORDER_MAP_HEIGHT, 0, new int[BORDER_MAP_TILE_COUNT], flags);
+
+        map.initializeTerrainBorders();
+
+        for (int tileIndex = 0; tileIndex < BORDER_MAP_TILE_COUNT; tileIndex++) {
+            Assertions.assertEquals(map.getTileFlags(tileIndex), map.applyTerrainBorder(tileIndex, 0xFFFFFFFF), "tile " + tileIndex);
+        }
+    }
+
+    @Test
+    void replace_terrain_should_keep_visibility_occupancy_and_creep() {
+        int previous = MapTileFlags.WALKABLE | MapTileFlags.MIDDLE;
+        int replacement = MapTileFlags.UNWALKABLE | MapTileFlags.UNBUILDABLE | MapTileFlags.HIGH;
+        GameMap map = new GameMap(3, 1, 0, new int[]{0x21, 0x22, 0x23}, new int[]{previous | MapTileFlags.OCCUPIED | 0x0102, previous | 0x00FF,
+                                                                                  previous | MapTileFlags.OCCUPIED});
+
+        map.initializeOverlayTiles();
+        map.retainTerrainUnderCreep(1);
+        map.setCreepVariant(1, 3);
+        map.applyCreepTerrainFlags(1, MapTileFlags.HAS_CREEP | MapTileFlags.WALKABLE, true);
+
+        map.replaceTerrain(0, 0x45, previous, replacement);
+        map.replaceTerrain(1, 0x46, previous, replacement);
+        map.replaceTerrain(2, 0x47, previous | MapTileFlags.OCCUPIED, replacement);
+
+        Assertions.assertEquals(0x45, map.getTileIdentifier(0));
+        Assertions.assertEquals(0x45, map.getTerrainTileIdentifier(0));
+        Assertions.assertEquals(replacement | MapTileFlags.OCCUPIED | 0x0102, map.getTileFlags(0));
+
+        Assertions.assertEquals(TerrainTileset.CREEP_TILE + 3, map.getTileIdentifier(1));
+        Assertions.assertEquals(0x46, map.getOverlayTileIdentifier(1));
+        Assertions.assertEquals(0x46, map.getTerrainTileIdentifier(1));
+        Assertions.assertEquals(MapTileFlags.WALKABLE | MapTileFlags.HAS_CREEP | MapTileFlags.UNBUILDABLE | MapTileFlags.HIGH |
+                                MapTileFlags.TEMPORARY_CREEP | 0x00FF, map.getTileFlags(1));
+
+        Assertions.assertEquals(0x47, map.getTileIdentifier(2));
+        Assertions.assertEquals(replacement, map.getTileFlags(2));
     }
 }

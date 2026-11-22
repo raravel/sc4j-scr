@@ -656,6 +656,54 @@ final class LiveTriggerPresentationTest {
     }
 
     @Test
+    void plugin_pause_requests_follow_the_pause_game_rule_at_the_next_trigger_step() {
+        byte[] records = new byte[TriggerRecordCodec.RECORD_SIZE];
+        ByteBuffer record = TriggerRecordScenario.createRecord(records, 0);
+
+        writeCondition(record, TriggerConditionIds.ALWAYS, 0, 0, 0, 0);
+        writeAction(record, 0, TriggerActionIds.SET_RESOURCES, 0, 0, 0, TriggerPlayerSelectors.CURRENT_PLAYER, 50, TriggerModifiers.SET_TO, 0);
+        record.put(TriggerRecordCodec.OWNERS_OFFSET, (byte) 1);
+
+        Player[] players = createPlayers(new int[]{PlayerTypes.HUMAN, PlayerTypes.NONE, PlayerTypes.NONE, PlayerTypes.NONE, PlayerTypes.NONE,
+                                                   PlayerTypes.NONE, PlayerTypes.NONE, PlayerTypes.NONE});
+        TriggerContext context = createContext(players, records, 0, 0);
+
+        context.requestPauseGame();
+        ScrTriggerSystem.update(context, FRAME_DURATION, LIVE_GAME, 0, 0);
+
+        Assertions.assertEquals(1, context.getPhaseGate(), "Pause Game without a record sets the paused state.");
+        Assertions.assertEquals(1, context.getTriggersEnabledWhileGated());
+        Assertions.assertEquals(1, context.getEvents().getCount());
+        assertEvent(context.getEvents(), 0, GAME_PAUSE_EVENT, 1, 0, 0);
+
+        context.requestPauseGame();
+        ScrTriggerSystem.update(context, FRAME_DURATION, LIVE_GAME, context.getPhaseGate(), context.getTriggersEnabledWhileGated());
+
+        Assertions.assertEquals(0, context.getEvents().getCount(), "Pause Game does nothing while the game is paused by it.");
+        Assertions.assertEquals(1, context.getPhaseGate());
+
+        context.requestUnpauseGame();
+        ScrTriggerSystem.update(context, FRAME_DURATION, LIVE_GAME, context.getPhaseGate(), context.getTriggersEnabledWhileGated());
+
+        Assertions.assertEquals(0, context.getPhaseGate());
+        Assertions.assertEquals(0, context.getTriggersEnabledWhileGated());
+        assertEvent(context.getEvents(), 0, GAME_PAUSE_EVENT, 0, 0, 0);
+
+        context.requestPauseGame();
+        ScrTriggerSystem.update(context, FRAME_DURATION, LIVE_GAME, 1, 0);
+        ScrTriggerSystem.update(context, FRAME_DURATION, LIVE_GAME, 0, 0);
+
+        Assertions.assertEquals(0, context.getPhaseGate(), "A step the Pause command keeps from running drops the request.");
+
+        TriggerContext multiplayer = createContext(players, records, MULTIPLAYER_SESSION, 0);
+
+        multiplayer.requestPauseGame();
+        ScrTriggerSystem.update(multiplayer, FRAME_DURATION, LIVE_GAME, 0, 0);
+
+        Assertions.assertEquals(0, multiplayer.getPhaseGate(), "Pause Game does nothing in a multiplayer session.");
+    }
+
+    @Test
     void escape_skip_ends_local_wait_and_lets_actions_finish() {
         byte[] records = new byte[TriggerRecordCodec.RECORD_SIZE];
         ByteBuffer waiting = TriggerRecordScenario.createRecord(records, 0);

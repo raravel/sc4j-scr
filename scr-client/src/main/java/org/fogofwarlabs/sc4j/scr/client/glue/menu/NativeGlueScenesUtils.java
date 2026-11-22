@@ -41,6 +41,7 @@ public final class NativeGlueScenesUtils {
      */
     public static void register(@NotNull GlueSceneRegistry scenes) {
         scenes.register(GlueNavigator.Destination.MAIN_MENU, context -> new MainMenuScreen());
+        scenes.register(GlueNavigator.Destination.LOGIN, context -> new LoginScreen(GlueNavigator.Destination.MAIN_MENU));
         scenes.register(GlueNavigator.Destination.CAMPAIGN, context -> new CampaignScreen(context.isExpansion()));
         scenes.register(GlueNavigator.Destination.CUSTOM_GAME, context -> new CustomGameScreen());
         scenes.register(GlueNavigator.Destination.REPLAY_LIST, context -> new ReplayListScreen());

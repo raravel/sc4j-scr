@@ -8,6 +8,7 @@ import org.fogofwarlabs.sc4j.scr.data.type.constant.SoundIds;
 import org.fogofwarlabs.sc4j.scr.data.type.constant.SpriteIds;
 import org.fogofwarlabs.sc4j.scr.data.type.constant.UnitTypeFlags;
 import org.fogofwarlabs.sc4j.scr.game.creep.CreepField;
+import org.fogofwarlabs.sc4j.scr.game.extension.ScrSimulationPlugins;
 import org.fogofwarlabs.sc4j.scr.game.movement.MovementStates;
 import org.fogofwarlabs.sc4j.scr.game.order.OrderPool;
 import org.fogofwarlabs.sc4j.scr.game.order.ScrOrderSystem;
@@ -24,6 +25,7 @@ import org.fogofwarlabs.sc4j.scr.game.unit.finder.UnitSpatialIndex;
 import org.fogofwarlabs.sc4j.scr.game.visibility.SightCoverage;
 import org.fogofwarlabs.sc4j.scr.game.visibility.SpriteVisibility;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * Maintains unit references, spatial membership, visible/hidden list transitions and the build queue cancellation.
@@ -173,6 +175,28 @@ public final class UnitLifecycle {
      * @throws UnsupportedOperationException if the order pool is not initialized
      */
     public void kill(@NotNull Unit unit, int instructionLimit) {
+        this.kill(unit, null, -1, -1, instructionLimit);
+    }
+
+    /**
+     * Requests death after discarding queued orders; allocation remains owned by the unit pool. The simulation plugins hear the death of a unit
+     * that is not dying yet, with the damage that caused it.
+     *
+     * @param unit             the dying unit
+     * @param killer           the attacking unit of the lethal damage, or {@code null} for none
+     * @param killerPlayer     the player slot the death is credited to, or {@code -1} for none
+     * @param weapon           the weapons.dat entry of the lethal weapon damage, or {@code -1} for none
+     * @param instructionLimit the order transition instruction budget
+     * @throws NullPointerException          if the world was built without game data
+     * @throws UnsupportedOperationException if the order pool is not initialized
+     */
+    public void kill(@NotNull Unit unit, @Nullable Unit killer, int killerPlayer, int weapon, int instructionLimit) {
+        ScrSimulationPlugins simulation = this.game.getSimulationPlugins();
+
+        if (simulation != null && unit.getPrimaryOrder() != ScrOrderIds.DIE) {
+            simulation.reportUnitDied(unit, killer, killerPlayer, weapon);
+        }
+
         // A carried powerup is put down first.
         this.game.getUnitPowerups().drop(unit, instructionLimit);
 
@@ -387,6 +411,12 @@ public final class UnitLifecycle {
     public void destroyHidden(@NotNull Unit unit, int instructionLimit) {
         if ((unit.requireSprite().getFlags() & Sprite.FLAG_HIDDEN) == 0) {
             throw Exceptions.newIllegalStateException("Direct destruction is only represented for hidden units.");
+        }
+
+        ScrSimulationPlugins simulation = this.game.getSimulationPlugins();
+
+        if (simulation != null && unit.getPrimaryOrder() != ScrOrderIds.DIE) {
+            simulation.reportUnitDied(unit, null, -1, -1);
         }
 
         unit.setPrimaryOrder(ScrOrderIds.DIE);

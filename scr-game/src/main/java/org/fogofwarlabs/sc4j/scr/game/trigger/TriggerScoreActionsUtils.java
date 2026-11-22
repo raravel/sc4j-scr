@@ -10,19 +10,19 @@ import org.jetbrains.annotations.NotNull;
  * Applies the resource and score handlers of the trigger actions, and names the resource and score type operands of
  * trigger conditions and actions (the names follow StarEdit).
  */
-final class TriggerScoreActionsUtils {
+public final class TriggerScoreActionsUtils {
     /**
      * The resource type operand of minerals.
      */
-    static final int RESOURCE_MINERALS = 0;
+    public static final int RESOURCE_MINERALS = 0;
     /**
      * The resource type operand of gas.
      */
-    static final int RESOURCE_GAS = 1;
+    public static final int RESOURCE_GAS = 1;
     /**
      * The resource type operand of minerals and gas together.
      */
-    static final int RESOURCE_BOTH = 2;
+    public static final int RESOURCE_BOTH = 2;
 
     /**
      * The score type operand of the total score.
@@ -71,9 +71,7 @@ final class TriggerScoreActionsUtils {
     private static final int HALF_ROUNDING = 1;
 
     /**
-     * Applies Set Resources to one player below 8: set writes the current and gathered amounts, add adds to both,
-     * subtract subtracts from the current amount without going below zero. The resource type selects minerals, gas or
-     * both; other resource types do nothing.
+     * Applies Set Resources to one player below 8 ({@link #setResources(Player, int, int, int)}); other players and resource types do nothing.
      *
      * @param context      the trigger context
      * @param player       the player
@@ -86,7 +84,24 @@ final class TriggerScoreActionsUtils {
             return;
         }
 
-        Player target = context.requirePlayer(player);
+        setResources(context.requirePlayer(player), modifier, resourceType, amount);
+    }
+
+    /**
+     * Sets a player's resources as Set Resources does: {@link TriggerModifiers#SET_TO} writes the current and gathered amounts,
+     * {@link TriggerModifiers#ADD} adds to both, any other modifier subtracts from the current amount without going below zero (unsigned).
+     * The resource type selects minerals, gas or both; other resource types do nothing. Set Resources applies it only to players below
+     * {@code 8}.
+     *
+     * @param target       the player record
+     * @param modifier     the modifier: {@link TriggerModifiers#SET_TO}, {@link TriggerModifiers#ADD} or {@link TriggerModifiers#SUBTRACT}
+     * @param resourceType {@link #RESOURCE_MINERALS}, {@link #RESOURCE_GAS} or {@link #RESOURCE_BOTH}
+     * @param amount       the amount
+     */
+    public static void setResources(@NotNull Player target, int modifier, int resourceType, int amount) {
+        if (resourceType > RESOURCE_BOTH) {
+            return;
+        }
 
         if (resourceType != RESOURCE_GAS) {
             switch (modifier) {

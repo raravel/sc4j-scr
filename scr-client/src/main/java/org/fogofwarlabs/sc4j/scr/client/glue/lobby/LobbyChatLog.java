@@ -1,12 +1,16 @@
 package org.fogofwarlabs.sc4j.scr.client.glue.lobby;
 
 import org.fogofwarlabs.sc4j.base.exception.Exceptions;
-import org.fogofwarlabs.sc4j.engine.client.community.ChannelChat;
-import org.fogofwarlabs.sc4j.engine.client.community.ChatEntry;
-import org.fogofwarlabs.sc4j.engine.client.community.ChatEntryKind;
+import org.fogofwarlabs.sc4j.base.text.LogSelectionModel;
+import org.fogofwarlabs.sc4j.base.text.TextBoundaryUtils;
+import org.fogofwarlabs.sc4j.engine.client.dialog.TextClipboard;
+import org.fogofwarlabs.sc4j.engine.net.beaconlink.community.chat.ChannelChat;
+import org.fogofwarlabs.sc4j.engine.net.beaconlink.community.chat.ChatEntry;
+import org.fogofwarlabs.sc4j.engine.net.beaconlink.community.chat.ChatEntryKind;
 import org.fogofwarlabs.sc4j.engine.resource.dialog.DialogControl;
 import org.fogofwarlabs.sc4j.scr.client.glue.GlueCanvas;
 import org.fogofwarlabs.sc4j.scr.client.glue.GlueScreen;
+import org.fogofwarlabs.sc4j.scr.client.ui.dialog.ControlPainterUtils;
 import org.fogofwarlabs.sc4j.scr.client.ui.dialog.EditControl;
 import org.fogofwarlabs.sc4j.scr.client.ui.dialog.WebPanelStyleUtils;
 import org.fogofwarlabs.sc4j.scr.client.ui.dialog.WebScrollBar;
@@ -26,6 +30,10 @@ import java.util.function.Consumer;
  * Shows the log of a chat page: wrapped sender and message paragraphs, oldest first, with the page's scroll bar, and lays out the page's
  * input. The game lobby, the Beacon.Link channel chat, the room list and the game creation share it; the Beacon.Link pages also share the
  * input's prefix (the channel, or the whisper target) and its keys.
+ * <p>
+ * The log is read-only but selectable ({@link LogSelectionModel}): a press and drag on its text selects across messages, Shift with a press
+ * extends the selection, a double press selects a word, a press elsewhere ends it, and a copy ({@link #copy}) takes the selected text, one
+ * message (sender and text) per line. The pointer maps to the rows as they were last drawn.
  */
 final class LobbyChatLog {
     /**
@@ -156,6 +164,48 @@ final class LobbyChatLog {
             this.text        = text;
             this.prefixColor = prefixColor;
             this.textColor   = textColor;
+        }
+
+        /**
+         * @return the line as copied: the prefix and the text
+         */
+        private @NotNull String getCopiedText() {
+            return this.prefix + this.text;
+        }
+    }
+
+    /**
+     * The characters {@code [start, end)} of a text that one wrapped line shows.
+     */
+    private static final class Span {
+        private final int start;
+        private final int end;
+
+        private Span(int start, int end) {
+            this.start = start;
+            this.end   = end;
+        }
+    }
+
+    /**
+     * A row of the log as last drawn: a part of one line's copied text ({@link Line#getCopiedText}) and where it stands.
+     */
+    private static final class Row {
+        private final int line;
+        /**
+         * The UTF-16 index of the row's first character in the line's copied text.
+         */
+        private final int start;
+        private final @NotNull String text;
+        private final float left;
+        private final float top;
+
+        private Row(int line, int start, @NotNull String text, float left, float top) {
+            this.line  = line;
+            this.start = start;
+            this.text  = text;
+            this.left  = left;
+            this.top   = top;
         }
     }
 
@@ -319,16 +369,17 @@ final class LobbyChatLog {
 
     /**
      * Breaks a text into lines, the first one narrower (it follows the prefix), at spaces where possible and between
-     * characters otherwise ({@code word-wrap: break-word}).
+     * characters otherwise ({@code word-wrap: break-word}); the space at a break shows on neither line.
      *
      * @param canvas     the glue canvas
      * @param text       the text
      * @param firstWidth the width of the first line
      * @param width      the width of the following lines
-     * @return the text with a line feed at each break
+     * @return the characters of each line, in order
      */
-    private static @NotNull String wrapAfter(@NotNull GlueCanvas canvas, @NotNull String text, float firstWidth, float width) {
-        StringBuilder wrapped = new StringBuilder();
+    private static @NotNull List<Span> wrapAfter(@NotNull GlueCanvas canvas, @NotNull String text, float firstWidth, float width) {
+        List<Span> wrapped = new ArrayList<>();
+        int offset = 0;
         String rest = text;
         float room = firstWidth;
 
@@ -341,13 +392,17 @@ final class LobbyChatLog {
 
             int space = rest.lastIndexOf(' ', end);
             int cut = space > 0 ? space : end;
+            int next = space > 0 ? cut + 1 : cut;
 
-            wrapped.append(rest, 0, cut).append('\n');
-            rest = rest.substring(space > 0 ? cut + 1 : cut);
+            wrapped.add(new Span(offset, offset + cut));
+            rest = rest.substring(next);
+            offset += next;
             room = width;
         }
 
-        return wrapped.append(rest).toString();
+        wrapped.add(new Span(offset, text.length()));
+
+        return wrapped;
     }
 
     /**
@@ -360,8 +415,7 @@ final class LobbyChatLog {
      */
     private static float getParagraphHeight(@NotNull GlueCanvas canvas, @NotNull Line line, float width) {
         float prefixWidth = line.prefix.isEmpty() ? 0 : canvas.measure(TEXT, line.prefix);
-        String wrapped = wrapAfter(canvas, line.text, width - prefixWidth, width);
-        int count = (int) wrapped.chars().filter(character -> character == '\n').count() + 1;
+        int count = wrapAfter(canvas, line.text, width - prefixWidth, width).size();
 
         return count * canvas.getLineHeight(TEXT, line.prefix + line.text);
     }
@@ -375,6 +429,16 @@ final class LobbyChatLog {
      * The log the chat hands its entries to while this log listens ({@link #listen}), or {@code null}.
      */
     private @Nullable Consumer<@NotNull ChatEntry> listener;
+
+    private final @NotNull LogSelectionModel selection;
+    /**
+     * The rows of the last draw that show in the log, top first.
+     */
+    private final @NotNull List<Row> rows;
+    /**
+     * The log's text area at the last draw, or {@code null} before the first draw.
+     */
+    private @Nullable Bounds textArea;
 
     /**
      * Creates a {@link LobbyChatLog} instance without lines and without a scroll bar, for a page whose log has no padding over a one-line
@@ -399,6 +463,10 @@ final class LobbyChatLog {
         this.lines    = new ArrayList<>();
         this.scroll   = null;
         this.listener = null;
+
+        this.selection = new LogSelectionModel();
+        this.rows      = new ArrayList<>();
+        this.textArea  = null;
     }
 
     /**
@@ -441,6 +509,7 @@ final class LobbyChatLog {
 
         while (this.lines.size() > this.history) {
             this.lines.removeFirst();
+            this.selection.removeFirstLines(1);
         }
 
         // A new line scrolls the log to its end; before the open there is no bar yet, and the open's bar starts at the end.
@@ -452,7 +521,7 @@ final class LobbyChatLog {
     }
 
     /**
-     * Makes this log the chat's log: each entry of the chat is added in its kind's colors.
+     * Adds this log to the chat's logs: the chat's recent entries and then each new entry are added in their kind's colors.
      *
      * @param chat the chat
      */
@@ -463,12 +532,11 @@ final class LobbyChatLog {
                                                     ChannelChatScreen.getEntryColor(entry.getKind(), false));
 
         this.listener = log;
-        chat.setLog(log);
+        chat.addLog(log, true);
     }
 
     /**
-     * Stops this log taking the chat's entries; a log of another screen that listens since ({@link #listen}) keeps taking them, since the
-     * next screen opens before the left one closes.
+     * Stops this log taking the chat's entries; the chat's other logs keep taking them.
      *
      * @param chat the chat
      */
@@ -482,7 +550,8 @@ final class LobbyChatLog {
     }
 
     /**
-     * Draws wrapped sender/message paragraphs with a shared baseline, clip rectangle and the scroll bar in the log of a chat page.
+     * Draws wrapped sender/message paragraphs with a shared baseline, clip rectangle, the selection and the scroll bar in the log of a chat
+     * page, and keeps the drawn rows for the pointer ({@link #press}, {@link #drag}).
      *
      * @param canvas the glue canvas
      * @param left   the page's left edge in interface pixels
@@ -516,9 +585,13 @@ final class LobbyChatLog {
         bar.setContent(total, logHeight);
         canvas.setClip(logLeft, logTop, logRight - logLeft, logHeight);
 
+        this.rows.clear();
+        this.textArea = new Bounds(logLeft, logTop, logLeft + textWidth, logBottom);
+
         float y = logTop - bar.getOffset();
 
-        for (Line line : this.lines) {
+        for (int index = 0; index < this.lines.size(); index++) {
+            Line line = this.lines.get(index);
             float lineHeight = canvas.getLineHeight(TEXT, line.prefix + line.text);
             float paragraph = getParagraphHeight(canvas, line, textWidth);
 
@@ -527,9 +600,23 @@ final class LobbyChatLog {
 
                 // The text continues after the prefix on the first line and wraps below it (an inline span); the two spans
                 // share the first line's baseline (one line box for both).
-                String wrapped = wrapAfter(canvas, line.text, textWidth - prefixWidth, textWidth);
-                int firstEnd = wrapped.indexOf('\n');
-                String first = firstEnd < 0 ? wrapped : wrapped.substring(0, firstEnd);
+                List<Span> spans = wrapAfter(canvas, line.text, textWidth - prefixWidth, textWidth);
+                StringBuilder following = new StringBuilder();
+
+                for (int row = 0; row < spans.size(); row++) {
+                    Span span = spans.get(row);
+                    String part = line.text.substring(span.start, span.end);
+
+                    if (row == 0) {
+                        this.rows.add(new Row(index, 0, line.prefix + part, logLeft, y));
+                    } else {
+                        this.rows.add(new Row(index, line.prefix.length() + span.start, part, logLeft, y + row * lineHeight));
+                        following.append(row > 1 ? "\n" : "").append(part);
+                    }
+                }
+
+                Span firstSpan = spans.getFirst();
+                String first = line.text.substring(firstSpan.start, firstSpan.end);
                 float baseline = canvas.getBaseline(TEXT, line.prefix + first);
 
                 if (!line.prefix.isEmpty()) {
@@ -550,10 +637,10 @@ final class LobbyChatLog {
                                             GlueCanvas.FORMAT_LEFT | GlueCanvas.FORMAT_TOP,
                                             line.textColor);
 
-                if (firstEnd >= 0) {
+                if (spans.size() > 1) {
                     WebPanelStyleUtils.drawText(canvas,
                                                 TEXT,
-                                                wrapped.substring(firstEnd + 1),
+                                                following.toString(),
                                                 logLeft, y + lineHeight,
                                                 textWidth + TEXT_WIDTH_PADDING, paragraph - lineHeight,
                                                 GlueCanvas.FORMAT_LEFT | GlueCanvas.FORMAT_TOP,
@@ -562,6 +649,22 @@ final class LobbyChatLog {
             }
 
             y += paragraph + PARAGRAPH_GAP;
+        }
+
+        // The selection is marked over the text as a text input's is (ControlPainterUtils.fillTextRange).
+        for (Row row : this.rows) {
+            if (this.selection.isSelected(row.line)) {
+                Line line = this.lines.get(row.line);
+                int length = line.prefix.length() + line.text.length();
+
+                ControlPainterUtils.fillTextRange(canvas,
+                                                  TEXT,
+                                                  row.text,
+                                                  this.selection.getSelectionStart(row.line) - row.start,
+                                                  this.selection.getSelectionEnd(row.line, length) - row.start,
+                                                  row.left,
+                                                  row.top);
+            }
         }
 
         canvas.setClip(0, 0, GlueCanvas.NO_CLIP_SIZE, 0);
@@ -586,34 +689,144 @@ final class LobbyChatLog {
     }
 
     /**
-     * Presses the scroll bar.
+     * Presses the log: the scroll bar, or the text, where the press starts a selection ({@link LogSelectionModel#press}) or selects a word
+     * on a double press; a press elsewhere ends the selection.
      *
-     * @param x the interface x
-     * @param y the interface y
-     * @return {@code true} if the press hit the scroll bar, {@code false} otherwise
+     * @param canvas      the glue canvas
+     * @param x           the interface x
+     * @param y           the interface y
+     * @param extend      whether the press extends the selection (Shift held)
+     * @param doublePress whether the press is a double press
+     * @return {@code true} if the press hit the scroll bar or the text area, {@code false} otherwise
      * @throws IllegalStateException if the log has no scroll bar yet
      */
-    boolean press(float x, float y) {
-        return this.requireScrollBar().press(x, y);
+    boolean press(@NotNull GlueCanvas canvas, float x, float y, boolean extend, boolean doublePress) {
+        if (this.requireScrollBar().press(x, y)) {
+            return true;
+        }
+
+        Bounds area = this.textArea;
+
+        if (area == null || !GlueCanvas.contains(x, y, area.getLeft(), area.getTop(), area.getRight() - area.getLeft(), area.getBottom() - area.getTop())) {
+            this.selection.clear();
+
+            return false;
+        }
+
+        Row row = this.findRow(y);
+
+        if (row == null) {
+            this.selection.clear();
+
+            return true;
+        }
+
+        int index = row.start + TextBoundaryUtils.findIndexAt(row.text, x - row.left, text -> canvas.measure(TEXT, text));
+
+        if (doublePress) {
+            this.selection.selectWord(row.line, this.lines.get(row.line).getCopiedText(), index);
+        } else {
+            this.selection.press(row.line, index, extend);
+        }
+
+        return true;
     }
 
     /**
-     * Drags the pressed scroll bar.
+     * Drags the pressed scroll bar, or the end of a selection the press started; above or below the log the end goes to the start of the
+     * top row or the end of the bottom row.
      *
-     * @param y the interface y
+     * @param canvas the glue canvas
+     * @param x      the interface x
+     * @param y      the interface y
      * @throws IllegalStateException if the log has no scroll bar yet
      */
-    void drag(float y) {
+    void drag(@NotNull GlueCanvas canvas, float x, float y) {
         this.requireScrollBar().drag(y);
+
+        Bounds area = this.textArea;
+
+        if (!this.selection.isDragging() || area == null) {
+            return;
+        }
+
+        Row row = this.findRow(y);
+
+        if (row == null) {
+            return;
+        }
+
+        int index;
+
+        if (y < area.getTop()) {
+            index = row.start;
+        } else if (y >= area.getBottom()) {
+            index = row.start + row.text.length();
+        } else {
+            index = row.start + TextBoundaryUtils.findIndexAt(row.text, x - row.left, text -> canvas.measure(TEXT, text));
+        }
+
+        this.selection.drag(row.line, index);
     }
 
     /**
-     * Releases the scroll bar.
+     * Releases the scroll bar and the selection's press; the selection stays.
      *
      * @throws IllegalStateException if the log has no scroll bar yet
      */
     void release() {
         this.requireScrollBar().release();
+        this.selection.release();
+    }
+
+    /**
+     * Copies the selected text, one message per line ({@link LogSelectionModel#getSelectedText}).
+     *
+     * @param clipboard the clipboard
+     * @return {@code true} if text was selected and copied, {@code false} otherwise
+     */
+    boolean copy(@NotNull TextClipboard clipboard) {
+        if (!this.selection.hasSelection()) {
+            return false;
+        }
+
+        List<String> copied = new ArrayList<>(this.lines.size());
+
+        for (Line line : this.lines) {
+            copied.add(line.getCopiedText());
+        }
+
+        clipboard.write(this.selection.getSelectedText(copied));
+
+        return true;
+    }
+
+    /**
+     * Finds the row of the last draw at an interface y: the last row that starts at or above it (a paragraph gap belongs to the row above),
+     * the top row above the log and the bottom row below it.
+     *
+     * @param y the interface y
+     * @return the row, or {@code null} if no row was drawn
+     */
+    private @Nullable Row findRow(float y) {
+        if (this.rows.isEmpty()) {
+            return null;
+        }
+
+        Bounds area = this.textArea;
+        // The bottom edge itself belongs to the row above it.
+        float clamped = area == null ? y : Math.clamp(y, area.getTop(), Math.max(area.getTop(), area.getBottom() - 1));
+        Row found = this.rows.getFirst();
+
+        for (Row row : this.rows) {
+            if (row.top > clamped) {
+                break;
+            }
+
+            found = row;
+        }
+
+        return found;
     }
 
     /**

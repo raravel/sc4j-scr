@@ -353,6 +353,7 @@ public final class ButtonConditionEvaluator {
                                          ? HIDDEN
                                          : this.evaluateAnySelectedUnit(selection, ButtonConditionEvaluator::isNotConstructing);
             case SINGLE_UNIT_REQUIREMENT -> selection.getCount() == 1 ? this.requirements.evaluateUnit(value, player, active) : HIDDEN;
+            case SCRIPT -> this.view.getButtonStates().getState(value);
             case ALWAYS, REPLAY_PLAY_PAUSE, REPLAY_SLOW_DOWN, REPLAY_SPEED_UP ->
                     throw Exceptions.newIllegalStateException("Selection-independent conditions are evaluated before the active unit.");
         };

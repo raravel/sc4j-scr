@@ -14,6 +14,7 @@ import org.fogofwarlabs.sc4j.scr.game.ability.UnitHangar;
 import org.fogofwarlabs.sc4j.scr.game.ai.ComputerCombat;
 import org.fogofwarlabs.sc4j.scr.game.ai.ComputerPlayerPhase;
 import org.fogofwarlabs.sc4j.scr.game.ai.ComputerTerrain;
+import org.fogofwarlabs.sc4j.scr.game.extension.ScrSimulationPlugins;
 import org.fogofwarlabs.sc4j.scr.game.movement.FlingyMotionUtils;
 import org.fogofwarlabs.sc4j.scr.game.order.UnitOrderEligibility;
 import org.fogofwarlabs.sc4j.scr.game.player.*;
@@ -830,7 +831,8 @@ public final class UnitTargeting {
      * Finds the nearest visible enemy in the best priority class within the acquisition range.
      * <p>
      * Only the first sixteen candidates of a priority class compete, in unit finder order; the first nearest candidate wins ties. When the computer
-     * phase exists, computer-owned units delegate to {@link ComputerCombat#findAcquireTarget}.
+     * phase exists, computer-owned units delegate to {@link ComputerCombat#findAcquireTarget}. The simulation plugins decide a found target
+     * ({@link ScrSimulationPlugins#decideAcquiredTarget}).
      *
      * @param unit the acquiring unit
      * @return the selected target, or {@code null}
@@ -881,13 +883,16 @@ public final class UnitTargeting {
             }
         }
 
-        return best;
+        ScrSimulationPlugins simulation = this.game.getSimulationPlugins();
+
+        return simulation != null ? simulation.decideAcquiredTarget(unit, best) : best;
     }
 
     /**
      * Selects a random visible enemy from the best priority class within the acquisition range.
      * <p>
-     * Consumes random source {@code 19} only when the class holds more than one of its first sixteen candidates.
+     * Consumes random source {@code 19} only when the class holds more than one of its first sixteen candidates. The simulation plugins decide a
+     * found target ({@link ScrSimulationPlugins#decideAcquiredTarget}).
      *
      * @param unit the acquiring unit
      * @return the selected target, or {@code null}
@@ -926,7 +931,9 @@ public final class UnitTargeting {
             Unit candidate = spatialIndex.getPlacementCandidate(index);
 
             if (this.getRandomCandidatePriority(unit, candidate, maximumDistance) == bestPriority && selected-- == 0) {
-                return candidate;
+                ScrSimulationPlugins simulation = this.game.getSimulationPlugins();
+
+                return simulation != null ? simulation.decideAcquiredTarget(unit, candidate) : candidate;
             }
         }
 

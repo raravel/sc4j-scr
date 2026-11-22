@@ -686,6 +686,113 @@ final class LanMapTransferTest {
         Assertions.assertEquals(List.of("2:0301", "1:0301"), sent);
     }
 
+    /**
+     * Checks a mod's downloader: it gets the host's shared file and the joiner's missing map, whose status then waits; a file of another
+     * checksum hands the map back to the chunks, which carry it as without a downloader; a file of the information's size and checksum is
+     * saved and completes the host's map; closing the transfer closes the downloader.
+     *
+     * @param folder the temporary folder of the map and the joiner's map folder
+     */
+    @Test
+    void downloader_takes_over_a_missing_map_and_hands_it_back_to_the_chunks(@TempDir @NotNull Path folder) throws Exception {
+        byte[] contents = new byte[CHUNKED_MAP_SIZE];
+
+        new Random(CHUNKED_MAP_SEED).nextBytes(contents);
+
+        Path source = Files.write(folder.resolve(RANDOM_MAP), contents);
+        List<Object[]> queue = new ArrayList<>();
+        LanMapTransfer[] transfers = new LanMapTransfer[DOWNLOAD_CLIENTS];
+        List<LanMapTransfer.SharedFile> shared = new ArrayList<>();
+        List<LanMapTransfer.Transfer> taken = new ArrayList<>();
+        boolean[] closed = new boolean[1];
+
+        for (int player = 0; player < DOWNLOAD_CLIENTS; player++) {
+            int sender = player;
+
+            transfers[player] = new LanMapTransfer(player, (target, data) -> queue.add(new Object[]{sender, target, data}), MESSAGE_LIMIT);
+            transfers[player].setDownloader(new LanMapDownloader() {
+                @Override
+                public void share(LanMapTransfer.@NotNull SharedFile map) {
+                    shared.add(map);
+                }
+
+                @Override
+                public boolean download(LanMapTransfer.@NotNull Transfer transfer) {
+                    return taken.add(transfer);
+                }
+
+                @Override
+                public void update() {
+                }
+
+                @Override
+                public void close() {
+                    closed[0] = true;
+                }
+            });
+        }
+
+        Path maps = Files.createDirectories(folder.resolve("maps"));
+        Runnable deliver = () -> {
+            while (!queue.isEmpty()) {
+                Object[] message = queue.removeFirst();
+
+                transfers[(int) message[MESSAGE_TARGET]].receive((int) message[MESSAGE_SENDER], (byte[]) message[MESSAGE_DATA]);
+            }
+        };
+
+        transfers[JOINER_PLAYER].setFolders(MapFolders.of(List.of(maps), LanMapTransfer.DOWNLOAD_FOLDER));
+
+        LanMapTransfer.SharedFile map = transfers[HOST_PLAYER].share(source);
+
+        Assertions.assertNotNull(map);
+        Assertions.assertEquals(List.of(map), shared);
+
+        transfers[HOST_PLAYER].addPlayer(map, HOST_PLAYER);
+        transfers[HOST_PLAYER].addPlayer(map, JOINER_PLAYER);
+        deliver.run();
+
+        Assertions.assertEquals(1, taken.size(), "the joiner's missing map");
+        Assertions.assertEquals(RANDOM_MAP, taken.getFirst().getName());
+        Assertions.assertFalse(transfers[HOST_PLAYER].isComplete(map), "the joiner's status waits for the downloader");
+
+        transfers[JOINER_PLAYER].reportProgress(taken.getFirst(), contents.length / 2);
+
+        Assertions.assertEquals(50, transfers[JOINER_PLAYER].getDownloadPercent());
+
+        byte[] other = contents.clone();
+
+        other[0] ^= 1;
+
+        Assertions.assertFalse(transfers[JOINER_PLAYER].completeDownload(taken.getFirst(), other));
+        deliver.run();
+
+        Assertions.assertTrue(transfers[HOST_PLAYER].isComplete(map), "the chunks carried the map");
+        Assertions.assertArrayEquals(contents, Files.readAllBytes(maps.resolve("Download").resolve(RANDOM_MAP)));
+        Assertions.assertFalse(transfers[JOINER_PLAYER].completeDownload(taken.getFirst(), contents), "a saved map stays");
+
+        LanMapTransfer.SharedFile second = transfers[HOST_PLAYER].share(source);
+
+        Assertions.assertNotNull(second);
+
+        Path secondMaps = Files.createDirectories(folder.resolve("second"));
+
+        transfers[JOINER_PLAYER].setFolders(MapFolders.of(List.of(secondMaps), LanMapTransfer.DOWNLOAD_FOLDER));
+        transfers[HOST_PLAYER].addPlayer(second, JOINER_PLAYER);
+        deliver.run();
+
+        Assertions.assertEquals(2, taken.size());
+        Assertions.assertTrue(transfers[JOINER_PLAYER].completeDownload(taken.getLast(), contents));
+        deliver.run();
+
+        Assertions.assertTrue(transfers[HOST_PLAYER].isComplete(second), "the downloaded map completes the host's map");
+        Assertions.assertArrayEquals(contents, Files.readAllBytes(secondMaps.resolve("Download").resolve(RANDOM_MAP)));
+
+        transfers[JOINER_PLAYER].close(null);
+
+        Assertions.assertTrue(closed[0]);
+    }
+
     @Test
     void create_file_match_should_take_any_name_with_the_size_and_checksum(@TempDir @NotNull Path folder) throws Exception {
         byte[] contents = new byte[MAP_COPY_SIZE];

@@ -43,11 +43,7 @@ final class TriggerHangarStorageTest {
 
                 pool.setCreationTag(parent.getIndex(), CREATION_TAG);
 
-                TriggerContext context = new TriggerContext();
-
-                context.instructionLimit = RunningGameScenario.INSTRUCTION_LIMIT;
-
-                Assertions.assertTrue(game.getTriggerUnitActions().modifyHangar(context, parent, ADDED_COUNT));
+                Assertions.assertTrue(game.getTriggerUnitActions().modifyHangar(parent, ADDED_COUNT, RunningGameScenario.INSTRUCTION_LIMIT));
                 Assertions.assertEquals(ADDED_COUNT, parent.getHangarCount(false));
                 Assertions.assertEquals(0, parent.getHangarCount(true));
 

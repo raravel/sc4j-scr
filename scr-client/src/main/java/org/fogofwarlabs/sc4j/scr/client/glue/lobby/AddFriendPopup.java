@@ -1,9 +1,10 @@
 package org.fogofwarlabs.sc4j.scr.client.glue.lobby;
 
-import org.fogofwarlabs.sc4j.engine.client.community.ChannelChat;
 import org.fogofwarlabs.sc4j.engine.net.beaconlink.community.PlayerPresence;
+import org.fogofwarlabs.sc4j.engine.net.beaconlink.community.chat.ChannelChat;
 import org.fogofwarlabs.sc4j.scr.client.glue.GlueCanvas;
 import org.fogofwarlabs.sc4j.scr.client.glue.GlueContext;
+import org.fogofwarlabs.sc4j.scr.client.glue.OwnText;
 import org.jetbrains.annotations.NotNull;
 
 import java.io.IOException;
@@ -109,7 +110,7 @@ final class AddFriendPopup extends BeaconLinkPopup {
      */
     @Override
     @NotNull String getInputHint() {
-        return BeaconLinkText.FRIEND_LABEL.get(this.getLocale());
+        return OwnText.FRIEND_LABEL.get(this.getLocale());
     }
 
     /**

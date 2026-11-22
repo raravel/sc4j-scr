@@ -110,8 +110,8 @@ public final class ScrMod implements Mod {
             }
 
             try {
-                Main.launch(InstallLayout.of(this.clientRoot), this.resources, launch.getBeaconLink(), describeBuild(launch.getIdentity()),
-                            arguments.toArray(String[]::new));
+                Main.launch(InstallLayout.of(this.clientRoot), this.resources, launch.getBeaconLink(),
+                            describeBuild(launch.getIdentity()), arguments.toArray(String[]::new));
             } catch (IOException exception) {
                 throw Exceptions.newUncheckedIOException(exception);
             }

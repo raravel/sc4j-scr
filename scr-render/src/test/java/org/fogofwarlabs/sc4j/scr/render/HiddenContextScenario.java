@@ -6,22 +6,13 @@ import org.fogofwarlabs.sc4j.engine.client.host.WindowSettings;
 import org.jetbrains.annotations.NotNull;
 
 import java.io.IOException;
-import java.nio.ByteBuffer;
-
-import static org.lwjgl.opengl.GL33C.*;
 
 /**
- * Runs the GPU checks of the render tests on a hidden OpenGL 3.3 core context of the engine host and reads the drawn window back.
+ * Runs the GPU checks of the render tests on a hidden OpenGL 3.3 core context of the engine host.
  */
 public final class HiddenContextScenario {
     /**
-     * The bit shifts of the red and green channels in a read-back {@code 0xRRGGBB} color.
-     */
-    private static final int RED_SHIFT = 16;
-    private static final int GREEN_SHIFT = 8;
-
-    /**
-     * Draws and checks on the hidden context.
+     * A check that runs on the hidden context.
      */
     public interface Check {
         /**
@@ -51,43 +42,6 @@ public final class HiddenContextScenario {
 
             check.run();
         }
-    }
-
-    /**
-     * Reads the window back as {@code 0xRRGGBB} colors.
-     *
-     * @param pixels the read-back buffer of the whole window
-     * @param width  the window width in pixels
-     * @param height the window height in pixels
-     * @return the row-major colors, top row first
-     */
-    public static int @NotNull [] readColors(@NotNull ByteBuffer pixels, int width, int height) {
-        glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-
-        int[] result = new int[width * height];
-
-        for (int vertical = 0; vertical < height; vertical++) {
-            for (int horizontal = 0; horizontal < width; horizontal++) {
-                int source = ((height - 1 - vertical) * width + horizontal) * OverlayPass.RGBA_BYTES;
-
-                result[vertical * width + horizontal] = readColor(pixels, source);
-            }
-        }
-
-        return result;
-    }
-
-    /**
-     * Reads a read-back RGBA pixel as a {@code 0xRRGGBB} color.
-     *
-     * @param pixels the read-back buffer
-     * @param source the byte offset of the pixel
-     * @return the pixel color
-     */
-    public static int readColor(@NotNull ByteBuffer pixels, int source) {
-        return Byte.toUnsignedInt(pixels.get(source)) << RED_SHIFT |
-               Byte.toUnsignedInt(pixels.get(source + OverlayPass.RGBA_GREEN)) << GREEN_SHIFT |
-               Byte.toUnsignedInt(pixels.get(source + OverlayPass.RGBA_BLUE));
     }
 
     private HiddenContextScenario() {

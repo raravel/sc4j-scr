@@ -74,7 +74,7 @@ cd sc4j-scr
 | 명령 | 실행 | 필요 |
 |---|---|---|
 | `.\gradlew.bat build` | 단위 테스트와 검사 | 없음 |
-| `.\gradlew.bat integrationTest` | `@RequiresInstallation` 테스트, GPU 스모크 테스트 | `sc4j.data`, GPU(`-Psc4j.render.smoke=false`면 GPU 테스트 건너뜀) |
+| `.\gradlew.bat integrationTest` | `@RequiresInstallation` 테스트, GPU 테스트 | `sc4j.data`, GPU(`-Psc4j.render.smoke=false`면 GPU 테스트 건너뜀) |
 | `.\gradlew.bat corpusTest` | `@CorpusTest` 장시간 실행 | `sc4j.data`와 아래 폴더. 폴더가 없는 테스트는 건너뜀 |
 
 | 속성 | 폴더 |

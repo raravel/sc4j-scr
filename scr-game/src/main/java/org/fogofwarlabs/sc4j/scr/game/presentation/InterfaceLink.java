@@ -2,6 +2,8 @@ package org.fogofwarlabs.sc4j.scr.game.presentation;
 
 import org.fogofwarlabs.sc4j.base.exception.Exceptions;
 import org.fogofwarlabs.sc4j.scr.game.ability.TransportCargo;
+import org.fogofwarlabs.sc4j.scr.game.extension.ScrModCommandSubmitter;
+import org.fogofwarlabs.sc4j.scr.game.extension.ScrPauseRequester;
 import org.fogofwarlabs.sc4j.scr.game.replay.ReplaySession;
 import org.fogofwarlabs.sc4j.scr.game.session.OutgoingTurnBuffer;
 import org.fogofwarlabs.sc4j.scr.game.trigger.eud.region.LocalInterfaceState;
@@ -14,7 +16,7 @@ import org.jetbrains.annotations.Nullable;
 /**
  * Connects one game to the local interface: the presentation events the simulation raises for the client (sounds, under-attack alerts, command
  * errors, notifications, message lines) and the local inputs it reads (key states, interface state, view, the local selection, the outgoing turn
- * buffer and turn limits of the session).
+ * buffer and turn limits of the session), and the mod command submitter and the pause requester of a live session's local player.
  * <p>
  * None of this is simulation state; the state hash does not cover it.
  */
@@ -33,10 +35,13 @@ public final class InterfaceLink {
     private final @NotNull CommandErrorEvents commandErrorEvents;
     private final @NotNull NotificationEvents notificationEvents;
     private final @NotNull MessageLines messageLines;
+    private final @NotNull StatTextOverrides statTextOverrides;
+    private final @NotNull ScrButtonStates buttonStates;
 
     private final @NotNull LocalKeyStates localKeyStates;
     private final @NotNull LocalInterfaceState localInterface;
     private final @NotNull LocalView localView;
+    private final @NotNull LocalDisplay localDisplay;
     private @NotNull LocalSelection localSelection;
 
     /**
@@ -51,6 +56,14 @@ public final class InterfaceLink {
      * The maximum turn bytes of the session, or {@link #UNSUPPLIED}.
      */
     private int maximumTurnBytes;
+    /**
+     * The mod command submitter of the live session's local player, or {@code null} when no session supplies it.
+     */
+    private @Nullable ScrModCommandSubmitter modCommandSubmitter;
+    /**
+     * The pause requester of the live session's local player, or {@code null} when no session supplies it.
+     */
+    private @Nullable ScrPauseRequester pauseRequester;
 
     /**
      * Creates an {@link InterfaceLink} instance without a local interface or session.
@@ -61,15 +74,21 @@ public final class InterfaceLink {
         this.commandErrorEvents = new CommandErrorEvents();
         this.notificationEvents = new NotificationEvents();
         this.messageLines       = new MessageLines();
+        this.statTextOverrides  = new StatTextOverrides();
+        this.buttonStates       = new ScrButtonStates();
 
         this.localKeyStates = new LocalKeyStates();
         this.localInterface = new LocalInterfaceState();
         this.localView      = new LocalView();
+        this.localDisplay   = new LocalDisplay();
         this.localSelection = new HeadlessLocalSelection();
 
         this.outgoingTurn     = null;
         this.latencyTurns     = UNSUPPLIED;
         this.maximumTurnBytes = UNSUPPLIED;
+
+        this.modCommandSubmitter = null;
+        this.pauseRequester      = null;
     }
 
     /**
@@ -110,6 +129,20 @@ public final class InterfaceLink {
     }
 
     /**
+     * @return the {@code stat_txt} strings shown instead of those of the game's table
+     */
+    public @NotNull StatTextOverrides getStatTextOverrides() {
+        return this.statTextOverrides;
+    }
+
+    /**
+     * @return the local command card state a game plugin sets: the script button states and the requested button set
+     */
+    public @NotNull ScrButtonStates getButtonStates() {
+        return this.buttonStates;
+    }
+
+    /**
      * @return the local key states, a local input that EUD-mode maps can read
      */
     public @NotNull LocalKeyStates getLocalKeyStates() {
@@ -128,6 +161,13 @@ public final class InterfaceLink {
      */
     public @NotNull LocalView getLocalView() {
         return this.localView;
+    }
+
+    /**
+     * @return the game screen of the local machine as the client last drew it, a local input of the interface
+     */
+    public @NotNull LocalDisplay getLocalDisplay() {
+        return this.localDisplay;
     }
 
     /**
@@ -177,6 +217,24 @@ public final class InterfaceLink {
     }
 
     /**
+     * Returns the submitter of the local player's mod commands, which a live session supplies when it starts unless the local player observes.
+     *
+     * @return the submitter, or {@code null} in a replay, while observing and before the session starts
+     */
+    public @Nullable ScrModCommandSubmitter getModCommandSubmitter() {
+        return this.modCommandSubmitter;
+    }
+
+    /**
+     * Returns the requester of the local player's menu pause and resume, which a live session supplies when it starts.
+     *
+     * @return the requester, or {@code null} in a replay and before the session starts
+     */
+    public @Nullable ScrPauseRequester getPauseRequester() {
+        return this.pauseRequester;
+    }
+
+    /**
      * Sets the local interface's selection that the simulation reports to (live play only; a replay records the resulting commands).
      *
      * @param localSelection the local selection, or {@code null} for a new {@link HeadlessLocalSelection}
@@ -203,6 +261,24 @@ public final class InterfaceLink {
     public void setSessionTurnLimits(int latencyTurns, int maximumTurnBytes) {
         this.latencyTurns     = latencyTurns;
         this.maximumTurnBytes = maximumTurnBytes;
+    }
+
+    /**
+     * Sets the submitter of the local player's mod commands, which the live session owns.
+     *
+     * @param modCommandSubmitter the submitter, or {@code null} when the local player submits none
+     */
+    public void setModCommandSubmitter(@Nullable ScrModCommandSubmitter modCommandSubmitter) {
+        this.modCommandSubmitter = modCommandSubmitter;
+    }
+
+    /**
+     * Sets the requester of the local player's menu pause and resume, which the live session owns.
+     *
+     * @param pauseRequester the requester, or {@code null} when the local player requests none
+     */
+    public void setPauseRequester(@Nullable ScrPauseRequester pauseRequester) {
+        this.pauseRequester = pauseRequester;
     }
 
 

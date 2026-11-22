@@ -8,6 +8,7 @@ import org.fogofwarlabs.sc4j.scr.data.format.terrain.TerrainTileset;
 import org.fogofwarlabs.sc4j.scr.data.type.ScrUnitTypeView;
 import org.fogofwarlabs.sc4j.scr.data.type.constant.ButtonSetIds;
 import org.fogofwarlabs.sc4j.scr.data.type.constant.UnitTypeFlags;
+import org.fogofwarlabs.sc4j.scr.game.extension.ScrSimulationPlugins;
 import org.fogofwarlabs.sc4j.scr.game.order.ScrOrderSystem;
 import org.fogofwarlabs.sc4j.scr.game.player.PlayerTable;
 import org.fogofwarlabs.sc4j.scr.game.player.UnitAccounting;
@@ -311,7 +312,8 @@ public final class UnitStorageConstructor {
      * Creates and links a primary unit and its required turret.
      * <p>
      * Random source {@code 14} is consumed even when storage creation fails. A required turret is created after primary
-     * commitment and list insertion; turret failure destroys the primary unit and fails creation.
+     * commitment and list insertion; turret failure destroys the primary unit and fails creation. The simulation plugins hear the primary unit's
+     * creation after its list insertion.
      *
      * @param creation         the unit creation inputs
      * @param accounting       the established game-context counters
@@ -343,6 +345,12 @@ public final class UnitStorageConstructor {
         }
 
         this.game.getUnitSystem().requireUnitPool().insertCreatedUnit(unit);
+
+        ScrSimulationPlugins simulation = this.game.getSimulationPlugins();
+
+        if (simulation != null) {
+            simulation.reportUnitCreated(unit);
+        }
 
         int subunitType = this.game.requireGameData().getUnitTypes().getFirstSubunit(unitType);
 

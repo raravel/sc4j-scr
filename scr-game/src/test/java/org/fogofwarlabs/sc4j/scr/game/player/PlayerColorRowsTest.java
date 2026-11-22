@@ -16,7 +16,7 @@ import org.junit.jupiter.api.Test;
 import java.nio.file.Files;
 
 /**
- * Checks that EUD and renderers use the same live player color table, which the map's {@code COLR} section remapped.
+ * Checks that EUD, the named setters and renderers use the same live player color table, which the map's {@code COLR} section remapped.
  */
 @RequiresInstallation
 final class PlayerColorRowsTest {
@@ -48,6 +48,14 @@ final class PlayerColorRowsTest {
      * The minimap color that the EUD write stores.
      */
     private static final int WRITTEN_MINIMAP_COLOR = 0x66;
+    /**
+     * The unit color that the named setter stores.
+     */
+    private static final int SET_UNIT_COLOR = 0x77;
+    /**
+     * The minimap color that the named setter stores.
+     */
+    private static final int SET_MINIMAP_COLOR = 0x88;
     /**
      * The elapsed host ticks of the replay runtime start.
      */
@@ -140,6 +148,13 @@ final class PlayerColorRowsTest {
 
             // A later address space (another trigger context) shows the same live rows.
             Assertions.assertEquals(WRITTEN_UNIT_COLOR, ClassicAddressSpace.create(game).readDword(aligned) >>> shift & BYTE_MASK);
+
+            // The named setters store the bytes that EUD reads.
+            rows.setUnitColor(FIRST_PLAYER, FIRST_UNIT_COLOR, SET_UNIT_COLOR);
+            rows.setMinimapColor(FIRST_PLAYER, SET_MINIMAP_COLOR);
+
+            Assertions.assertEquals(SET_UNIT_COLOR, space.readDword(aligned) >>> shift & BYTE_MASK);
+            Assertions.assertEquals(SET_MINIMAP_COLOR, space.readDword(minimapAligned) >>> MINIMAP_COLOR_SHIFT & BYTE_MASK);
         }
     }
 }

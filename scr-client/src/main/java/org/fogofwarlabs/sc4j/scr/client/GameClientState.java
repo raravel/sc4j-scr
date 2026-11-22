@@ -13,7 +13,9 @@ import org.fogofwarlabs.sc4j.scr.client.ui.command.HotkeyPress;
 import org.fogofwarlabs.sc4j.scr.client.ui.console.*;
 import org.fogofwarlabs.sc4j.scr.client.ui.dialog.ScrDialog;
 import org.fogofwarlabs.sc4j.scr.client.ui.dialog.ScrDialogLayer;
+import org.fogofwarlabs.sc4j.scr.client.ui.input.GameAccelerators;
 import org.fogofwarlabs.sc4j.scr.client.ui.input.VirtualKeys;
+import org.fogofwarlabs.sc4j.scr.client.ui.input.WorldInterface;
 import org.fogofwarlabs.sc4j.scr.client.ui.menu.AllianceDialog;
 import org.fogofwarlabs.sc4j.scr.client.ui.menu.GameMenu;
 import org.fogofwarlabs.sc4j.scr.client.ui.menu.NetworkWaitDialog;
@@ -21,6 +23,9 @@ import org.fogofwarlabs.sc4j.scr.client.ui.observer.ReplaySideBar;
 import org.fogofwarlabs.sc4j.scr.client.world.ClientCamera;
 import org.fogofwarlabs.sc4j.scr.client.world.GameViewport;
 import org.fogofwarlabs.sc4j.scr.data.format.terrain.TerrainTileset;
+import org.fogofwarlabs.sc4j.scr.game.extension.ScrGamePlugin;
+import org.fogofwarlabs.sc4j.scr.game.extension.ScrInputModifiers;
+import org.fogofwarlabs.sc4j.scr.game.extension.ScrMouseInput;
 import org.fogofwarlabs.sc4j.scr.game.session.LiveGame;
 import org.fogofwarlabs.sc4j.scr.game.trigger.eud.region.LocalKeyStates;
 import org.fogofwarlabs.sc4j.scr.game.unit.Unit;
@@ -94,6 +99,44 @@ final class GameClientState implements InputListener {
     private static final int VIEW_HALF_DIVISOR = 2;
 
     /**
+     * Converts the modifier mask of a window input event to the modifier mask game plugins see.
+     *
+     * @param modifiers the modifier mask ({@link KeyModifier#getMask()} bits)
+     * @return the held Shift, Control and Alt keys ({@link ScrInputModifiers} bits)
+     */
+    private static int toPluginModifiers(int modifiers) {
+        int converted = 0;
+
+        if (KeyModifier.SHIFT.isIn(modifiers)) {
+            converted |= ScrInputModifiers.SHIFT;
+        }
+
+        if (KeyModifier.CONTROL.isIn(modifiers)) {
+            converted |= ScrInputModifiers.CONTROL;
+        }
+
+        if (KeyModifier.ALT.isIn(modifiers)) {
+            converted |= ScrInputModifiers.ALT;
+        }
+
+        return converted;
+    }
+
+    /**
+     * @param button a window pointer button
+     * @return the button game plugins see, or {@code null} for a button they do not see
+     */
+    private static ScrMouseInput.@Nullable Button toPluginButton(@NotNull PointerButton button) {
+        return switch (button) {
+            case LEFT -> ScrMouseInput.Button.LEFT;
+            case RIGHT -> ScrMouseInput.Button.RIGHT;
+            case MIDDLE -> ScrMouseInput.Button.MIDDLE;
+            default -> null;
+        };
+    }
+
+
+    /**
      * The in-game dialogs this state put into the client's dialog list.
      */
     private final @NotNull List<ScrDialogLayer> gameDialogLayers;
@@ -101,6 +144,10 @@ final class GameClientState implements InputListener {
     private final @NotNull Main main;
     private final @NotNull UnitInspection inspection;
     private final @NotNull ChatPrompt chatPrompt;
+    /**
+     * The key and mouse button presses delivered to the game's plugins.
+     */
+    private final @NotNull GamePluginInput pluginInput;
 
     /**
      * Whether a minimap press drags the camera.
@@ -143,9 +190,10 @@ final class GameClientState implements InputListener {
     GameClientState(@NotNull Main main) {
         this.gameDialogLayers = new ArrayList<>();
 
-        this.main       = main;
-        this.inspection = new UnitInspection();
-        this.chatPrompt = new ChatPrompt();
+        this.main        = main;
+        this.inspection  = new UnitInspection();
+        this.chatPrompt  = new ChatPrompt();
+        this.pluginInput = new GamePluginInput();
 
         this.minimapDragging    = false;
         this.pendingDoubleClick = false;
@@ -261,6 +309,8 @@ final class GameClientState implements InputListener {
         }
 
         if (type == InputEvent.Type.KEY_RELEASED) {
+            this.releasePluginKey(virtualKey, modifiers);
+
             return;
         }
 
@@ -271,6 +321,11 @@ final class GameClientState implements InputListener {
         if (this.chatPrompt.isOpen() && operation != null) {
             this.chatPrompt.apply(operation, this.main.getClipboard(), UiClockUtils.getHostTimeMilliseconds());
 
+            return;
+        }
+
+        // The game's plugins see a play key before the game's accelerators and keys.
+        if (type == InputEvent.Type.KEY_PRESSED && this.pressPluginKey(key, virtualKey, modifiers)) {
             return;
         }
 
@@ -399,6 +454,11 @@ final class GameClientState implements InputListener {
             this.main.consoleView.setPointer(this.main.pointerHorizontal, this.main.pointerVertical);
         }
 
+        // The game does not see the release of a press a plugin consumed.
+        if (!pressed && this.releasePluginButton(button, modifiers)) {
+            return;
+        }
+
         if (this.handleInterfaceButton(button, pressed, modifiers)) {
             return;
         }
@@ -467,7 +527,7 @@ final class GameClientState implements InputListener {
             if (opening != null && !opening.isLive()) {
                 mode = ChatPrompt.MODE_OBSERVERS;
             } else if (opening != null && opening.isNetworkGame()) {
-                mode = ChatPrompt.chooseMode(true, false, modifiers, opening.areAlliancesAllowed(), opening.getChatRecipient());
+                mode = ChatPrompt.chooseMode(true, opening.isLocalObserver(), modifiers, opening.areAlliancesAllowed(), opening.getChatRecipient());
             } else {
                 mode = ChatPrompt.MODE_SINGLE_PLAYER;
             }
@@ -501,14 +561,16 @@ final class GameClientState implements InputListener {
     }
 
     /**
-     * Routes client commands locally and live-game text to the session; dropped lines perform no action.
+     * Routes community commands to the session's channel chat, client commands locally and live-game text to the session; dropped lines perform no
+     * action.
      *
      * @param line the submitted line
      */
     private void submitTypedLine(@NotNull String line) {
         ClientSession session = this.main.session;
 
-        switch (ChatPrompt.route(line, session != null && session.isLive())) {
+        switch (ChatPrompt.route(line, session != null && session.isLive(), session != null && session.hasCommunityChat())) {
+            case COMMUNITY -> this.main.requireSession().submitCommunityCommand(line);
             case COMMAND -> this.main.runTypedCommand(line);
             case GAME_TEXT -> this.submitGameText(this.main.requireSession(), line);
             case DROPPED -> {
@@ -517,12 +579,28 @@ final class GameClientState implements InputListener {
     }
 
     /**
-     * Submits live-game text and sends discarded network text through chat.
+     * Submits live-game text and sends discarded network text through chat, unless one of the game's plugins consumes the line
+     * ({@link ScrGamePlugin#onChatInput}).
      *
      * @param session the active session
      * @param line    the submitted text
      */
     private void submitGameText(@NotNull ClientSession session, @NotNull String line) {
+        boolean consumed = false;
+
+        for (ScrGamePlugin plugin : session.getGame().getPlugins()) {
+            if (plugin.onChatInput(line)) {
+                consumed = true;
+                break;
+            }
+        }
+
+        this.main.applyLocalViewWrite();
+
+        if (consumed) {
+            return;
+        }
+
         int mode = this.chatPrompt.getLastMode();
         int result = session.submitChat(line);
 
@@ -531,6 +609,123 @@ final class GameClientState implements InputListener {
         }
 
         LOGGER.debug("CHAT: \"" + line + "\" -> " + result);
+    }
+
+    /**
+     * Delivers a key press to the game's plugins while the game takes play keys ({@link GameAccelerators.Mode#PLAY}: the chat box closed, no game
+     * menu, dialog or trigger pause) and no network wait holds the game; the keys that open the chat box and the game menu and the presses that
+     * run an interface accelerator ({@link GameAcceleratorHandler#isInterfaceAccelerator}) are not delivered.
+     *
+     * @param key        the key
+     * @param virtualKey the key's Windows virtual-key code, or a negative value for a key without one
+     * @param modifiers  the modifier mask ({@link KeyModifier#getMask()} bits)
+     * @return {@code true} if a plugin consumed the press, {@code false} otherwise
+     */
+    private boolean pressPluginKey(@NotNull Key key, int virtualKey, int modifiers) {
+        ClientSession session = this.main.session;
+
+        if (session == null || virtualKey < 0 || key == Key.ENTER || key == Key.KEYPAD_ENTER || key == Key.F10 || !this.main.isConsoleShown() ||
+            this.main.isNetworkWaitDialogOpen() || this.main.acceleratorHandler.getMode() != GameAccelerators.Mode.PLAY) {
+            return false;
+        }
+
+        ScrGamePlugin[] plugins = session.getGame().getPlugins();
+
+        if (plugins.length == 0 || this.main.acceleratorHandler.isInterfaceAccelerator(key, modifiers)) {
+            return false;
+        }
+
+        boolean consumed = this.pluginInput.pressKey(plugins, virtualKey, toPluginModifiers(modifiers));
+
+        this.main.applyLocalViewWrite();
+
+        return consumed;
+    }
+
+    /**
+     * Delivers a key release to the game's plugins if the key's press was delivered.
+     *
+     * @param virtualKey the key's Windows virtual-key code, or a negative value for a key without one
+     * @param modifiers  the modifier mask ({@link KeyModifier#getMask()} bits)
+     */
+    private void releasePluginKey(int virtualKey, int modifiers) {
+        ClientSession session = this.main.session;
+
+        if (session == null || virtualKey < 0) {
+            return;
+        }
+
+        ScrGamePlugin[] plugins = session.getGame().getPlugins();
+
+        if (plugins.length == 0) {
+            return;
+        }
+
+        this.pluginInput.releaseKey(plugins, virtualKey, toPluginModifiers(modifiers));
+        this.main.applyLocalViewWrite();
+    }
+
+    /**
+     * Delivers a mouse button press to the game's plugins while the pointer is on the map view ({@link Main#isOnMapView()}), with the map position
+     * under the pointer.
+     *
+     * @param button    the button
+     * @param modifiers the modifier mask ({@link KeyModifier#getMask()} bits)
+     * @return {@code true} if a plugin consumed the press, {@code false} otherwise
+     */
+    private boolean pressPluginButton(@NotNull PointerButton button, int modifiers) {
+        ClientSession session = this.main.session;
+        ScrMouseInput.Button pluginButton = toPluginButton(button);
+
+        if (session == null || pluginButton == null || !this.main.isOnMapView()) {
+            return false;
+        }
+
+        ScrGamePlugin[] plugins = session.getGame().getPlugins();
+
+        if (plugins.length == 0) {
+            return false;
+        }
+
+        ClientCamera camera = session.getCamera();
+        boolean consumed = this.pluginInput.pressButton(plugins, pluginButton, toPluginModifiers(modifiers),
+                                                        Math.round(camera.screenToWorldX(this.main.pointerHorizontal)),
+                                                        Math.round(camera.screenToWorldY(this.main.pointerVertical)));
+
+        this.main.applyLocalViewWrite();
+
+        return consumed;
+    }
+
+    /**
+     * Delivers a mouse button release to the game's plugins if the button's press was delivered.
+     *
+     * @param button    the button
+     * @param modifiers the modifier mask ({@link KeyModifier#getMask()} bits)
+     * @return {@code true} if a plugin consumed the button's press, so the game does not see the release, {@code false} otherwise
+     */
+    private boolean releasePluginButton(@NotNull PointerButton button, int modifiers) {
+        ClientSession session = this.main.session;
+        ScrMouseInput.Button pluginButton = toPluginButton(button);
+
+        if (session == null || pluginButton == null) {
+            return false;
+        }
+
+        ScrGamePlugin[] plugins = session.getGame().getPlugins();
+
+        if (plugins.length == 0) {
+            return false;
+        }
+
+        ClientCamera camera = session.getCamera();
+        boolean consumed = this.pluginInput.releaseButton(plugins, pluginButton, toPluginModifiers(modifiers),
+                                                          Math.round(camera.screenToWorldX(this.main.pointerHorizontal)),
+                                                          Math.round(camera.screenToWorldY(this.main.pointerVertical)));
+
+        this.main.applyLocalViewWrite();
+
+        return consumed;
     }
 
     /**
@@ -543,6 +738,7 @@ final class GameClientState implements InputListener {
         this.dragging           = false;
 
         this.chatPrompt.close();
+        this.pluginInput.reset();
     }
 
     /**
@@ -572,7 +768,8 @@ final class GameClientState implements InputListener {
     }
 
     /**
-     * Returns the clip of the captured pointer: the minimap bitmap during a minimap drag, the game screen otherwise.
+     * Returns the clip of the captured pointer: the minimap bitmap during a minimap drag, the play view of the game screen while a selection box is
+     * open, the game screen otherwise.
      *
      * @param screenClip the game screen's clip
      * @return the clip in screen pixels
@@ -580,7 +777,11 @@ final class GameClientState implements InputListener {
     @NotNull PointerClip getPointerClip(@NotNull PointerClip screenClip) {
         PointerClip minimapClip = this.minimapDragging && this.main.consoleView != null ? this.main.consoleView.getMinimapClip() : null;
 
-        return minimapClip != null ? minimapClip : screenClip;
+        if (minimapClip != null) {
+            return minimapClip;
+        }
+
+        return this.main.worldInterface != null && this.main.worldInterface.isDragSelecting() ? this.main.gameViewport.getPlayClip() : screenClip;
     }
 
     /**
@@ -620,6 +821,7 @@ final class GameClientState implements InputListener {
      * Updates minimap dragging, dialog hover and the map pointer from the current client coordinates.
      */
     void moveInterfacePointer() {
+        this.main.supplyInterfacePointer();
         this.dragMinimap();
 
         if (this.main.consoleView != null) {
@@ -630,17 +832,32 @@ final class GameClientState implements InputListener {
             this.updateDialogHover();
         }
 
-        if (!this.main.isOnMapView() || this.main.worldInterface == null) {
+        WorldInterface world = this.main.worldInterface;
+
+        if (world == null || !this.main.isConsoleShown()) {
+            return;
+        }
+
+        // An open selection box follows the pointer over the console too, held inside the play view (getPointerClip).
+        boolean boxOpen = world.isDragSelecting();
+
+        if (!boxOpen && !this.main.isOnMapView()) {
             return;
         }
 
         try {
             ClientCamera camera = this.main.requireSession().getCamera();
+            float pointerX = this.main.pointerHorizontal;
+            float pointerY = this.main.pointerVertical;
 
-            this.main.worldInterface.handlePointerMove(Math.round(camera.screenToWorldX(this.main.pointerHorizontal)),
-                                                       Math.round(camera.screenToWorldY(this.main.pointerVertical)),
-                                                       this.main.pointerHorizontal,
-                                                       -1);
+            if (boxOpen) {
+                PointerClip play = this.main.gameViewport.getPlayClip();
+
+                pointerX = Math.max(play.getLeft(), Math.min(pointerX, play.getRight() - 1));
+                pointerY = Math.max(play.getTop(), Math.min(pointerY, play.getBottom() - 1));
+            }
+
+            world.handlePointerMove(Math.round(camera.screenToWorldX(pointerX)), Math.round(camera.screenToWorldY(pointerY)), pointerX, -1);
         } catch (IOException exception) {
             this.main.setAssetWarning(POINTER_WARNING_PREFIX + exception.getMessage());
         }
@@ -699,6 +916,11 @@ final class GameClientState implements InputListener {
             return true;
         }
 
+        // The game's plugins see a press over the map view before the map interaction.
+        if (pressed && !overMinimap && this.pressPluginButton(button, modifiers)) {
+            return true;
+        }
+
         if (button == PointerButton.MIDDLE) {
             return false;
         }
@@ -726,7 +948,7 @@ final class GameClientState implements InputListener {
                          minimap[ConsoleView.MINIMAP_PIXEL_SCALE_INDEX];
             int pointY = Math.clamp(minimap[ConsoleView.MINIMAP_LOCAL_Y_INDEX], 0, minimap[ConsoleView.MINIMAP_HEIGHT_INDEX] - 1) *
                          minimap[ConsoleView.MINIMAP_PIXEL_SCALE_INDEX];
-            boolean targeting = this.main.consoleModel != null && this.main.consoleModel.getMode().getUnitTargetOrder() >= 0;
+            boolean targeting = this.main.consoleModel != null && this.main.consoleModel.getMode().isTargeting();
             boolean placing = this.main.worldInterface != null && this.main.worldInterface.getPlacementType() >= 0;
             boolean alternateHeld = KeyModifier.ALT.isIn(modifiers);
 
@@ -765,11 +987,15 @@ final class GameClientState implements InputListener {
 
                 this.pendingDoubleClick = false;
 
-                // The selection is limited to the game view (GameViewport).
+                // The selection is limited to the game view (GameViewport); the box ends at the pointer held inside the play view.
                 GameViewport viewport = this.main.gameViewport;
+                PointerClip play = viewport.getPlayClip();
+                float pointerX = Math.max(play.getLeft(), Math.min(this.main.pointerHorizontal, play.getRight() - 1));
+                float pointerY = Math.max(play.getTop(), Math.min(this.main.pointerVertical, play.getBottom() - 1));
                 int left = Math.round(camera.screenToWorldX(viewport.getGameLeft()));
                 int top = Math.round(camera.getY());
-                CommandInput.Result result = this.main.worldInterface.handleLeftRelease(mapX, mapY,
+                CommandInput.Result result = this.main.worldInterface.handleLeftRelease(Math.round(camera.screenToWorldX(pointerX)),
+                                                                                        Math.round(camera.screenToWorldY(pointerY)),
                                                                                         shift,
                                                                                         KeyModifier.CONTROL.isIn(modifiers),
                                                                                         KeyModifier.ALT.isIn(modifiers),

@@ -82,7 +82,7 @@ The engine version is `sc4jVersion` in `gradle.properties`, taken from Maven Cen
 | Command | Runs | Needs |
 |---|---|---|
 | `.\gradlew.bat build` | unit tests and checks | nothing |
-| `.\gradlew.bat integrationTest` | `@RequiresInstallation` tests, GPU smoke tests | `sc4j.data`, a GPU (`-Psc4j.render.smoke=false` skips the GPU tests) |
+| `.\gradlew.bat integrationTest` | `@RequiresInstallation` tests, GPU tests | `sc4j.data`, a GPU (`-Psc4j.render.smoke=false` skips the GPU tests) |
 | `.\gradlew.bat corpusTest` | `@CorpusTest` long runs | `sc4j.data` and the folders below; a test without its folder is skipped |
 
 | Property | Folder |

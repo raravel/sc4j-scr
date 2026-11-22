@@ -17,8 +17,9 @@ import java.util.List;
 import java.util.stream.Stream;
 
 /**
- * Checks the character ID files of a player: the name bytes a created file holds, and opening a player's file, which keeps the progress of a
- * valid file under the player's current name and replaces a missing or invalid one.
+ * Checks the character ID files of a player: the name bytes a created file holds, opening a player's file, which keeps the progress of a
+ * valid file under the player's current name and replaces a missing or invalid one, and creating, listing and deleting local IDs with
+ * their saved games.
  * <p>
  * The record and name section layout is the native file format, so the tests read the written sections.
  */
@@ -70,6 +71,20 @@ final class CharacterFileTest {
      * The file name of the player's character file in the open tests.
      */
     private static final @NotNull String FILE_NAME = "0123456789abcdef";
+    /**
+     * The local IDs the order test creates within one second, and their order by file name.
+     */
+    private static final @NotNull List<String> SAME_SECOND_NAMES = List.of("kerrigan", "Raynor", "Fenix");
+    private static final @NotNull List<String> FILE_NAME_ORDER = List.of("Fenix", "Raynor", "kerrigan");
+    /**
+     * The attempts at creating the local IDs of the order test within one second.
+     */
+    private static final int SAME_SECOND_ATTEMPTS = 5;
+    /**
+     * A saved game of a player and a file of another kind in its saved-game folder.
+     */
+    private static final @NotNull String SAVED_GAME = "save.snx";
+    private static final @NotNull String OTHER_FILE = "notes.txt";
 
     private static @NotNull List<byte[]> readSections(@NotNull Path file) throws IOException {
         return ReplayFile.readSections(Files.readAllBytes(file), false, RECORD_SIZE, NAME_SIZE);
@@ -158,5 +173,94 @@ final class CharacterFileTest {
         read.setCampaignProgress(false, CharacterFile.Race.TERRAN, NEXT_MISSION);
 
         Assertions.assertArrayEquals(Arrays.copyOf(name, NAME_SIZE), readSections(file).get(NAME_SECTION));
+    }
+
+    @Test
+    void create_named_should_name_the_file_after_the_name_and_keep_an_existing_file(@TempDir @NotNull Path directory) throws IOException {
+        CharacterFile created = CharacterFile.createNamed(directory, "Raynor".getBytes(StandardCharsets.UTF_8));
+
+        Assertions.assertEquals("Raynor", created.getFileName());
+        Assertions.assertTrue(Files.isRegularFile(directory.resolve("Raynor" + EXTENSION)));
+
+        created.setCampaignProgress(false, CharacterFile.Race.TERRAN, NEXT_MISSION);
+
+        Assertions.assertThrows(IOException.class, () -> CharacterFile.createNamed(directory, "Raynor".getBytes(StandardCharsets.UTF_8)));
+
+        CharacterFile read = CharacterFile.read(directory.resolve("Raynor" + EXTENSION));
+
+        Assertions.assertNotNull(read);
+        Assertions.assertEquals(NEXT_MISSION, read.getCampaignProgress(false, CharacterFile.Race.TERRAN));
+        // A name cut inside a character converts to no file name.
+        byte[] split = HANGUL.repeat(LONG_NAME_LENGTH).getBytes(StandardCharsets.UTF_8);
+
+        Assertions.assertThrows(IOException.class, () -> CharacterFile.createNamed(directory, split));
+    }
+
+    @Test
+    void list_should_return_the_local_ids_whose_name_is_their_file_name(@TempDir @NotNull Path directory) throws IOException {
+        CharacterFile.createNamed(directory, "Kerrigan".getBytes(StandardCharsets.UTF_8));
+        CharacterFile.createNamed(directory, HANGUL.getBytes(StandardCharsets.UTF_8));
+        // An account's file is named after the account id and holds the account name.
+        CharacterFile.open(directory, FILE_NAME, "Raynor");
+        Files.writeString(directory.resolve("broken" + EXTENSION), "not a character file");
+
+        List<String> names = CharacterFile.list(directory).stream().map(CharacterFile::getName).sorted().toList();
+
+        Assertions.assertEquals(List.of("Kerrigan", HANGUL), names);
+        Assertions.assertEquals(List.of(), CharacterFile.list(directory.resolve("missing")));
+    }
+
+    @Test
+    void list_should_order_the_local_ids_of_one_second_by_file_name(@TempDir @NotNull Path directory) throws IOException {
+        for (int attempt = 0; attempt < SAME_SECOND_ATTEMPTS; attempt++) {
+            Path folder = directory.resolve(Integer.toString(attempt));
+            long creationTime = -1;
+            boolean sameSecond = true;
+
+            for (String name : SAME_SECOND_NAMES) {
+                CharacterFile created = CharacterFile.createNamed(folder, name.getBytes(StandardCharsets.UTF_8));
+
+                sameSecond &= creationTime < 0 || created.getCreationTime() == creationTime;
+                creationTime = created.getCreationTime();
+            }
+
+            if (sameSecond) {
+                Assertions.assertEquals(FILE_NAME_ORDER, CharacterFile.list(folder).stream().map(CharacterFile::getFileName).toList());
+
+                return;
+            }
+        }
+
+        Assertions.fail("The local IDs were not created within one second.");
+    }
+
+    @Test
+    void delete_should_remove_the_file_and_the_saved_games(@TempDir @NotNull Path directory) throws IOException {
+        Path characters = directory.resolve("characters");
+        Path savedGames = directory.resolve("save");
+        CharacterFile created = CharacterFile.createNamed(characters, "Raynor".getBytes(StandardCharsets.UTF_8));
+
+        Files.createDirectories(savedGames);
+        Files.write(savedGames.resolve(SAVED_GAME), new byte[]{0});
+        created.delete(savedGames);
+
+        Assertions.assertEquals(0, countFiles(characters));
+        Assertions.assertEquals(List.of(), CharacterFile.list(characters));
+        Assertions.assertFalse(Files.exists(savedGames));
+    }
+
+    @Test
+    void delete_should_keep_a_saved_game_folder_with_other_files(@TempDir @NotNull Path directory) throws IOException {
+        Path savedGames = directory.resolve("save");
+        CharacterFile created = CharacterFile.createNamed(directory.resolve("characters"), "Raynor".getBytes(StandardCharsets.UTF_8));
+
+        Files.createDirectories(savedGames);
+        Files.write(savedGames.resolve(SAVED_GAME), new byte[]{0});
+        Files.write(savedGames.resolve(OTHER_FILE), new byte[]{0});
+        created.delete(savedGames);
+
+        try (Stream<Path> files = Files.list(savedGames)) {
+            Assertions.assertEquals(List.of(savedGames.resolve(OTHER_FILE)), files.toList());
+        }
     }
 }

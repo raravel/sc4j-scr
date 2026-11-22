@@ -152,6 +152,29 @@ public final class NativeRegionLayout {
         return Integer.compareUnsigned(address, MAP_REGION_BASE) < 0 && !isMapped(address);
     }
 
+    /**
+     * Tells whether no region below {@link #MAP_REGION_BASE} serves a byte of a range that ends at or below it.
+     *
+     * @param base the classic address of the range
+     * @param size the size of the range in bytes
+     * @return {@code true} if the range ends at or below {@link #MAP_REGION_BASE} and no interval overlaps it, {@code false} otherwise
+     */
+    public static boolean isRangeUnmapped(int base, int size) {
+        long start = base & DWORD_MASK;
+        long end = start + size;
+
+        if (end > (MAP_REGION_BASE & DWORD_MASK)) {
+            return false;
+        }
+
+        for (int index = 0; index < INTERVALS.length; index += REGION_ROW_SIZE) {
+            if ((INTERVALS[index] & DWORD_MASK) < end && (INTERVALS[index + 1] & DWORD_MASK) > start) {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     private NativeRegionLayout() {
     }

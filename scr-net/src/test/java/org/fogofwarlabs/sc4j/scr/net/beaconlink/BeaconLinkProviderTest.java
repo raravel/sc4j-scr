@@ -61,8 +61,8 @@ import java.util.function.BooleanSupplier;
  * Plays SC:R Storm games of sc4j clients over Beacon.Link on 127.0.0.1 behind emulated NATs: the host's room is the game, every joiner finds
  * it in its game list and joins it, the lobbies reach the game start, every client plays the same commands to a fixed frame with equal unit
  * hashes at every frame, and the host's recorded replay plays back to the same hashes; every participant has one address of the games, the
- * joiners follow the host's member list when a member leaves, the host starts only when every member pair is connected, and a private
- * room's host lets in only a joiner with its password.
+ * joiners follow the host's member list when a member leaves, the host starts only when every member pair is connected, a private
+ * room's host lets in only a joiner with its password, and a joiner that joins again from the lobby leaves the host's lobby at once.
  */
 final class BeaconLinkProviderTest {
     private static final @NotNull String GAME_NAME = "s4jbeacongame";
@@ -88,6 +88,11 @@ final class BeaconLinkProviderTest {
      * The longest real time of each phase: finding the room, joining it, reaching the start, and playing the frames.
      */
     private static final long PHASE_LIMIT_MILLISECONDS = 60_000L;
+    /**
+     * The longest real time from a joiner's second join until the host's lobby lost the joiner's first player: well below the lobby's
+     * timeout ({@link LanLobby#TIMEOUT}).
+     */
+    private static final long DEPARTURE_LIMIT_MILLISECONDS = 5_000L;
     private static final long POLL_PAUSE_MILLISECONDS = 1L;
     private static final long CLOCK_STEP_MILLISECONDS = 20L;
     private static final int UNREPORTED_STEPS = 150;
@@ -239,7 +244,11 @@ final class BeaconLinkProviderTest {
         }
 
         private void runUntil(@NotNull BooleanSupplier condition, @NotNull String description) throws IOException, InterruptedException {
-            long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(PHASE_LIMIT_MILLISECONDS);
+            this.runUntil(condition, PHASE_LIMIT_MILLISECONDS, description);
+        }
+
+        private void runUntil(@NotNull BooleanSupplier condition, long limitMilliseconds, @NotNull String description) throws IOException, InterruptedException {
+            long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(limitMilliseconds);
 
             while (!condition.getAsBoolean()) {
                 Assertions.assertTrue(System.nanoTime() < deadline, () -> "not reached in time: " + description);
@@ -639,6 +648,80 @@ final class BeaconLinkProviderTest {
                 Assertions.assertEquals(mapPath, joiner.client.getMapPath());
                 Assertions.assertFalse(Files.exists(maps.resolve(LanMapTransfer.DOWNLOAD_FOLDER)), "nothing is downloaded");
                 Assertions.assertTrue(held.isOpen());
+            } finally {
+                for (Player player : players) {
+                    player.client.close();
+                }
+            }
+        }
+    }
+
+    /**
+     * A joiner joins the room again at once after its first join reached the lobby: the host's lobby loses the first join's player at once
+     * (its leave arrives, or its channel's end drops it), and the second join ends in a lobby or a failure instead of a join that never ends.
+     */
+    @Test
+    @RequiresInstallation
+    void host_loses_the_first_player_at_once_when_a_joiner_joins_again_from_the_lobby(@TempDir @NotNull Path maps) throws Exception {
+        Path installed = ExternalInput.INSTALLATION.resolveFile(ExternalInput.MAPS_FOLDER, SHARED_MAP);
+        Path mapPath = Files.copy(installed, maps.resolve(SHARED_MAP));
+        ChkFile scenario = ChkFile.parseTolerant(MpqArchive.open(mapPath).readFile(SCENARIO));
+        MapFolders mapFolders = MapFolders.of(List.of(maps), LanMapTransfer.DOWNLOAD_FOLDER);
+        List<Player> players = new ArrayList<>();
+
+        try (ClientScenario link = new ClientScenario()) {
+            ModIdentity identity = ClientScenario.createIdentity("1.0.0");
+            PeerSocket node = link.openNode(ClientScenario.createNodeConfiguration());
+            Driver driver = new Driver(link, players);
+
+            try {
+                Player host = openPlayer(link, node, NatType.FULL_CONE, identity, "host", mapFolders);
+
+                players.add(host);
+                host.client.host(GAME_NAME, LanClient.HostedMap.read(mapPath, scenario, SHARED_MAP), LanGameOptions.MELEE, GameSpeed.FASTEST);
+
+                Player joiner = openPlayer(link, node, NatType.FULL_CONE, identity, "joiner", mapFolders);
+                LanDiscovery.Game[] listed = new LanDiscovery.Game[1];
+
+                players.add(joiner);
+                driver.runUntil(() -> {
+                    for (LanDiscovery.Game game : joiner.client.getGames()) {
+                        if (game.getInformation().getName().equals(GAME_NAME)) {
+                            listed[0] = game;
+                        }
+                    }
+
+                    return listed[0] != null;
+                }, "the joiner lists the room");
+                joiner.client.join(listed[0]);
+                driver.runUntil(() -> {
+                    LanLobby lobby = joiner.client.getLobby();
+
+                    return joiner.client.getState() == LanClient.State.LOBBY && lobby != null && lobby.getState() >= LanLobby.STATE_LOBBY;
+                }, "the joiner reaches the lobby");
+
+                LanLobby hostLobby = host.requireLobby();
+                List<String> departures = new ArrayList<>();
+
+                for (LanLobby.Notice notice = hostLobby.pollNotice(); notice != null; notice = hostLobby.pollNotice()) {
+                    Assertions.assertEquals(LanLobby.Notice.JOINED, notice.getKind(), "the host only saw the joiner join");
+                }
+
+                joiner.client.join(listed[0]);
+                driver.runUntil(() -> {
+                    for (LanLobby.Notice notice = hostLobby.pollNotice(); notice != null; notice = hostLobby.pollNotice()) {
+                        if (notice.getKind() != LanLobby.Notice.JOINED) {
+                            departures.add(notice.getKind() + " " + notice.getName());
+                        }
+                    }
+
+                    return !departures.isEmpty();
+                }, DEPARTURE_LIMIT_MILLISECONDS, "the host's lobby loses the first join's player");
+                driver.runUntil(() -> joiner.client.getState() != LanClient.State.JOINING, "the second join ends");
+
+                Assertions.assertEquals(List.of(LanLobby.Notice.LEFT + " joiner"), departures, "the first join's leave reaches the host with its name");
+                Assertions.assertTrue(joiner.client.getState() == LanClient.State.LOBBY || joiner.client.getState() == LanClient.State.FAILED,
+                                      () -> "the second join ends in " + joiner.client.getState());
             } finally {
                 for (Player player : players) {
                     player.client.close();

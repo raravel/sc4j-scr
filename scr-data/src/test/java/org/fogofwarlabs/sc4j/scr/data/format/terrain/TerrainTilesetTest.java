@@ -245,4 +245,24 @@ final class TerrainTilesetTest {
         Assertions.assertThrows(IllegalArgumentException.class, () -> terrain.getMegatileMiniatureFlags(1, -1));
         Assertions.assertThrows(IllegalArgumentException.class, () -> terrain.getMegatileMiniatureFlags(1, LAST_MINIATURE_INDEX + 1));
     }
+
+    @Test
+    void has_tile_should_need_an_installed_group_and_megatile() throws IOException {
+        ByteBuffer groups = ByteBuffer.allocate(MINIMUM_TERRAIN_GROUPS * TERRAIN_GROUP_RECORD_BYTES).order(ByteOrder.LITTLE_ENDIAN);
+
+        groups.putShort(TERRAIN_GROUP_TILES_OFFSET + Short.BYTES, (short) DIRECT_MEGATILE_COUNT);
+        groups.putShort(TERRAIN_GROUP_RECORD_BYTES + TERRAIN_GROUP_TILES_OFFSET, (short) (RAW_MEGATILE_FLAG | 1));
+
+        TerrainTileset terrain = TerrainTileset.parse(groups.array(), new byte[DIRECT_MEGATILE_COUNT * MEGATILE_RECORD_BYTES]);
+        int lastTile = MINIMUM_TERRAIN_GROUPS * TILE_VARIANTS_PER_GROUP - 1;
+
+        Assertions.assertTrue(terrain.hasTile(0));
+        Assertions.assertTrue(terrain.hasTile(TILE_VARIANTS_PER_GROUP));
+        Assertions.assertTrue(terrain.hasTile(lastTile));
+        Assertions.assertTrue(terrain.hasTile(RAW_MEGATILE_FLAG | lastTile));
+        Assertions.assertFalse(terrain.hasTile(1));
+        Assertions.assertFalse(terrain.hasTile(lastTile + 1));
+        Assertions.assertFalse(terrain.hasTile(-1));
+        Assertions.assertFalse(terrain.hasTile(WORD_MASK + 1));
+    }
 }

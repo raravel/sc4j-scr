@@ -87,6 +87,24 @@ final class GrpFileTest {
         }
     }
 
+    @Test
+    void parse_should_read_frame_data_offsets_counted_from_the_base() throws IOException {
+        int base = 0x58A364;
+        ByteBuffer contents = ByteBuffer.allocate(21).order(ByteOrder.LITTLE_ENDIAN);
+
+        contents.putShort((short) 1).putShort((short) 5).putShort((short) 3);
+        contents.put((byte) 1).put((byte) 1).put((byte) 3).put((byte) 1).putInt(base + 14);
+        contents.putShort((short) 2).put((byte) 1).put((byte) 0).put((byte) 0x81).put((byte) 1).put((byte) 9);
+
+        GrpFile file = GrpFile.parse(contents.array(), base);
+        GrpFile.Frame frame = file.decodeFrame(0);
+
+        Assertions.assertEquals(14, file.getFrameDataOffset(0));
+        Assertions.assertEquals(9, frame.getPixels()[8]);
+        Assertions.assertTrue(file.isFramePointCovered(0, 1, 0));
+        Assertions.assertThrows(IOException.class, () -> GrpFile.parse(contents.array(), base + 0x100).decodeFrame(0));
+    }
+
     @RequiresInstallation
     @Test
     void image_grp_path_resolves_through_images_tbl() throws IOException {

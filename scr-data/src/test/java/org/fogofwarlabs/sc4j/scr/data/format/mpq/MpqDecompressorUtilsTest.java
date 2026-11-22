@@ -39,16 +39,18 @@ final class MpqDecompressorUtilsTest {
     /**
      * {@code bz2.compress(sample, 9)} of {@link #createBzip2Sample()}.
      */
-    private static final @NotNull String BZIP2_STREAM =
-            "425a6839314159265359c6f7c6480000927fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffb00118210000000000" +
-            "0000000000000000000000009804c00000000000000000000026000260024c0013000130000000000000000000000000000000000000000000000000" +
-            "000000004a5490d34c81a794cd4681b53403469a34c40c869a0d188326803468034c27947a834323469a0068c434d34d3406800000d068c40640c984" +
-            "3406419341a01faff3002c50951a930d4d89d18d92ab56abd62b2cb5a52aab6ccceaeb95d68af57ec161b134ac5cd4a11101e8041c0041aacd67b45a" +
-            "6d4d76bb635b65b5b6dd6f6eb837ad010715571b95cee9757273bb5def0e97975724577a6073bddf2faed7ebfbbbc3ce0302d88880c982c1a80107a7" +
-            "b4041bb08f985c361f1189c562f18fb8dc73f63f20cc02191ca00864f3202195a8659ff2f08021030507985ab9780830808669d540082f52020f8a40" +
-            "414b166f399dcf2b01084559fd0686161b45a387d26962222262a2e33fb1b1d1f21232527292b2d2f31333537393b3d3f41434547494b4d4f5153555" +
-            "7595b5d5f61636567696b6d6f71737577797b7d7f81838587898b8d8f91939597999b9d9fa1a3a5a7a9abadafb1b3b5b7b9bbbdbfc1c3c5c7c9fee5e" +
-            "6e7e8e9eaebecedeeeff0f1f2f3fffa7afb7bfc697cfcfd7dfe7e8bb9229c2848637be3240";
+    private static final @NotNull String BZIP2_STREAM = "425a6839314159265359c6f7c6480000927fffffffffffffffffffffffffffffffffffffffffffffffffffff" +
+                                                        "ffffffffffffffb001182100000000000000000000000000000000009804c000000000000000000000260002" +
+                                                        "60024c0013000130000000000000000000000000000000000000000000000000000000004a5490d34c81a794" +
+                                                        "cd4681b53403469a34c40c869a0d188326803468034c27947a834323469a0068c434d34d3406800000d068c4" +
+                                                        "0640c9843406419341a01faff3002c50951a930d4d89d18d92ab56abd62b2cb5a52aab6ccceaeb95d68af57e" +
+                                                        "c161b134ac5cd4a11101e8041c0041aacd67b45a6d4d76bb635b65b5b6dd6f6eb837ad010715571b95cee975" +
+                                                        "7273bb5def0e97975724577a6073bddf2faed7ebfbbbc3ce0302d88880c982c1a80107a7b4041bb08f985c36" +
+                                                        "1f1189c562f18fb8dc73f63f20cc02191ca00864f3202195a8659ff2f08021030507985ab9780830808669d5" +
+                                                        "40082f52020f8a40414b166f399dcf2b01084559fd0686161b45a387d26962222262a2e33fb1b1d1f2123252" +
+                                                        "7292b2d2f31333537393b3d3f41434547494b4d4f51535557595b5d5f61636567696b6d6f71737577797b7d7" +
+                                                        "f81838587898b8d8f91939597999b9d9fa1a3a5a7a9abadafb1b3b5b7b9bbbdbfc1c3c5c7c9fee5e6e7e8e9e" +
+                                                        "aebecedeeeff0f1f2f3fffa7afb7bfc697cfcfd7dfe7e8bb9229c2848637be3240";
 
     private static byte @Nullable [] decompress(int methodMask, byte @NotNull [] data, int capacity) {
         byte[] sector = new byte[data.length + 1];

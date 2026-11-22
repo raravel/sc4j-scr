@@ -78,7 +78,13 @@ public final class ScrWorldPass {
         @Override
         public void draw(@NotNull WorldViewport viewport) {
             try {
-                ScrWorldPass.this.requireScene().drawTerrain(ScrWorldPass.this.context.getView().getMap()::getTileIdentifier);
+                ScrGameView view = ScrWorldPass.this.context.getView();
+
+                if (view.hasPlugins()) {
+                    ScrWorldPass.this.requireScene().drawTerrain(view.getMap()::getTileIdentifier, view::findTerrainTile);
+                } else {
+                    ScrWorldPass.this.requireScene().drawTerrain(view.getMap()::getTileIdentifier);
+                }
             } catch (IOException exception) {
                 ScrWorldPass.this.context.setAssetWarning("Terrain: " + exception.getMessage());
             }

@@ -47,6 +47,18 @@ public final class GameStructureView implements GameContextBytes {
      */
     public static final int TILESET_OFFSET = 0xEC;
     /**
+     * The offset of the active player count byte: the number of human players at the game start.
+     */
+    public static final int ACTIVE_PLAYER_COUNT_OFFSET = 0xF1;
+    /**
+     * The offset of the console race byte.
+     */
+    public static final int CONSOLE_RACE_OFFSET = 0xF2;
+    /**
+     * The offset of the single-player byte: {@code 1} for a live single-player game, {@code 0} for a network game or a replay.
+     */
+    public static final int SINGLE_PLAYER_OFFSET = 0xF3;
+    /**
      * The offset of the player color index DWORDs, one per playable player.
      */
     public static final int PLAYER_COLORS_OFFSET = 0x12C;

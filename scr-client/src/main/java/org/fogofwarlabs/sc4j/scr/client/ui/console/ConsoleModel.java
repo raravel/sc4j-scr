@@ -376,7 +376,7 @@ public final class ConsoleModel {
                                 perspective,
                                 replayPaused, speedSetting, replaySpeed,
                                 this.mode.getPlacementType() >= 0,
-                                this.mode.getUnitTargetOrder() >= 0);
+                                this.mode.isTargeting());
     }
 
     /**

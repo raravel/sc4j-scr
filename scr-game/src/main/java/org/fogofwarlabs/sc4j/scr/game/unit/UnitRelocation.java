@@ -73,4 +73,38 @@ public final class UnitRelocation {
 
         return found;
     }
+
+    /**
+     * Moves a ground unit that the terrain under it no longer carries to the nearest free walkable position in any terrain component
+     * ({@link UnitPositioning#findWalkable}), as {@link #relocate} moves a unit. A unit without such a position stays.
+     *
+     * @param unit the non-building ground unit
+     * @return {@code true} if a free position was found and the unit moved there, {@code false} otherwise
+     * @throws UnsupportedOperationException if the unit creation context is not established
+     * @throws IllegalStateException         if the unit has no sprite
+     */
+    public boolean displace(@NotNull Unit unit) {
+        UnitCreationContext context = this.game.getUnitSystem().getUnitCreationContext();
+
+        if (context == null) {
+            throw Exceptions.newUnsupportedOperationException("Unit relocation requires the unit creation context.");
+        }
+
+        Sprite sprite = unit.requireSprite();
+
+        if ((sprite.getFlags() & Sprite.FLAG_HIDDEN) == 0) {
+            this.game.getUnitLifecycle().detach(unit, false);
+        }
+
+        int[] position = new int[UnitPositioning.POSITION_COORDINATES];
+        boolean found = this.game.getUnitPositioning().findWalkable(unit, sprite.getX(), sprite.getY(), position);
+
+        if (found) {
+            this.game.getUnitPositioning().move(unit, position[UnitPositioning.X_INDEX], position[UnitPositioning.Y_INDEX]);
+        }
+
+        this.game.getUnitVisibility().refreshPosition(unit, context.isFoliageEnabled());
+
+        return found;
+    }
 }

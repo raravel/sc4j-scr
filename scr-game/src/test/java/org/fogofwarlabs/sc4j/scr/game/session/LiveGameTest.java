@@ -8,10 +8,7 @@ import org.fogofwarlabs.sc4j.scr.core.test.ExternalInput;
 import org.fogofwarlabs.sc4j.scr.core.test.RequiresInstallation;
 import org.fogofwarlabs.sc4j.scr.data.format.chk.ChkFile;
 import org.fogofwarlabs.sc4j.scr.data.format.mpq.MpqArchive;
-import org.fogofwarlabs.sc4j.scr.data.format.replay.ReplayCommandIds;
-import org.fogofwarlabs.sc4j.scr.data.format.replay.ReplayFile;
-import org.fogofwarlabs.sc4j.scr.data.format.replay.ReplayHeaderBuilder;
-import org.fogofwarlabs.sc4j.scr.data.format.replay.ReplayWriter;
+import org.fogofwarlabs.sc4j.scr.data.format.replay.*;
 import org.fogofwarlabs.sc4j.scr.game.frame.GameSpeed;
 import org.fogofwarlabs.sc4j.scr.game.player.PlayerTable;
 import org.fogofwarlabs.sc4j.scr.game.player.PlayerTypes;
@@ -43,8 +40,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * Checks how a live network game finds a player's slot from its player id (the waiting-for-players list and the issuer of the player's commands, in
  * melee games with fixed start positions), the name bytes of the Save Game commands a live game queues and executes, the turns a single-player game
- * keeps in transit, the player table of the game's start, and the replay a live game writes: its name section and a write while commands are
- * recorded.
+ * keeps in transit, the player table of the game's start, and the replay a live game writes: its name section, a write while commands are
+ * recorded and a submitted mod command.
  * <p>
  * The Save Game command layout (type, time DWORD, name and terminator), the player records (36 bytes, the name at {@code +0xb}) and the replay's name
  * section (twelve 96-byte records) are native formats, so the tests compare their bytes.
@@ -689,5 +686,45 @@ final class LiveGameTest {
 
         // The last queued stop is still in transit.
         Assertions.assertEquals(2 * RECORDED_TURNS - 1, ReplayFile.parse(live.writeReplay(0, 0)).getCommands().size());
+    }
+
+    @Test
+    void submit_mod_command_should_record_the_length_prefixed_data_in_the_written_replay() throws IOException {
+        LiveGame live = new LiveGame(createSetup(createTable()), SEED, HOST_PLAYER);
+        byte[] data = {0x10, 0x20, 0x30};
+
+        Assertions.assertTrue(live.submitModCommand(data));
+        Assertions.assertThrows(IllegalArgumentException.class, () -> live.submitModCommand(new byte[ReplayModCommand.MAXIMUM_DATA_LENGTH + 1]));
+
+        for (int turn = 0; turn <= TURNS_IN_TRANSIT; turn++) {
+            live.exchangeTurn(turn);
+        }
+
+        List<ReplayCommand> commands = ReplayFile.parse(live.writeReplay(0, 0)).getCommands();
+
+        Assertions.assertEquals(1, commands.size());
+        Assertions.assertEquals(ReplayCommandIds.MOD_COMMAND, commands.getFirst().getTypeId());
+        Assertions.assertEquals(HOST_PLAYER, commands.getFirst().getPlayerId());
+        Assertions.assertArrayEquals(new byte[]{(byte) data.length, 0x10, 0x20, 0x30}, commands.getFirst().getPayload());
+    }
+
+    @Test
+    void submit_mod_command_should_refuse_a_command_the_outgoing_turn_has_no_room_for() throws IOException {
+        LiveGame live = new LiveGame(createSetup(createTable()), SEED, HOST_PLAYER);
+        byte[] largest = new byte[ReplayModCommand.MAXIMUM_DATA_LENGTH];
+        int commandLength = ReplayModCommand.HEADER_SIZE + largest.length;
+        int initialLength = live.getOutgoingTurn().getLength();
+        int queued = 0;
+
+        while (live.submitModCommand(largest)) {
+            queued++;
+        }
+
+        int length = live.getOutgoingTurn().getLength();
+
+        Assertions.assertTrue(queued > 0);
+        Assertions.assertTrue(length <= LiveGame.MAXIMUM_TURN_BYTES, "the queued commands fit the turn");
+        Assertions.assertTrue(length + commandLength > LiveGame.MAXIMUM_TURN_BYTES, "the refused command does not fit");
+        Assertions.assertEquals(initialLength + queued * commandLength, length, "the refused command leaves the turn unchanged");
     }
 }

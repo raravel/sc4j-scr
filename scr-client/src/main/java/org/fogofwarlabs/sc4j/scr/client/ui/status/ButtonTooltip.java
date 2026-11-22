@@ -23,7 +23,8 @@ import java.util.Locale;
  * Builds command-button labels and costs from the button type and active game tables.
  * Enabled labels omit their key and type prefix; repeatable upgrades append the next level.
  * Disabled labels have no costs. Cost items retain mineral, gas, energy and supply drawing order. A button a mod adds shows its texts in the
- * language of the {@code stat_txt} strings ({@link ScrAddedUnitType.TrainButton#getText(String)}).
+ * language of the {@code stat_txt} strings ({@link ScrAddedUnitType.TrainButton#getText(String)}), and a button of a changed table its own
+ * texts ({@link ButtonDefinition#getEnabledText()}, {@link ButtonDefinition#getDisabledText()}).
  */
 public final class ButtonTooltip {
     private static final int DOUBLE_EGG_UNIT_COUNT = 2;
@@ -107,16 +108,16 @@ public final class ButtonTooltip {
                                                 int consoleRace) {
         ScrAddedUnitType.TrainButton added = button.getAddedButton();
         ScrAddedUnitType.TrainButton.Text addedText = added == null ? null : added.getText(text.getLocale());
-        String enabled = added == null
-                         ? profile.getString(view, button.getEnabledString())
-                         : String.valueOf(added.getHotkey()) + ButtonDefinition.UNIT_PRODUCTION_KIND + addedText.getEnabledText();
+        String enabled = added != null
+                         ? String.valueOf(added.getHotkey()) + ButtonDefinition.UNIT_PRODUCTION_KIND + addedText.getEnabledText()
+                         : button.getEnabledText() != null ? button.getEnabledText() : profile.getString(view, button.getEnabledString());
         int type = enabled.length() < BUTTON_PREFIX_LENGTH ? 0 : enabled.charAt(1);
         int value = button.getActionValue();
 
         if (disabled) {
-            // A button a mod adds shows its own disabled text in the client's language.
+            // A button a mod adds shows its own disabled text in the client's language, a button of a changed table its own text.
             if (disabledId == 0) {
-                String disabledText = addedText == null ? null : addedText.getDisabledText();
+                String disabledText = addedText == null ? button.getDisabledText() : addedText.getDisabledText();
 
                 return disabledText == null ? null : new ButtonTooltip(disabledText, List.of());
             }

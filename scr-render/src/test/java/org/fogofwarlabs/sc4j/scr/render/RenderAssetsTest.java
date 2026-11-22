@@ -10,6 +10,7 @@ import org.fogofwarlabs.sc4j.scr.data.format.terrain.TerrainTileset;
 import org.fogofwarlabs.sc4j.scr.data.resource.ScrResourceProvider;
 import org.fogofwarlabs.sc4j.scr.data.resource.importer.PcxSheetUtils;
 import org.fogofwarlabs.sc4j.scr.data.resource.importer.TilesetGraphicsUtils;
+import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
@@ -18,8 +19,8 @@ import java.util.Arrays;
 import java.util.stream.IntStream;
 
 /**
- * Checks the terrain tile decoding, the player palette remapping, the installed image loading and the classic frame placement of
- * {@link RenderAssets}.
+ * Checks the terrain tile decoding, the player palette remapping, the installed image, creep edge and lighting table loading and the classic frame
+ * placement of {@link RenderAssets}.
  */
 final class RenderAssetsTest {
     /**
@@ -107,6 +108,19 @@ final class RenderAssetsTest {
      * The shift of the vertical offset in a packed frame map offset.
      */
     private static final int MAP_OFFSET_VERTICAL_SHIFT = 16;
+    /**
+     * The Jungle tileset, the frames of its creep GRP, the columns of a lighting table, the lighting table of {@code bfire} and its rows.
+     */
+    private static final int JUNGLE_TILESET = 4;
+    private static final int CREEP_EDGE_FRAME_COUNT = 37;
+    private static final int LIGHTING_TABLE_COLUMNS = 256;
+    private static final int BFIRE_TABLE = 2;
+    private static final int BFIRE_ROWS = 40;
+    /**
+     * The Marine shadow image and the checked frames of the Marine and its shadow.
+     */
+    private static final int MARINE_SHADOW = 240;
+    private static final int @NotNull [] SHADOW_FRAMES = {0, 68, 85, 93, 204, 212};
 
     @Test
     void decode_tile_from_records_should_decode_extended_references_and_horizontal_mirroring() throws IOException {
@@ -164,6 +178,18 @@ final class RenderAssetsTest {
         Assertions.assertThrows(IOException.class,
                                 () -> RenderAssets.decodeTile(new byte[TerrainTileset.CV5_RECORD_SIZE],
                                                               TilesetGraphicsUtils.createTileGraphics(tiles, pixels), 0x8010));
+    }
+
+    @Test
+    void find_megatile_index_should_read_the_group_reference_without_the_high_tile_flag() throws IOException {
+        byte[] groups = new byte[GROUP_COUNT * TerrainTileset.CV5_RECORD_SIZE];
+
+        groups[LAST_GROUP * TerrainTileset.CV5_RECORD_SIZE + TerrainTileset.CV5_MEGATILES_OFFSET + LAST_VARIANT * Short.BYTES] = 3;
+
+        Assertions.assertEquals(3, RenderAssets.findMegatileIndex(groups, 0x7FFF));
+        Assertions.assertEquals(3, RenderAssets.findMegatileIndex(groups, 0xFFFF));
+        Assertions.assertEquals(0, RenderAssets.findMegatileIndex(groups, 0));
+        Assertions.assertThrows(IOException.class, () -> RenderAssets.findMegatileIndex(new byte[TerrainTileset.CV5_RECORD_SIZE], 0x8010));
     }
 
     @Test
@@ -313,6 +339,37 @@ final class RenderAssetsTest {
             Assertions.assertEquals(NYDUS_SHADOW_FRAME_TOP - NYDUS_SHADOW_HALF_CANVAS, (short) (offset >>> MAP_OFFSET_VERTICAL_SHIFT));
             Assertions.assertEquals(NYDUS_SHADOW_HALF_CANVAS - (NYDUS_SHADOW_FRAME_LEFT + NYDUS_SHADOW_FRAME_WIDTH), (short) flipped);
             Assertions.assertEquals(NYDUS_SHADOW_FRAME_TOP - NYDUS_SHADOW_HALF_CANVAS, (short) (flipped >>> MAP_OFFSET_VERTICAL_SHIFT));
+        }
+    }
+
+    @RequiresInstallation
+    @Test
+    void render_assets_load_creep_edges_lighting_tables_and_even_sized_marine_frames() throws IOException {
+        try (CascStorage storage = CascStorage.open(ExternalInput.INSTALLATION.getPath())) {
+            RenderAssets assets = RenderAssets.load(ScrResourceProvider.borrow(storage), JUNGLE_TILESET);
+            byte[] palette = assets.copyPalette();
+
+            palette[0] ^= 1;
+            Assertions.assertFalse(Arrays.equals(palette, assets.copyPalette()), "the palette is a copy");
+            Assertions.assertEquals(CREEP_EDGE_FRAME_COUNT, assets.getCreepEdgeFrameCount());
+
+            for (int tableIndex = 0; tableIndex < RenderAssets.LIGHTING_TABLE_NAMES.length; tableIndex++) {
+                Assertions.assertEquals(0, assets.getLightingTable(tableIndex).length % LIGHTING_TABLE_COLUMNS);
+            }
+
+            Assertions.assertEquals(BFIRE_ROWS * LIGHTING_TABLE_COLUMNS, assets.getLightingTable(BFIRE_TABLE).length, "bfire has 40 rows.");
+
+            int marineImage = assets.getUnitImage(ScrUnitIds.TERRAN_MARINE);
+
+            for (int frameIndex : SHADOW_FRAMES) {
+                ClassicFrame shadow = assets.decodeImage(MARINE_SHADOW, frameIndex);
+                ClassicFrame body = assets.decodeImage(marineImage, frameIndex);
+
+                Assertions.assertEquals(0, shadow.getWidth() & 1);
+                Assertions.assertEquals(0, shadow.getHeight() & 1);
+                Assertions.assertEquals(0, body.getWidth() & 1);
+                Assertions.assertEquals(0, body.getHeight() & 1);
+            }
         }
     }
 }

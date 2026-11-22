@@ -395,9 +395,10 @@ public final class TerrainContours {
                     }
                 }
 
-                result.boundaries[direction][result.counts[direction]++] =
-                        (long) (short) coordinate << ENTRY_COORDINATE_SHIFT | (long) (first ^ SIGN_BIAS) << ENTRY_FIRST_SHIFT |
-                        (long) last << ENTRY_LAST_SHIFT | flags << ENTRY_FLAGS_SHIFT | direction;
+                long boundary = (long) (short) coordinate << ENTRY_COORDINATE_SHIFT | (long) (first ^ SIGN_BIAS) << ENTRY_FIRST_SHIFT |
+                                (long) last << ENTRY_LAST_SHIFT | flags << ENTRY_FLAGS_SHIFT | direction;
+
+                result.boundaries[direction][result.counts[direction]++] = boundary;
 
                 if (currentTurn == 0) {
                     direction = nextDirection;
@@ -459,10 +460,11 @@ public final class TerrainContours {
 
                 for (int miniatureIndex = 0; miniatureIndex < MINI_TILES_PER_TILE; miniatureIndex++) {
                     int miniature = tileset.getMiniatureFlags(tileIdentifier, miniatureIndex);
+                    int gridX = tileX * MINI_TILES_PER_ROW + miniatureIndex % MINI_TILES_PER_ROW;
+                    int gridY = tileY * MINI_TILES_PER_ROW + miniatureIndex / MINI_TILES_PER_ROW;
+                    byte cell = (byte) (((miniature & TerrainTileset.MINI_TILE_WALKABLE) ^ TerrainTileset.MINI_TILE_WALKABLE) << BLOCKED_SHIFT);
 
-                    grid[(tileY * MINI_TILES_PER_ROW + miniatureIndex / MINI_TILES_PER_ROW) * TerrainRegions.MINI_GRID_WIDTH +
-                         tileX * MINI_TILES_PER_ROW + miniatureIndex % MINI_TILES_PER_ROW] =
-                            (byte) (((miniature & TerrainTileset.MINI_TILE_WALKABLE) ^ TerrainTileset.MINI_TILE_WALKABLE) << BLOCKED_SHIFT);
+                    grid[gridY * TerrainRegions.MINI_GRID_WIDTH + gridX] = cell;
                 }
             }
         }
@@ -621,6 +623,22 @@ public final class TerrainContours {
         this.complementedRightExtent = (short) ~right;
         this.complementedLowerExtent = (short) ~lower;
         this.leftExtentPlusOne       = (short) (left + 1);
+    }
+
+    /**
+     * Copies the footprint control WORDs ({@link #getControl}) of other contours, the extents their last placement query left.
+     *
+     * @param source the contours to copy from
+     */
+    public void copyFootprintControls(@NotNull TerrainContours source) {
+        this.upperExtent             = source.upperExtent;
+        this.negativeRightExtent     = source.negativeRightExtent;
+        this.negativeLowerExtent     = source.negativeLowerExtent;
+        this.leftExtent              = source.leftExtent;
+        this.upperExtentPlusOne      = source.upperExtentPlusOne;
+        this.complementedRightExtent = source.complementedRightExtent;
+        this.complementedLowerExtent = source.complementedLowerExtent;
+        this.leftExtentPlusOne       = source.leftExtentPlusOne;
     }
 
     /**

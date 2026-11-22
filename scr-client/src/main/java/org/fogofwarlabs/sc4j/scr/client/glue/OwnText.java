@@ -1,19 +1,34 @@
-package org.fogofwarlabs.sc4j.scr.client.glue.lobby;
+package org.fogofwarlabs.sc4j.scr.client.glue;
 
 import org.jetbrains.annotations.NotNull;
 
 import java.util.Locale;
 
 /**
- * Lists SC4J's own texts of the Beacon.Link screens, in English and Korean; the install and the engine's {@code CommunityText} have no texts
- * for them. A text with {@code %s} or {@code %d} takes its values through {@link #format}.
+ * Lists SC4J's own texts of the glue screens, in English and Korean: the main menu's status panel and the Beacon.Link screens. The install
+ * and the engine's {@code CommunityText} have no texts for them. A text with {@code %s} or {@code %d} takes its values through
+ * {@link #format}.
  */
-enum BeaconLinkText {
+public enum OwnText {
+    VERSION("Version", "버전"),
+    LATEST_RELEASE("Latest release", "최신 릴리즈"),
+    UPDATE("Update", "업데이트"),
+    BEACON_LINK("Beacon.Link", "Beacon.Link"),
+
+    CHECKING("Checking", "확인 중"),
+    UNKNOWN("Unknown", "알 수 없음"),
+    UPDATE_AVAILABLE("Available", "있음"),
+    UP_TO_DATE("Up to date", "최신 버전"),
+
+    ONLINE("Online", "온라인"),
+    CONNECTING("Connecting", "연결 중"),
+    READY("Ready", "준비됨"),
+    OFFLINE("Offline", "오프라인"),
+
     CONNECTION_REQUIREMENTS("Requirements: Your computer will need access to the Internet and an SC4J account.",
                             "요구 조건: 컴퓨터가 인터넷에 연결되어 있고 SC4J 계정이 있어야 합니다."),
 
     MOD("Mod", "모드"),
-    CONNECTING("Connecting", "연결 중"),
     NO_NODES("Not set up", "설정 없음"),
     NO_ANSWER("No answer", "응답 없음"),
     REFUSED("Refused", "거부됨"),
@@ -36,7 +51,7 @@ enum BeaconLinkText {
     private final @NotNull String english;
     private final @NotNull String korean;
 
-    BeaconLinkText(@NotNull String english, @NotNull String korean) {
+    OwnText(@NotNull String english, @NotNull String korean) {
         this.english = english;
         this.korean  = korean;
     }
@@ -47,7 +62,7 @@ enum BeaconLinkText {
      * @param locale the install locale, for example {@code koKR}
      * @return the Korean text for {@code koKR}, the English text otherwise
      */
-    @NotNull String get(@NotNull String locale) {
+    public @NotNull String get(@NotNull String locale) {
         return KOREAN_LOCALE.equals(locale) ? this.korean : this.english;
     }
 
@@ -58,7 +73,7 @@ enum BeaconLinkText {
      * @param values the values of the text's {@code %s} and {@code %d}
      * @return the formatted text
      */
-    @NotNull String format(@NotNull String locale, @NotNull Object @NotNull ... values) {
+    public @NotNull String format(@NotNull String locale, @NotNull Object @NotNull ... values) {
         return String.format(Locale.ROOT, this.get(locale), values);
     }
 }

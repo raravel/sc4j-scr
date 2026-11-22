@@ -402,6 +402,13 @@ public final class GameContext {
     }
 
     /**
+     * @return {@code true} if the EUD emulation has committed a {@code stat_txt} table, {@code false} while the installed table is in effect
+     */
+    public boolean hasStatTextTable() {
+        return this.statTextTable != null;
+    }
+
+    /**
      * Reads the bytes of the committed {@code stat_txt} table from a string's start plus a skip up to the next {@code 0}
      * byte: a button string is read as its hotkey byte, its type byte and the text from the pointer plus two, whatever the
      * type byte is.

@@ -1,13 +1,16 @@
 package org.fogofwarlabs.sc4j.scr.client.ui.console;
 
 import org.fogofwarlabs.sc4j.base.exception.Exceptions;
+import org.fogofwarlabs.sc4j.engine.resource.graphics.Picture;
 import org.fogofwarlabs.sc4j.scr.render.OverlayPass;
 import org.fogofwarlabs.sc4j.scr.render.ui.InterfaceImage;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * Holds the decoded art of one race console: the SD console image, or the left, center and right HD pieces with their
- * placement. The image alpha is the console's hit mask.
+ * placement, and the pictures drawn instead of pieces. The alpha of a piece's picture, or else of its image, is the console's hit mask; a
+ * picture keeps the piece's place and size.
  * <p>
  * The images, their sizes and their placement belong to one art, so a hit test always reads one consistent set.
  */
@@ -31,6 +34,7 @@ final class ConsoleArt {
      * The left and top values of each piece in the piece positions.
      */
     private static final int POSITION_VALUES = 2;
+    private static final int PICTURE_ALPHA_SHIFT = 24;
 
     /**
      * Creates a {@link ConsoleArt} instance from the SD console image, which lies on the interface bottom edge at the left.
@@ -76,7 +80,16 @@ final class ConsoleArt {
         return Byte.toUnsignedInt(image.getRgba()[(v * image.getWidth() + u) * OverlayPass.RGBA_BYTES + OverlayPass.RGBA_ALPHA]);
     }
 
+    private static int getPixelAlpha(@NotNull Picture picture, int u, int v) {
+        if (u < 0 || v < 0 || u >= picture.getWidth() || v >= picture.getHeight()) {
+            return 0;
+        }
+
+        return picture.getColor().getValue(v * picture.getWidth() + u) >>> PICTURE_ALPHA_SHIFT;
+    }
+
     private final @NotNull InterfaceImage @NotNull [] images;
+    private final @Nullable Picture @NotNull [] pictures;
     /**
      * The width and height of each piece in the art's own pixels: interface pixels for the SD art, HD2 pixels for the HD
      * pieces.
@@ -99,6 +112,7 @@ final class ConsoleArt {
                        boolean highDefinition,
                        float @NotNull [] positions) {
         this.images         = images;
+        this.pictures       = new Picture[images.length];
         this.sizes          = sizes;
         this.pixelScale     = pixelScale;
         this.highDefinition = highDefinition;
@@ -112,6 +126,44 @@ final class ConsoleArt {
      */
     @NotNull InterfaceImage getImage(int piece) {
         return this.images[piece];
+    }
+
+    /**
+     * @param piece the piece index
+     * @return the picture drawn instead of the piece, or {@code null} for its image
+     */
+    @Nullable Picture findPicture(int piece) {
+        return this.pictures[piece];
+    }
+
+    /**
+     * Sets the picture drawn instead of a piece, at the piece's place and size.
+     *
+     * @param piece   the piece index
+     * @param picture the picture, whose colour layer is ARGB, or {@code null} for the piece's image
+     */
+    void setPicture(int piece, @Nullable Picture picture) {
+        this.pictures[piece] = picture;
+    }
+
+    /**
+     * @return {@code true} if a picture is drawn instead of a piece, {@code false} otherwise
+     */
+    boolean hasPicture() {
+        for (Picture picture : this.pictures) {
+            if (picture != null) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @return the number of pieces: {@code 1} for the SD art, {@link #PIECE_COUNT} for the HD art
+     */
+    int getPieceCount() {
+        return this.images.length;
     }
 
     /**
@@ -177,7 +229,6 @@ final class ConsoleArt {
      */
     boolean isHit(float x, float y) {
         if (!this.highDefinition) {
-            InterfaceImage mask = this.images[LEFT_PIECE];
             float width = this.getWidth(LEFT_PIECE);
             float height = this.getHeight(LEFT_PIECE);
             float offsetY = y - this.getTop(LEFT_PIECE);
@@ -186,7 +237,7 @@ final class ConsoleArt {
                 return false;
             }
 
-            return getPixelAlpha(mask, (int) (x / width * mask.getWidth()), (int) (offsetY / height * mask.getHeight())) >= MINIMUM_HIT_ALPHA;
+            return this.getMaskAlpha(LEFT_PIECE, x / width, offsetY / height) >= MINIMUM_HIT_ALPHA;
         }
 
         float top = Math.min(this.getTop(LEFT_PIECE), Math.min(this.getTop(CENTER_PIECE), this.getTop(RIGHT_PIECE)));
@@ -223,7 +274,6 @@ final class ConsoleArt {
      * Tests one HD piece: at or below its top, within its left and right edges (inclusive), then its mask texel.
      */
     private boolean isPieceHit(int piece, float x, float y) {
-        InterfaceImage mask = this.images[piece];
         float left = this.getLeft(piece);
         float top = this.getTop(piece);
         float width = this.getWidth(piece);
@@ -233,9 +283,21 @@ final class ConsoleArt {
             return false;
         }
 
-        int u = (int) ((x - left) / width * mask.getWidth());
-        int v = (int) ((y - top) / height * mask.getHeight());
+        return this.getMaskAlpha(piece, (x - left) / width, (y - top) / height) >= MINIMUM_HIT_ALPHA;
+    }
 
-        return getPixelAlpha(mask, u, v) >= MINIMUM_HIT_ALPHA;
+    /**
+     * Reads the mask alpha of a piece at a fraction of its width and height: its picture's alpha, or else its image's.
+     */
+    private int getMaskAlpha(int piece, float u, float v) {
+        Picture picture = this.pictures[piece];
+
+        if (picture != null) {
+            return getPixelAlpha(picture, (int) (u * picture.getWidth()), (int) (v * picture.getHeight()));
+        }
+
+        InterfaceImage mask = this.images[piece];
+
+        return getPixelAlpha(mask, (int) (u * mask.getWidth()), (int) (v * mask.getHeight()));
     }
 }

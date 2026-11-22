@@ -12,9 +12,10 @@ import java.util.Locale;
 
 /**
  * Shows the window's input-method composition ({@link TextInputMethod}) in the focused edit control the way the game does: each composition
- * update takes back the previous composition with caret movement and deletion keys, types the new text through the input sink and moves the caret
- * back to the composition cursor. A refused character rolls the update back and cancels the composition. It also names the input language of
- * the edit control's language mark. Without a bound input method text input stays off and the input language is {@code 0}.
+ * update takes back the previous composition with caret movement and deletion keys and types the new text through the input sink; a
+ * composition with clauses then moves the caret back to its cursor, one without clauses leaves the caret after its text. A refused character
+ * rolls the update back and cancels the composition. It also names the input language of the edit control's language mark. Without a bound
+ * input method text input stays off and the input language is {@code 0}.
  */
 public final class InputMethod implements TextCompositionListener {
     private static final int INPUT_JAPANESE = 1;
@@ -244,7 +245,7 @@ public final class InputMethod implements TextCompositionListener {
 
     /**
      * Removes the previous composition and types the new text through the input sink. A rejected insertion rolls back typed characters and cancels
-     * the composition; an active composition retains its target clause.
+     * the composition; an active composition with clauses retains its target clause and moves the caret to its cursor.
      *
      * @param text        the result or the composition text
      * @param composition the composition, or {@code null} for a result
@@ -299,14 +300,17 @@ public final class InputMethod implements TextCompositionListener {
         }
 
         if (composition != null && length > 0) {
-            this.clauseStart  = composition.getClauseStart();
-            this.clauseEnd    = composition.getClauseEnd();
-            this.clauseCursor = composition.getCursor();
+            // A composition without clauses keeps the caret after its text.
+            if (composition.getClauseEnd() > composition.getClauseStart()) {
+                this.clauseStart  = composition.getClauseStart();
+                this.clauseEnd    = composition.getClauseEnd();
+                this.clauseCursor = composition.getCursor();
 
-            for (int step = this.clauseCursor; step < length; step++) {
-                this.pressKey(Key.LEFT);
+                for (int step = this.clauseCursor; step < length; step++) {
+                    this.pressKey(Key.LEFT);
 
-                this.caretMovedLeft++;
+                    this.caretMovedLeft++;
+                }
             }
 
             this.composing         = true;

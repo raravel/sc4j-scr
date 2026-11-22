@@ -97,7 +97,7 @@ public final class ReplayLoaderUtils {
                                                             @NotNull GameData gameData) throws IOException {
         TerrainTileset terrain = gameData.getTerrainTileset(mapFile.getTileset());
         GameMap map = createMap(mapFile, terrain);
-        GameSetup.Builder setup = createSetup(replay, gameData, map, new LcgRandom((int) replay.getHeader().getRandomSeed()));
+        GameSetup.Builder setup = createSetup(replay, mapFile, gameData, map, new LcgRandom((int) replay.getHeader().getRandomSeed()));
         Game game = Game.create(setup.build());
 
         initializePlayerColors(game, replay, mapFile);
@@ -285,7 +285,7 @@ public final class ReplayLoaderUtils {
         GameMap map = createMap(mapFile, terrain);
         boolean useMapSettings = header.getSettings().usesMapSettings();
 
-        GameSetup setup = createSetup(replay, gameData, map, random)
+        GameSetup setup = createSetup(replay, mapFile, gameData, map, random)
                 .setRuntimeRandom(runtimeRandom)
                 .setLimits(replay.getLimits().getEffectiveValues())
                 .build();
@@ -510,16 +510,19 @@ public final class ReplayLoaderUtils {
     }
 
     /**
-     * Creates the setup of a replay's game: the header seed and options, the rules version of the replay format, the
-     * cheat option and the players of the header.
+     * Creates the setup of a replay's game: the map's scenario, the archive of a live game's map file, the replay, the header seed and options,
+     * the rules version of the replay format, the cheat option and the players of the header.
      */
-    private static GameSetup.@NotNull Builder createSetup(@NotNull ReplayFile replay,
+    private static GameSetup.@NotNull Builder createSetup(@NotNull ReplayFile replay, @NotNull ChkFile mapFile,
                                                           @NotNull GameData gameData,
                                                           @NotNull GameMap map,
                                                           @NotNull LcgRandom random) {
         ReplayHeader header = replay.getHeader();
 
         GameSetup.Builder setup = new GameSetup.Builder(gameData, map, random)
+                .setScenario(mapFile)
+                .setMapArchive(replay.getMapArchive())
+                .setReplay(replay)
                 .setSeed((int) header.getRandomSeed())
                 .setSettings(header.getSettings())
                 .setRulesVersion(GameRulesVersion.forReplay(replay.getGameVersion(), replay.getFormat() != ReplayContainerFormat.MODERN_121))

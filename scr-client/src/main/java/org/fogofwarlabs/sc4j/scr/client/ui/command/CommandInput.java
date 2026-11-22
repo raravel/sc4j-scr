@@ -7,6 +7,8 @@ import org.fogofwarlabs.sc4j.scr.client.world.ScrGameView;
 import org.fogofwarlabs.sc4j.scr.content.ScrOrderIds;
 import org.fogofwarlabs.sc4j.scr.content.ScrTechIds;
 import org.fogofwarlabs.sc4j.scr.data.format.replay.*;
+import org.fogofwarlabs.sc4j.scr.game.extension.ScrButtonInput;
+import org.fogofwarlabs.sc4j.scr.game.extension.ScrGamePlugin;
 import org.fogofwarlabs.sc4j.scr.game.order.UnitOrderEligibility;
 import org.fogofwarlabs.sc4j.scr.game.order.UnitSelection;
 import org.fogofwarlabs.sc4j.scr.game.player.PlayerTable;
@@ -278,13 +280,26 @@ public final class CommandInput {
     }
 
     /**
-     * Presses a command card slot.
+     * Presses a command card slot with the mouse.
      *
      * @param slot   the slot from {@code 0} through {@code 8}
      * @param queued whether the command is queued (shift)
      * @return the effect of the press
      */
     public @NotNull Result pressSlot(int slot, boolean queued) {
+        return this.pressSlot(slot, queued, false);
+    }
+
+    /**
+     * Presses a command card slot. The game plugins see the press of an enabled button first ({@link ScrGamePlugin#onButtonInput}); a press a
+     * plugin consumes runs no action.
+     *
+     * @param slot   the slot from {@code 0} through {@code 8}
+     * @param queued whether the command is queued (shift)
+     * @param hotkey whether a hotkey pressed the slot, else the mouse
+     * @return the effect of the press
+     */
+    public @NotNull Result pressSlot(int slot, boolean queued, boolean hotkey) {
         CommandCard card = this.console.getCommandCard();
         ButtonDefinition button = card.getButton(Objects.checkIndex(slot, CommandCard.SLOT_COUNT));
 
@@ -292,7 +307,17 @@ public final class CommandInput {
             return Result.IGNORED;
         }
 
-        return this.executeButton(button, queued);
+        int set = card.getDisplayedSet();
+        ScrButtonInput press = ScrButtonInput.ofPress(set, card.findTableIndex(set, button), button.getPosition(), button.getIcon(),
+                                                      button.getCondition().getNativeAddress(), button.getConditionValue(),
+                                                      button.getAction().getNativeAddress(), button.getActionValue(),
+                                                      queued, hotkey);
+
+        if (this.console.getView().deliverButtonInput(press)) {
+            return Result.INTERFACE;
+        }
+
+        return this.executeButton(button, press, queued);
     }
 
     /**
@@ -411,11 +436,12 @@ public final class CommandInput {
     public @NotNull Result pressHotkey(@NotNull HotkeyProfile profile, char character, boolean queued) {
         int slot = this.findHotkeySlot(profile, character);
 
-        return slot < 0 ? Result.IGNORED : this.pressSlot(slot, queued);
+        return slot < 0 ? Result.IGNORED : this.pressSlot(slot, queued, true);
     }
 
     /**
-     * Encodes and submits a targeting click, using the order fog-type rule, then clears the targeting mode.
+     * Encodes and submits a targeting click, using the order fog-type rule, then clears the targeting mode. The targeting of a script target
+     * button hands the target to the game plugins instead ({@link ScrGamePlugin#onButtonInput}): a target a plugin consumes keeps the mode.
      *
      * @param positionX the target map x coordinate
      * @param positionY the target map y coordinate
@@ -427,6 +453,18 @@ public final class CommandInput {
      */
     public @NotNull Result clickTarget(int positionX, int positionY, @Nullable Unit target, int fogType, boolean queued) {
         InterfaceMode mode = this.console.getMode();
+        ScrButtonInput scriptButton = mode.getScriptButton();
+
+        if (scriptButton != null) {
+            if (this.console.getView().deliverButtonInput(scriptButton.createTargeted(positionX, positionY, target, queued))) {
+                return Result.INTERFACE;
+            }
+
+            mode.clear();
+
+            return Result.COMMAND;
+        }
+
         int order = target != null ? mode.getUnitTargetOrder() : mode.getGroundTargetOrder();
 
         if (order < 0) {
@@ -531,7 +569,7 @@ public final class CommandInput {
         return Result.COMMAND;
     }
 
-    private @NotNull Result executeButton(@NotNull ButtonDefinition button, boolean queued) {
+    private @NotNull Result executeButton(@NotNull ButtonDefinition button, @NotNull ScrButtonInput press, boolean queued) {
         ButtonAction action = button.getAction();
         int value = button.getActionValue();
         InterfaceMode mode = this.console.getMode();
@@ -576,6 +614,12 @@ public final class CommandInput {
                 case SELECT_LARVA -> this.interfaceActions == null ? Result.IGNORED : this.interfaceActions.selectLarva();
                 default -> Result.IGNORED;
             };
+            case SCRIPT -> Result.INTERFACE;
+            case SCRIPT_TARGET -> {
+                mode.startScriptTargeting(press);
+
+                yield Result.INTERFACE;
+            }
             case REPLAY -> {
                 ReplayControls controls = this.replayControls;
 

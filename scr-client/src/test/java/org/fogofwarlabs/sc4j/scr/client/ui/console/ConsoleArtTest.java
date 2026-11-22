@@ -1,5 +1,7 @@
 package org.fogofwarlabs.sc4j.scr.client.ui.console;
 
+import org.fogofwarlabs.sc4j.engine.resource.graphics.Picture;
+import org.fogofwarlabs.sc4j.engine.resource.graphics.PixelLayer;
 import org.fogofwarlabs.sc4j.scr.render.OverlayPass;
 import org.fogofwarlabs.sc4j.scr.render.ui.InterfaceImage;
 import org.jetbrains.annotations.NotNull;
@@ -9,7 +11,7 @@ import org.junit.jupiter.api.Test;
 import java.util.Arrays;
 
 /**
- * Checks the console hit masks of the SD console and of the placed HD pieces.
+ * Checks the console hit masks of the SD console and of the placed HD pieces, and of the pictures drawn instead of pieces.
  */
 final class ConsoleArtTest {
     /**
@@ -22,6 +24,7 @@ final class ConsoleArtTest {
      */
     private static final int INTERFACE_HEIGHT = 480;
     private static final int OPAQUE_ALPHA = 0xFF;
+    private static final int OPAQUE_ARGB = 0xFF000000;
     /**
      * An alpha just below the alpha that counts as console.
      */
@@ -104,6 +107,46 @@ final class ConsoleArtTest {
         Assertions.assertFalse(art.isHit(rightX, art.getTop(ConsoleArt.RIGHT_PIECE) + PIXEL_CENTER), "transparent right piece");
         Assertions.assertTrue(art.isHit(centerMiddle, art.getTop(ConsoleArt.CENTER_PIECE) + PIXEL_CENTER), "center piece");
         Assertions.assertFalse(art.isHit(centerMiddle, art.getTop(ConsoleArt.CENTER_PIECE) - PIXEL_CENTER), "above every piece");
+    }
+
+    @Test
+    void a_picture_should_keep_the_piece_place_and_size_and_give_the_hit_mask() {
+        ConsoleArt art = ConsoleArt.ofStandardDefinition(createImage(STANDARD_WIDTH, STANDARD_HEIGHT, OPAQUE_ALPHA));
+        // Four pixels wide: the right half of the piece is transparent.
+        Picture picture = new Picture(4, 1, PixelLayer.ofRgba(new int[]{OPAQUE_ARGB, OPAQUE_ARGB, 0, 0}));
+        float top = INTERFACE_HEIGHT - STANDARD_HEIGHT;
+
+        Assertions.assertFalse(art.hasPicture());
+
+        art.setPicture(ConsoleArt.LEFT_PIECE, picture);
+
+        Assertions.assertTrue(art.hasPicture());
+        Assertions.assertSame(picture, art.findPicture(ConsoleArt.LEFT_PIECE));
+        Assertions.assertEquals(STANDARD_WIDTH, art.getWidth(ConsoleArt.LEFT_PIECE));
+        Assertions.assertTrue(art.isHit(PIXEL_CENTER, top + PIXEL_CENTER));
+        Assertions.assertFalse(art.isHit(1 + PIXEL_CENTER, top + PIXEL_CENTER), "transparent half of the picture");
+
+        art.setPicture(ConsoleArt.LEFT_PIECE, null);
+
+        Assertions.assertFalse(art.hasPicture());
+        Assertions.assertTrue(art.isHit(1 + PIXEL_CENTER, top + PIXEL_CENTER), "the image again");
+    }
+
+    @Test
+    void a_picture_should_give_the_hit_mask_of_its_hd_piece_only() {
+        InterfaceImage side = createImage(SIDE_PIECE_WIDTH, PIECE_HEIGHT, OPAQUE_ALPHA);
+        InterfaceImage center = createImage(CENTER_PIECE_WIDTH, PIECE_HEIGHT, OPAQUE_ALPHA);
+        ConsoleArt art = ConsoleArt.ofPieces(new InterfaceImage[]{side, center, side}, HD2_DIVISOR);
+
+        art.placePieces(ConsoleLayout.INTERFACE_WIDTH, HdConsoleLayout.Variant.WIDE);
+        art.setPicture(ConsoleArt.RIGHT_PIECE, new Picture(1, 1, PixelLayer.ofRgba(new int[]{0})));
+
+        float rightX = art.getLeft(ConsoleArt.RIGHT_PIECE) + art.getWidth(ConsoleArt.RIGHT_PIECE) - PIXEL_CENTER;
+
+        Assertions.assertEquals(SIDE_PIECE_WIDTH / (float) HD2_SCALE, art.getWidth(ConsoleArt.RIGHT_PIECE));
+        Assertions.assertFalse(art.isHit(rightX, art.getTop(ConsoleArt.RIGHT_PIECE) + PIXEL_CENTER), "transparent picture of the right piece");
+        Assertions.assertTrue(art.isHit(art.getLeft(ConsoleArt.LEFT_PIECE) + PIXEL_CENTER, art.getTop(ConsoleArt.LEFT_PIECE) + PIXEL_CENTER),
+                              "left piece image");
     }
 
     @Test

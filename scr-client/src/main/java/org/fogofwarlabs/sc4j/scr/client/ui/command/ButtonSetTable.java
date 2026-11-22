@@ -1,8 +1,11 @@
 package org.fogofwarlabs.sc4j.scr.client.ui.command;
 
 import org.fogofwarlabs.sc4j.scr.data.type.constant.ButtonSetIds;
+import org.fogofwarlabs.sc4j.scr.game.presentation.HostButtonSets;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.IdentityHashMap;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -54,6 +57,36 @@ public final class ButtonSetTable {
      */
     public static int getConnectedSet(int set) {
         return CONNECTED_SETS[Objects.checkIndex(set, SET_COUNT)];
+    }
+
+    /**
+     * Converts the table to the buttons of a game's table ({@link HostButtonSets}): the condition and action functions as their addresses, the
+     * strings as their ids. The sets that share an array here share one converted array.
+     *
+     * @return the converted arrays by set, each new
+     */
+    public static HostButtonSets.@NotNull Button @NotNull [] @NotNull [] createHostButtons() {
+        HostButtonSets.Button[][] converted = new HostButtonSets.Button[SET_COUNT][];
+        Map<ButtonDefinition[], HostButtonSets.Button[]> arrays = new IdentityHashMap<>();
+
+        for (int set = 0; set < SET_COUNT; set++) {
+            converted[set] = arrays.computeIfAbsent(SETS[set], buttons -> {
+                HostButtonSets.Button[] array = new HostButtonSets.Button[buttons.length];
+
+                for (int index = 0; index < buttons.length; index++) {
+                    ButtonDefinition button = buttons[index];
+
+                    array[index] = new HostButtonSets.Button(button.getPosition(), button.getIcon(),
+                                                             button.getCondition().getNativeAddress(), button.getConditionValue(),
+                                                             button.getAction().getNativeAddress(), button.getActionValue(),
+                                                             button.getEnabledString(), button.getDisabledString());
+                }
+
+                return array;
+            });
+        }
+
+        return converted;
     }
 
     private static void defineSet(int set, int connected, @NotNull ButtonDefinition @NotNull [] buttons) {

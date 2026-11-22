@@ -247,10 +247,17 @@ final class WorldInterfaceTest {
             world.handlePointerMove(enemy.getPositionX(), enemy.getPositionY(), 0, -1);
             Assertions.assertEquals(WorldInterface.Cursor.MAGNIFIER_ENEMY, world.getCursor());
             world.handleLeftPress(enemy.getPositionX(), enemy.getPositionY(), false);
-            Assertions.assertEquals(CommandInput.Result.INTERFACE,
+            Assertions.assertEquals(CommandInput.Result.COMMAND,
                                     world.handleLeftRelease(enemy.getPositionX(), enemy.getPositionY(), false, false, false, false, 0, 0, 1, 1));
-            Assertions.assertTrue(console.isLocalSelection(), "another player's unit is inspected without a command");
+            Assertions.assertTrue(console.isLocalSelection(), "another player's unit is shown as a local selection");
             Assertions.assertSame(enemy, world.getSelectedUnit(0));
+
+            RecordingCommandSink.Command enemySelect = submitted.getLast();
+
+            Assertions.assertEquals(SELECT_OPCODE, enemySelect.getOpcode(), "another player's unit is selected by command too");
+            Assertions.assertEquals(0, enemySelect.getPlayer());
+            Assertions.assertEquals(1, enemySelect.getPayload()[0]);
+            Assertions.assertSame(enemy, game.getUnitSystem().requireUnitPool().resolveHandle(readHandle(enemySelect.getPayload(), 1)));
 
             Assertions.assertEquals(CommandInput.Result.COMMAND, world.handleControlGroupKey(COMMAND_CONTROL_GROUP, false, false, false, 0));
             Assertions.assertEquals(HOTKEY_OPCODE, submitted.getLast().getOpcode());

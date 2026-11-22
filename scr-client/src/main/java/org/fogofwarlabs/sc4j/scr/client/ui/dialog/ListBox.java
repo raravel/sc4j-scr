@@ -460,6 +460,16 @@ public final class ListBox extends ScrControl {
         this.model.select(index, rows);
     }
 
+    /**
+     * Shows a row first without changing the selection.
+     *
+     * @param first the index of the first shown row, clamped so that the shown rows hold items
+     * @param rows  the visible rows
+     */
+    public void scrollTo(int first, int rows) {
+        this.model.scrollTo(first, rows);
+    }
+
 
     /**
      * Presses the list: the scroll bar when it is shown and hit, else the row under the pointer.

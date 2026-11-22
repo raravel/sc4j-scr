@@ -167,14 +167,16 @@ public final class GameProxyDatagram {
             writeTag(output, PAYLOAD_HASH_FIELD, ProtobufUtils.WIRE_TYPE_VARIABLE_INTEGER);
             ProtobufUtils.writeVariableInteger(output, payloadHash);
             values[PAYLOAD_HASH_FIELD] = payloadHash;
-                                         presentFields |= 1 << PAYLOAD_HASH_FIELD;
+
+            presentFields |= 1 << PAYLOAD_HASH_FIELD;
         }
 
         if (probeTimestamp != 0) {
             writeTag(output, PROBE_TIMESTAMP_FIELD, ProtobufUtils.WIRE_TYPE_VARIABLE_INTEGER);
             ProtobufUtils.writeVariableInteger(output, probeTimestamp);
             values[PROBE_TIMESTAMP_FIELD] = probeTimestamp;
-                                            presentFields |= 1 << PROBE_TIMESTAMP_FIELD;
+
+            presentFields |= 1 << PROBE_TIMESTAMP_FIELD;
         }
 
         writeTag(output, ADDRESS_INFORMATION_FIELD, ProtobufUtils.WIRE_TYPE_LENGTH_DELIMITED);
@@ -371,7 +373,8 @@ public final class GameProxyDatagram {
 
                         if ((enumValue >= TYPE_DATA && enumValue < UNDEFINED_TYPE) || (enumValue > UNDEFINED_TYPE && enumValue <= LAST_TYPE)) {
                             values[fieldNumber] = enumValue;
-                                                  presentFields |= 1 << fieldNumber;
+
+                            presentFields |= 1 << fieldNumber;
                         }
                     } else if (fieldNumber == SCALAR_FIELD_3 || fieldNumber == SCALAR_FIELD_4 || fieldNumber == PAYLOAD_HASH_FIELD ||
                                fieldNumber == PROBE_TIMESTAMP_FIELD) {

@@ -13,6 +13,9 @@ import java.util.Arrays;
  * <p>
  * The decoded position representation preserves the coordinate consumers' unsigned WORD values. Each map row holds a doubly linked sprite list, up to
  * {@link GameMap#MAXIMUM_DIMENSION} tile rows.
+ * <p>
+ * Every allocation stamps its slot with a generation ({@link #getGeneration(int)}), a serial that tells sprites apart that reuse a slot. The
+ * generations are bookkeeping of the pool: no simulation rule reads them, the state hash and saved games leave them out.
  */
 public final class SpritePool {
     /**
@@ -63,6 +66,7 @@ public final class SpritePool {
      */
     private int @NotNull [] previousFreeIndices;
     private boolean @NotNull [] allocated;
+    private long @NotNull [] generations;
 
     private final int @NotNull [] firstRowIndices;
     private final int @NotNull [] lastRowIndices;
@@ -78,6 +82,7 @@ public final class SpritePool {
     private int firstFreeIndex;
     private int lastFreeIndex;
     private int allocatedCount;
+    private long generation;
     /**
      * The capacity the pool was created with: the initial array, which EUD pointer conversions cover.
      */
@@ -100,6 +105,7 @@ public final class SpritePool {
         this.nextFreeIndices     = new int[capacity];
         this.previousFreeIndices = new int[capacity];
         this.allocated           = new boolean[capacity];
+        this.generations         = new long[capacity];
 
         this.firstRowIndices    = new int[GameMap.MAXIMUM_DIMENSION];
         this.lastRowIndices     = new int[GameMap.MAXIMUM_DIMENSION];
@@ -115,6 +121,7 @@ public final class SpritePool {
         this.firstFreeIndex = 0;
         this.lastFreeIndex  = capacity == 1 ? 0 : 1;
         this.allocatedCount = 0;
+        this.generation     = 0;
         this.nativeCapacity = capacity;
 
         Arrays.fill(this.firstRowIndices, -1);
@@ -184,6 +191,21 @@ public final class SpritePool {
      */
     public boolean isAllocated(int poolIndex) {
         return this.allocated[poolIndex];
+    }
+
+    /**
+     * @param poolIndex the storage index
+     * @return the generation of the slot's last allocation, {@code 0} if the slot was never allocated or holds a saved game's sprite
+     */
+    public long getGeneration(int poolIndex) {
+        return this.generations[poolIndex];
+    }
+
+    /**
+     * @return the generation of the latest allocation, {@code 0} before the first; every allocation takes the next one
+     */
+    public long getGeneration() {
+        return this.generation;
     }
 
     /**
@@ -326,6 +348,7 @@ public final class SpritePool {
         this.nextFreeIndices     = Arrays.copyOf(this.nextFreeIndices, capacity);
         this.previousFreeIndices = Arrays.copyOf(this.previousFreeIndices, capacity);
         this.allocated           = Arrays.copyOf(this.allocated, capacity);
+        this.generations         = Arrays.copyOf(this.generations, capacity);
         this.previousRowIndices  = growLinkIndices(this.previousRowIndices, capacity);
         this.nextRowIndices      = growLinkIndices(this.nextRowIndices, capacity);
         this.rowIndices          = growLinkIndices(this.rowIndices, capacity);
@@ -409,7 +432,8 @@ public final class SpritePool {
         this.nextFreeIndices[poolIndex]     = -1;
         this.previousFreeIndices[poolIndex] = -1;
 
-        this.allocated[poolIndex] = true;
+        this.allocated[poolIndex]   = true;
+        this.generations[poolIndex] = ++this.generation;
         this.allocatedCount++;
 
         return this.sprites[poolIndex];
@@ -427,6 +451,7 @@ public final class SpritePool {
         Arrays.fill(this.nextFreeIndices, -1);
         Arrays.fill(this.previousFreeIndices, -1);
         Arrays.fill(this.allocated, false);
+        Arrays.fill(this.generations, 0);
 
         Arrays.fill(this.firstRowIndices, -1);
         Arrays.fill(this.lastRowIndices, -1);

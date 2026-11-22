@@ -1,18 +1,36 @@
 package org.fogofwarlabs.sc4j.scr.client.glue.lobby;
 
+import org.fogofwarlabs.sc4j.engine.net.beaconlink.LatencyEstimate;
+import org.fogofwarlabs.sc4j.engine.net.beaconlink.community.PlayerStatus;
+import org.fogofwarlabs.sc4j.engine.net.beaconlink.community.RecordingCommunitySession;
+import org.fogofwarlabs.sc4j.scr.client.glue.GlueCanvas;
+import org.fogofwarlabs.sc4j.scr.client.glue.GlueNavigator;
+import org.fogofwarlabs.sc4j.scr.core.test.RequiresInstallation;
 import org.fogofwarlabs.sc4j.scr.game.player.PlayerTable;
 import org.fogofwarlabs.sc4j.scr.game.session.setup.LobbyResolution;
 import org.fogofwarlabs.sc4j.scr.game.session.setup.MeleeGameSetup;
 import org.fogofwarlabs.sc4j.scr.game.session.setup.MeleeGameSetup.PlayerRecord;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.io.IOException;
+import java.nio.file.Path;
 
 /**
- * Checks the LAN lobby's disabled Start of occupied slots with an unchosen race.
+ * Checks the LAN lobby's disabled Start of occupied slots with an unchosen race, and that a lobby screen without a joined game shows the join
+ * error.
  */
 final class GameLobbyScreenTest {
+    private static final @NotNull String RENDER_SMOKE_PROPERTY = "sc4j.render.smoke";
+    private static final @NotNull String RENDER_SMOKE_MESSAGE = "Pass -Psc4j.render.smoke=true to run the GPU check.";
     private static final int OPEN = LobbyResolution.TYPE_OPEN;
+    private static final int SELF_KEY = 1;
+    private static final int SMALL_WIDTH = 640;
+    private static final int SMALL_HEIGHT = 480;
 
     /**
      * The player ids of a slot without a player, of the host and of the joiner.
@@ -44,6 +62,32 @@ final class GameLobbyScreenTest {
         }
 
         return records;
+    }
+
+    @TempDir
+    @Nullable Path directory;
+
+    @Test
+    @RequiresInstallation
+    void lobby_without_a_joined_game_shows_the_join_error() throws IOException {
+        Assumptions.assumeTrue(Boolean.getBoolean(RENDER_SMOKE_PROPERTY), RENDER_SMOKE_MESSAGE);
+
+        Path root = this.directory;
+
+        Assertions.assertNotNull(root);
+
+        RecordingCommunitySession community = new RecordingCommunitySession(
+                RecordingCommunitySession.createPresence(SELF_KEY, BeaconLinkGlueScenario.ACCOUNT_NAME, BeaconLinkGlueScenario.MOD_ID,
+                                                         BeaconLinkGlueScenario.MOD_VERSION, true, PlayerStatus.AVAILABLE, LatencyEstimate.UNKNOWN)
+        );
+
+        try (BeaconLinkGlueScenario scenario = BeaconLinkGlueScenario.open(root, "enUS", SMALL_WIDTH, SMALL_HEIGHT, GlueCanvas.SD_PREFIX, community)) {
+            // The channel chat opens the client on the network, which has joined no game.
+            scenario.show(GlueNavigator.Destination.CHANNEL_CHAT);
+            scenario.show(GlueNavigator.Destination.GAME_LOBBY);
+
+            Assertions.assertTrue(scenario.isPopupOpen(), "the lobby screen shows the join error");
+        }
     }
 
     @Test

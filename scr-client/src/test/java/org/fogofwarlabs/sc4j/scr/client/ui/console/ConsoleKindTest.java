@@ -38,6 +38,17 @@ final class ConsoleKindTest {
     private static final int REMASTERED_APM_PEN_X = 397;
     private static final int REMASTERED_APM_PEN_Y = 363;
     /**
+     * The right end of the APM number in the 640-pixel interface: the interface's last pixel column less the pen.
+     */
+    private static final int CLASSIC_APM_TEXT_RIGHT = 241;
+    private static final int REMASTERED_APM_TEXT_RIGHT = 242;
+    /**
+     * The interface width of a 1920x1032 screen and the APM number ends it gives: the pen moves right by {@code 126} and the end by {@code 127}.
+     */
+    private static final int WIDE_INTERFACE_WIDTH = 893;
+    private static final int WIDE_CLASSIC_APM_TEXT_RIGHT = 368;
+    private static final int WIDE_REMASTERED_APM_TEXT_RIGHT = 369;
+    /**
      * The remastered time plate left and top of the Terran console, the default entry that the observer console also takes.
      */
     private static final int REMASTERED_DEFAULT_TIME_PLATE_LEFT = 301;
@@ -55,6 +66,7 @@ final class ConsoleKindTest {
 
     private static final @NotNull String @NotNull [] RACE_FOLDERS = {"zerg", "terran", "protoss"};
     private static final @NotNull String TIME_PLATE = "console_TIME.DDS";
+    private static final @NotNull String APM_PLATE = "console_APM.DDS";
     /**
      * The largest distance between the time pen and the center of the plate's dark time window, in interface pixels: the
      * shared classic pen lies {@code 5.5} pixels right of the classic Zerg window.
@@ -189,6 +201,39 @@ final class ConsoleKindTest {
         Assertions.assertEquals(CLASSIC_APM_PEN_Y, ConsoleKind.CLASSIC.getApmPenY());
         Assertions.assertEquals(REMASTERED_APM_PEN_X, ConsoleKind.REMASTERED.getApmPenX());
         Assertions.assertEquals(REMASTERED_APM_PEN_Y, ConsoleKind.REMASTERED.getApmPenY());
+    }
+
+    @Test
+    void apm_text_right_mirrors_the_pen_inside_the_interface_width() {
+        Assertions.assertEquals(CLASSIC_APM_TEXT_RIGHT, ConsoleKind.CLASSIC.calculateApmTextRight(ConsoleLayout.INTERFACE_WIDTH));
+        Assertions.assertEquals(REMASTERED_APM_TEXT_RIGHT, ConsoleKind.REMASTERED.calculateApmTextRight(ConsoleLayout.INTERFACE_WIDTH));
+        Assertions.assertEquals(WIDE_CLASSIC_APM_TEXT_RIGHT, ConsoleKind.CLASSIC.calculateApmTextRight(WIDE_INTERFACE_WIDTH));
+        Assertions.assertEquals(WIDE_REMASTERED_APM_TEXT_RIGHT, ConsoleKind.REMASTERED.calculateApmTextRight(WIDE_INTERFACE_WIDTH));
+    }
+
+    @RequiresInstallation
+    @Test
+    void apm_text_ends_on_the_apm_plate_of_every_race_and_art_set() throws IOException {
+        try (CascStorage storage = CascStorage.open(ExternalInput.INSTALLATION.getPath())) {
+            InterfaceAssets assets = InterfaceAssets.load(ScrResourceProvider.borrow(storage), 0);
+
+            for (AssetResolver.AssetSet assetSet : AssetResolver.AssetSet.values()) {
+                ConsoleKind kind = ConsoleKind.of(assetSet);
+
+                assets.setAssetSet(assetSet);
+
+                for (int race = 0; race < RACE_FOLDERS.length; race++) {
+                    ConsoleType type = ConsoleType.of(race, false);
+                    InterfaceAssets.ScaledImage plate = assets.decodeTexture("game/consoles/" + RACE_FOLDERS[race] + "/" + APM_PLATE);
+                    int plateLeft = kind.getApmPlateLeft(type);
+                    int plateRight = plateLeft + plate.getImage().getWidth() / plate.getScale();
+                    int textRight = kind.calculateApmTextRight(ConsoleLayout.INTERFACE_WIDTH);
+                    String message = assetSet + " " + RACE_FOLDERS[race] + ": plate " + plateLeft + ".." + plateRight + ", text right " + textRight;
+
+                    Assertions.assertTrue(textRight > plateLeft && textRight <= plateRight, message);
+                }
+            }
+        }
     }
 
     @RequiresInstallation

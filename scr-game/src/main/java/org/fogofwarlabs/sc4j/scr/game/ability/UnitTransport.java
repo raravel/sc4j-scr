@@ -11,6 +11,7 @@ import org.fogofwarlabs.sc4j.scr.data.type.constant.SpriteIds;
 import org.fogofwarlabs.sc4j.scr.data.type.constant.UnitGroupFlags;
 import org.fogofwarlabs.sc4j.scr.data.type.constant.UnitTypeFlags;
 import org.fogofwarlabs.sc4j.scr.game.ai.ComputerPlayerPhase;
+import org.fogofwarlabs.sc4j.scr.game.extension.ScrSimulationPlugins;
 import org.fogofwarlabs.sc4j.scr.game.movement.FlingyMotionUtils;
 import org.fogofwarlabs.sc4j.scr.game.order.UnitOrderEligibility;
 import org.fogofwarlabs.sc4j.scr.game.order.UnitSelection;
@@ -713,6 +714,12 @@ public final class UnitTransport implements TransportCargo {
                 this.game.getUnitPositioning().move(target, transportSprite.getX(), transportSprite.getY());
             }
         }
+
+        ScrSimulationPlugins simulation = this.game.getSimulationPlugins();
+
+        if (simulation != null) {
+            simulation.reportUnitLoaded(target, transport);
+        }
     }
 
     /**
@@ -862,6 +869,12 @@ public final class UnitTransport implements TransportCargo {
             turret.setStatus(turret.getStatus() & ~UnitStatusFlags.IN_BUNKER & ~UnitStatusFlags.CAN_MOVE |
                              (turretCanMove ? UnitStatusFlags.CAN_MOVE : 0));
             this.game.getUnitInitializer().resetMovementState(turret);
+        }
+
+        ScrSimulationPlugins simulation = this.game.getSimulationPlugins();
+
+        if (simulation != null && container != null) {
+            simulation.reportUnitUnloaded(unit, container);
         }
     }
 

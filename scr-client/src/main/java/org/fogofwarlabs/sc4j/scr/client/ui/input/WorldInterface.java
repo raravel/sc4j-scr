@@ -44,7 +44,8 @@ import java.util.function.BooleanSupplier;
 
 /**
  * Handles pointer and hotkey interaction with the map view and exposes the selection, drag, cursor and click-marker state. Selection and order
- * commands are encoded through {@link CommandInput}. Inspected foreign units and replay-viewer selections remain local. Selection filters retain the
+ * commands are encoded through {@link CommandInput}. A selected foreign unit is shown as a local selection and selected by command too;
+ * replay-viewer selections remain local. Selection filters retain the
  * existing click, box, type and Shift-merge rules. Click feedback can directly set a retained sprite's flash timer; selection and order changes are
  * submitted as commands.
  * <p>
@@ -756,12 +757,23 @@ public final class WorldInterface implements WorldOverlayState, LocalSelection {
     }
 
     /**
+     * Shows units that a game change selected for the local player as the local selection, as an own selection shows them before its command
+     * runs ({@link ConsoleModel#showPendingSelection}): the health bars and selection circles move to them, nothing is sent and no sound plays.
+     *
+     * @param units the selected units in slot order, at most {@link LocalSelection#CAPACITY}
+     */
+    @Override
+    public void showSelection(@NotNull Unit @NotNull [] units) {
+        this.console.showPendingSelection(units);
+    }
+
+    /**
      * Returns the neutral target cursor while targeting is active, otherwise the arrow.
      *
      * @return the cursor over the minimap
      */
     public @NotNull Cursor getMinimapCursor() {
-        return this.console.getMode().getUnitTargetOrder() >= 0 ? Cursor.TARGET_NEUTRAL : Cursor.ARROW;
+        return this.console.getMode().isTargeting() ? Cursor.TARGET_NEUTRAL : Cursor.ARROW;
     }
 
 
@@ -1729,8 +1741,9 @@ public final class WorldInterface implements WorldOverlayState, LocalSelection {
     }
 
     /**
-     * Replaces the selection: own units are selected with command {@code 0x63}; a single unit of another player is inspected locally; the replay
-     * viewer shows every selection locally.
+     * Replaces the selection with command {@code 0x63}: own units are shown as the pending selection; a single unit of another player is shown as a
+     * local selection and the command selects it all the same, so the game's selection of the player holds it. The replay viewer shows every
+     * selection locally.
      *
      * @param chosen the units to select, in order
      * @param sound  whether the selection response and the rally point are shown
@@ -1744,16 +1757,22 @@ public final class WorldInterface implements WorldOverlayState, LocalSelection {
         }
 
         Unit first = chosen.getFirst();
+        UnitPool pool = this.console.getView().getUnitSystem().getUnitPool();
 
-        if (first.getOwnerIndex() != this.console.getPlayer() || this.console.getView().getUnitSystem().getUnitPool() == null) {
-            // Another player's unit is inspected locally; no command selects it.
+        if (first.getOwnerIndex() != this.console.getPlayer() || pool == null) {
             this.console.showLocalSelection(first);
 
             if (sound && this.responses != null) {
                 this.responses.respondToSelection(List.of(first));
             }
 
-            return CommandInput.Result.INTERFACE;
+            if (pool == null) {
+                return CommandInput.Result.INTERFACE;
+            }
+
+            this.sendSelection(ReplayCommandIds.SELECT_121, List.of(first), pool);
+
+            return CommandInput.Result.COMMAND;
         }
 
         CommandInput.Result result = this.submitSelection(ReplayCommandIds.SELECT_121, chosen);
@@ -1811,7 +1830,20 @@ public final class WorldInterface implements WorldOverlayState, LocalSelection {
         }
 
         this.console.showPendingSelection(shown.toArray(new Unit[0]));
+        this.sendSelection(opcode, units, pool);
 
+        return CommandInput.Result.COMMAND;
+    }
+
+    /**
+     * Sends a selection command of the local player with the units' handles.
+     *
+     * @param opcode the command: {@link ReplayCommandIds#SELECT_121}, {@link ReplayCommandIds#SELECT_ADD_121} or
+     *               {@link ReplayCommandIds#SELECT_REMOVE_121}
+     * @param units  the units, at most twelve
+     * @param pool   the unit pool that gives the handles
+     */
+    private void sendSelection(int opcode, @NotNull List<Unit> units, @NotNull UnitPool pool) {
         long[] handles = new long[units.size()];
 
         for (int index = 0; index < units.size(); index++) {
@@ -1831,8 +1863,6 @@ public final class WorldInterface implements WorldOverlayState, LocalSelection {
         byte[] payload = ReplayCommandCodecs.encode(codec, ReplaySelectionCommand.create(operation, Integer.BYTES, handles));
 
         this.sink.submit(this.console.getPlayer(), opcode, payload);
-
-        return CommandInput.Result.COMMAND;
     }
 
     /**
@@ -1903,7 +1933,7 @@ public final class WorldInterface implements WorldOverlayState, LocalSelection {
             return Cursor.DRAG;
         }
 
-        boolean targeting = this.console.getMode().getUnitTargetOrder() >= 0;
+        boolean targeting = this.console.getMode().isTargeting();
 
         if (this.scrollDirection >= 0 && !targeting) {
             return Cursor.SCROLL;

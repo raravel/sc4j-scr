@@ -212,7 +212,8 @@ public final class MeleeGameSetup {
                                                int humanSlot,
                                                int speed,
                                                boolean mapCompatibility) throws IOException {
-        byte[] mapData = readScenario(mapPath, mapCompatibility);
+        MpqArchive mapArchive = openMapArchive(mapPath, mapCompatibility);
+        byte[] mapData = readScenario(mapPath, mapArchive);
         String[] names = computerRaces.split(",");
         int[] races = new int[names.length];
 
@@ -229,7 +230,8 @@ public final class MeleeGameSetup {
                                                   true,
                                                   mapCompatibility);
 
-        setup.mapPath = mapPath;
+        setup.mapPath    = mapPath;
+        setup.mapArchive = mapArchive;
 
         return setup;
     }
@@ -270,7 +272,8 @@ public final class MeleeGameSetup {
                                                              @NotNull String humanName, @NotNull String humanRace, int humanSlot,
                                                              int speed,
                                                              boolean mapCompatibility) throws IOException {
-        MeleeGameSetup setup = new MeleeGameSetup(readScenario(mapPath, mapCompatibility),
+        MpqArchive mapArchive = openMapArchive(mapPath, mapCompatibility);
+        MeleeGameSetup setup = new MeleeGameSetup(readScenario(mapPath, mapArchive),
                                                   humanName, parseRace(humanRace), humanSlot,
                                                   new int[0],
                                                   speed,
@@ -279,7 +282,8 @@ public final class MeleeGameSetup {
                                                   true,
                                                   mapCompatibility);
 
-        setup.mapPath = mapPath;
+        setup.mapPath    = mapPath;
+        setup.mapArchive = mapArchive;
 
         return setup;
     }
@@ -440,11 +444,30 @@ public final class MeleeGameSetup {
         return races[0];
     }
 
-    private static byte @NotNull [] readScenario(@NotNull Path mapPath, boolean mapCompatibility) throws IOException {
+    /**
+     * Opens a map file as a map archive unless it is a raw scenario file ({@code .chk}).
+     *
+     * @param mapPath          the map file
+     * @param mapCompatibility whether the archive opens in the map compatibility mode
+     * @return the opened archive, or {@code null} for a raw scenario file
+     * @throws IOException if the archive cannot be read
+     */
+    private static @Nullable MpqArchive openMapArchive(@NotNull Path mapPath, boolean mapCompatibility) throws IOException {
         String fileName = mapPath.getFileName().toString().toLowerCase(Locale.ROOT);
 
-        return fileName.endsWith(RAW_SCENARIO_EXTENSION) ? Files.readAllBytes(mapPath)
-                                                         : MpqArchive.open(mapPath, mapCompatibility).readFile(ChkFile.ARCHIVE_ENTRY);
+        return fileName.endsWith(RAW_SCENARIO_EXTENSION) ? null : MpqArchive.open(mapPath, mapCompatibility);
+    }
+
+    /**
+     * Reads the scenario of a map file: the archive's {@code staredit\scenario.chk}, or the raw scenario file.
+     *
+     * @param mapPath    the map file
+     * @param mapArchive the map file opened as an archive, or {@code null} for a raw scenario file
+     * @return the scenario bytes
+     * @throws IOException if the scenario cannot be read
+     */
+    private static byte @NotNull [] readScenario(@NotNull Path mapPath, @Nullable MpqArchive mapArchive) throws IOException {
+        return mapArchive == null ? Files.readAllBytes(mapPath) : mapArchive.readFile(ChkFile.ARCHIVE_ENTRY);
     }
 
     /**
@@ -502,6 +525,10 @@ public final class MeleeGameSetup {
      * The map file the game was loaded from, or {@code null} for scenario bytes without a file.
      */
     private @Nullable Path mapPath;
+    /**
+     * The archive of the map file a live game starts from, or {@code null} for none.
+     */
+    private @Nullable MpqArchive mapArchive;
     /**
      * Whether the lobby option selects the classic resource limits (unit capacity {@code 1700}) instead of the extended ones.
      */
@@ -575,6 +602,7 @@ public final class MeleeGameSetup {
 
         this.template           = GameTemplate.parse(Arrays.copyOfRange(header, SAVED_TEMPLATE, SAVED_TEMPLATE + GameTemplate.SIZE));
         this.mapPath            = null;
+        this.mapArchive         = null;
         this.classicLimits      = false;
         this.networkTable       = null;
         this.networkOptions     = null;
@@ -626,6 +654,7 @@ public final class MeleeGameSetup {
 
         this.template           = useMapSettings ? GameTemplate.USE_MAP_SETTINGS : GameTemplate.MELEE;
         this.mapPath            = null;
+        this.mapArchive         = null;
         this.classicLimits      = false;
         this.networkTable       = null;
         this.networkOptions     = null;
@@ -773,6 +802,46 @@ public final class MeleeGameSetup {
     }
 
     /**
+     * Reads the observer slot of a network player: the slot of the observer record the player holds in the lobby table, a later
+     * record winning.
+     *
+     * @param playerId the network id
+     * @return the observer slot from {@link PlayerTable#FIRST_OBSERVER_SLOT}, or {@link PlayerSlots#NO_SLOT} outside a network game
+     * or for a player who holds no observer record
+     */
+    public int getObserverSlot(int playerId) {
+        LobbyResolution.Table table = this.networkTable;
+        int slot = PlayerSlots.NO_SLOT;
+
+        if (table == null || playerId < 0) {
+            return slot;
+        }
+
+        for (int observer = 0; observer < PlayerTable.OBSERVER_SLOTS; observer++) {
+            if (table.observerId[observer] == playerId) {
+                slot = PlayerTable.FIRST_OBSERVER_SLOT + observer;
+            }
+        }
+
+        return slot;
+    }
+
+    /**
+     * @param observerSlot the observer slot ({@link #getObserverSlot})
+     * @return the name of the lobby table's observer record of the slot
+     * @throws IllegalStateException outside a network game
+     */
+    public @NotNull String getObserverName(int observerSlot) {
+        LobbyResolution.Table table = this.networkTable;
+
+        if (table == null) {
+            throw Exceptions.newIllegalStateException("Only a network game has observers.");
+        }
+
+        return table.observerName[observerSlot - PlayerTable.FIRST_OBSERVER_SLOT];
+    }
+
+    /**
      * @return a copy of a network game's lobby types before normalization, or {@code null} in single player
      */
     public int @Nullable [] getLobbyTypes() {
@@ -821,6 +890,16 @@ public final class MeleeGameSetup {
      */
     public @Nullable Path getMapPath() {
         return this.mapPath;
+    }
+
+    /**
+     * Returns the archive of the map file the game starts from, which holds this setup's scenario: the map a single-player game loaded
+     * ({@link #load}, {@link #loadUseMapSettings}) or the one a network game set ({@link #setMapArchive}).
+     *
+     * @return the archive, or {@code null} for a raw scenario file, a campaign mission, a saved game or scenario bytes without an archive
+     */
+    public @Nullable MpqArchive getMapArchive() {
+        return this.mapArchive;
     }
 
     /**
@@ -988,6 +1067,16 @@ public final class MeleeGameSetup {
      */
     public void setClassicLimits(boolean classicLimits) {
         this.classicLimits = classicLimits;
+    }
+
+    /**
+     * Sets the archive of the map file the game starts from, which the game start offers to the mod's extensions
+     * ({@link org.fogofwarlabs.sc4j.scr.game.state.GameSetup#getMapArchive()}).
+     *
+     * @param mapArchive the opened map archive, which holds this setup's scenario; shared, not copied
+     */
+    public void setMapArchive(@NotNull MpqArchive mapArchive) {
+        this.mapArchive = mapArchive;
     }
 
     /**

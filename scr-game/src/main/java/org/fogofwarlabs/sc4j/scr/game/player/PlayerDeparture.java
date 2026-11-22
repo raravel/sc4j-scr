@@ -6,6 +6,7 @@ import org.fogofwarlabs.sc4j.scr.core.GameSettings;
 import org.fogofwarlabs.sc4j.scr.data.format.replay.ReplaySettings;
 import org.fogofwarlabs.sc4j.scr.data.type.ScrUnitTypeView;
 import org.fogofwarlabs.sc4j.scr.data.type.constant.UnitTypeFlags;
+import org.fogofwarlabs.sc4j.scr.game.extension.ScrSimulationPlugins;
 import org.fogofwarlabs.sc4j.scr.game.sprite.SelectionImages;
 import org.fogofwarlabs.sc4j.scr.game.state.Game;
 import org.fogofwarlabs.sc4j.scr.game.state.VictoryCondition;
@@ -194,6 +195,12 @@ public final class PlayerDeparture {
 
         this.game.getInterfaceLink().getMessageLines().writeDeparture(owner, reason == DROP_REASON);
 
+        ScrSimulationPlugins simulation = this.game.getSimulationPlugins();
+
+        if (simulation != null) {
+            simulation.reportPlayerLeft(owner, reason);
+        }
+
         TriggerContext triggers = this.game.getTriggerContext();
 
         if (triggers != null) {
@@ -205,6 +212,11 @@ public final class PlayerDeparture {
         }
 
         player.setVictoryState(reason == DROP_REASON ? Player.VICTORY_STATE_DROPPED : Player.VICTORY_STATE_DEFEATED);
+
+        if (simulation != null) {
+            simulation.reportPlayerResult(owner, player.getVictoryState());
+        }
+
         this.removePlayer(owner, instructionLimit);
     }
 

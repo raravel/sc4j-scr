@@ -9,9 +9,9 @@ import java.util.Arrays;
 
 /**
  * The live game-info block: the game header section from its game settings up to the player records. The simulation
- * reads the game type, the subtype and the option template (victory, starting units, allies, teams for shared control,
- * cheats); this emulation decodes them once into immutable settings, so a write that changes one of those bytes stops
- * explicitly. The other bytes (game name, map size, map name, ...) keep what EUD writes.
+ * reads the game type and subtype WORDs and the option template (victory, starting units, allies, teams for shared
+ * control, cheats); this emulation decodes them once into immutable settings, so a write that changes one of those bytes
+ * stops explicitly. The other bytes (game name, map size, map name, ...) keep what EUD writes.
  */
 public final class ClassicGameInfoRegion implements ClassicRegion {
     /**
@@ -28,13 +28,13 @@ public final class ClassicGameInfoRegion implements ClassicRegion {
      */
     private static final int SIZE = ReplayHeaderBuilder.PLAYERS_OFFSET - HEADER_OFFSET;
     /**
-     * The offset of the game type byte.
+     * The offset of the game type WORD.
      */
-    private static final int GAME_TYPE = 0x28;
+    private static final int GAME_TYPE = ReplayHeaderBuilder.GAME_TYPE_OFFSET - HEADER_OFFSET;
     /**
-     * The offset of the game subtype byte.
+     * The offset of the game subtype WORD, which follows the game type WORD.
      */
-    private static final int SUBTYPE = 0x29;
+    private static final int SUBTYPE = ReplayHeaderBuilder.GAME_SUBTYPE_OFFSET - HEADER_OFFSET;
     /**
      * The offset of the option template, which runs to the end of the block.
      */
@@ -91,7 +91,7 @@ public final class ClassicGameInfoRegion implements ClassicRegion {
      */
     @Override
     public void writeByte(int offset, int value) {
-        boolean simulated = offset == GAME_TYPE || offset == SUBTYPE || offset >= TEMPLATE;
+        boolean simulated = offset >= GAME_TYPE && offset < SUBTYPE + Short.BYTES || offset >= TEMPLATE;
 
         if (simulated && (this.bytes[offset] & BYTE_MASK) != (value & BYTE_MASK)) {
             throw Exceptions.newUnsupportedOperationException(

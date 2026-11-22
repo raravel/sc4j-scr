@@ -22,6 +22,21 @@ final class GameAcceleratorHandler {
      */
     private static final int SLOWEST_SPEED = 0;
 
+    /**
+     * Resolves the play accelerator that depends on the session: the speed increase opens the chat history in a network game.
+     *
+     * @param identifier  the accelerator identifier
+     * @param multiplayer whether the session is a network game
+     * @return the identifier of the action the accelerator runs
+     */
+    private static int resolvePlayAction(int identifier, boolean multiplayer) {
+        if (identifier == GameAccelerators.INCREASE_SPEED_OR_CHAT_HISTORY) {
+            return multiplayer ? GameAccelerators.CHAT_HISTORY : GameAccelerators.INCREASE_SPEED;
+        }
+
+        return identifier;
+    }
+
     private final @NotNull Main main;
 
     /**
@@ -77,6 +92,21 @@ final class GameAcceleratorHandler {
     }
 
     /**
+     * Tells whether a key press in play mode runs an accelerator of the interface rather than of the game ({@link GameAccelerators#isGameAction}):
+     * the menus and their dialogs, the sound, music and graphics toggles, the chat history and the other interface switches.
+     *
+     * @param key       the key
+     * @param modifiers the modifier mask ({@link KeyModifier#getMask()} bits)
+     * @return {@code true} if the press runs an interface accelerator, {@code false} if it runs a game accelerator or none
+     */
+    boolean isInterfaceAccelerator(@NotNull Key key, int modifiers) {
+        GameAccelerators.Entry entry = GameAccelerators.find(GameAccelerators.Mode.PLAY, key, modifiers, false);
+        ClientSession session = this.main.session;
+
+        return entry != null && !GameAccelerators.isGameAction(resolvePlayAction(entry.getIdentifier(), session != null && session.isNetworkGame()));
+    }
+
+    /**
      * Runs actions available in popup mode; the edit-operation identifiers go to the focused edit of the open popup.
      *
      * @param identifier the accelerator identifier
@@ -104,11 +134,7 @@ final class GameAcceleratorHandler {
         }
 
         boolean multiplayer = session.isNetworkGame();
-        int action = identifier;
-
-        if (action == GameAccelerators.INCREASE_SPEED_OR_CHAT_HISTORY) {
-            action = multiplayer ? GameAccelerators.CHAT_HISTORY : GameAccelerators.INCREASE_SPEED;
-        }
+        int action = resolvePlayAction(identifier, multiplayer);
 
         this.runAlways(action);
 

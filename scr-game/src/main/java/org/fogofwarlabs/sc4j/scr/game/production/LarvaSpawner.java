@@ -207,8 +207,9 @@ public final class LarvaSpawner {
                     if (this.isPositionAvailable(candidateX, candidateY, horizontalStep, verticalStep)) {
                         result[UnitPositioning.X_INDEX] = candidateX;
                         result[UnitPositioning.Y_INDEX] = candidateY;
-                                                          bestCount = count;
-                                                          found = true;
+
+                        bestCount = count;
+                        found     = true;
 
                         break;
                     }

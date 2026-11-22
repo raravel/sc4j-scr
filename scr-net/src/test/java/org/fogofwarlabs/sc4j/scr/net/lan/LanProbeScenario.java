@@ -62,8 +62,8 @@ public final class LanProbeScenario {
     /**
      * The recorded Top vs Bottom game options.
      */
-    private static final byte @NotNull [] CAPTURED_GAME_DATA =
-            HexFormat.of().parseHex("0f00010001000000010101020200010100010000000000320000000000000000");
+    private static final byte @NotNull [] CAPTURED_GAME_DATA = HexFormat.of().parseHex("0f00010001000000" +
+                                                                                       "010101020200010100010000000000320000000000000000");
     private static final int JOIN_SECONDS = 180;
     private static final long MILLISECONDS_PER_SECOND = 1000L;
     private static final int GUID_SIZE = 16;

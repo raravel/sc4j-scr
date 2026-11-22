@@ -597,6 +597,11 @@ public final class ClientOptions {
             throw Exceptions.newIllegalArgumentException("--pointer requires --replay, --melee, --ums or --campaign.");
         }
 
+        // A hidden run opens no tips at a mission start unless its settings file asks for them, as it writes no log file unless asked.
+        if (hidden) {
+            interfaceSettings.setTipsShown(false);
+        }
+
         // The client's own settings file first (--settings path, else the shared root's default file for visible windows), then only the launch
         // options actually given.
         Path settingsPath = settingsArgument == null

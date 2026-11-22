@@ -7,8 +7,9 @@ import java.util.Arrays;
 import java.util.Objects;
 
 /**
- * Retains the game's button set overrides installed by EUD emulation. An aborted commit or the end of the game restores the original default sets.
- * Button conditions and actions retain function addresses.
+ * Retains the game's button set overrides installed by EUD emulation or by a game plugin. An aborted commit or the end of the game restores the
+ * original default sets. Button conditions and actions retain function addresses. Every replacement or restoration counts a new revision
+ * ({@link #getRevision()}), so that readers that keep converted arrays know when to convert again.
  */
 public final class HostButtonSets {
     /**
@@ -26,7 +27,9 @@ public final class HostButtonSets {
     private static final int BYTE_MASK = 0xFF;
 
     /**
-     * Holds a host button's placement, condition, action and tooltip strings.
+     * Holds a host button's placement, condition, action and tooltip strings. A button may carry its own texts instead of its {@code stat_txt}
+     * strings: the enabled text in the {@code stat_txt} button string format (hotkey character, button kind character, then the text) and the
+     * disabled text as plain text; both may hold line breaks and the text color control characters.
      */
     public static final class Button {
         private final int position;
@@ -37,9 +40,11 @@ public final class HostButtonSets {
         private final int actionValue;
         private final int enabledString;
         private final int disabledString;
+        private final @Nullable String enabledText;
+        private final @Nullable String disabledText;
 
         /**
-         * Creates a {@link Button} instance with truncated WORD and BYTE values.
+         * Creates a {@link Button} instance with truncated WORD and BYTE values and the {@code stat_txt} strings.
          *
          * @param position       the position WORD
          * @param icon           the icon WORD
@@ -54,6 +59,28 @@ public final class HostButtonSets {
                       long condition, int conditionValue,
                       long action, int actionValue,
                       int enabledString, int disabledString) {
+            this(position, icon, condition, conditionValue, action, actionValue, enabledString, disabledString, null, null);
+        }
+
+        /**
+         * Creates a {@link Button} instance with truncated WORD and BYTE values and texts that replace its {@code stat_txt} strings.
+         *
+         * @param position       the position WORD
+         * @param icon           the icon WORD
+         * @param condition      the condition function address, {@code 0} for none
+         * @param conditionValue the condition value BYTE
+         * @param action         the action function address, {@code 0} for none
+         * @param actionValue    the action value WORD
+         * @param enabledString  the enabled string WORD
+         * @param disabledString the disabled string WORD
+         * @param enabledText    the enabled button string (hotkey, kind, text), or {@code null} for the enabled string
+         * @param disabledText   the disabled text, or {@code null} for the disabled string
+         */
+        public Button(int position, int icon,
+                      long condition, int conditionValue,
+                      long action, int actionValue,
+                      int enabledString, int disabledString,
+                      @Nullable String enabledText, @Nullable String disabledText) {
             this.position       = position & WORD_MASK;
             this.icon           = icon & WORD_MASK;
             this.condition      = condition;
@@ -62,6 +89,8 @@ public final class HostButtonSets {
             this.actionValue    = actionValue & WORD_MASK;
             this.enabledString  = enabledString & WORD_MASK;
             this.disabledString = disabledString & WORD_MASK;
+            this.enabledText    = enabledText;
+            this.disabledText   = disabledText;
         }
 
         /**
@@ -119,6 +148,20 @@ public final class HostButtonSets {
         public int getDisabledString() {
             return this.disabledString;
         }
+
+        /**
+         * @return the enabled button string (hotkey, kind, text) that replaces the enabled string, or {@code null} for the enabled string
+         */
+        public @Nullable String getEnabledText() {
+            return this.enabledText;
+        }
+
+        /**
+         * @return the disabled text that replaces the disabled string, or {@code null} for the disabled string
+         */
+        public @Nullable String getDisabledText() {
+            return this.disabledText;
+        }
     }
 
     private final int @NotNull [] counts;
@@ -126,6 +169,7 @@ public final class HostButtonSets {
     private final int @NotNull [] connected;
 
     private boolean replaced;
+    private int revision;
 
     /**
      * Creates a {@link HostButtonSets} instance with empty override storage.
@@ -136,6 +180,7 @@ public final class HostButtonSets {
         this.connected = new int[SET_COUNT];
 
         this.replaced = false;
+        this.revision = 0;
     }
 
     /**
@@ -143,6 +188,13 @@ public final class HostButtonSets {
      */
     public boolean isReplaced() {
         return this.replaced;
+    }
+
+    /**
+     * @return the number of replacements and restorations so far, which changes with every change of the table
+     */
+    public int getRevision() {
+        return this.revision;
     }
 
     /**
@@ -178,6 +230,7 @@ public final class HostButtonSets {
      */
     public void restoreDefaults() {
         this.replaced = false;
+        this.revision++;
 
         Arrays.fill(this.counts, 0);
         Arrays.fill(this.buttons, null);
@@ -196,9 +249,11 @@ public final class HostButtonSets {
     public void replace(int set, int count, @NotNull Button @Nullable [] buttons, int connected) {
         Objects.checkIndex(set, SET_COUNT);
 
-        this.counts[set] = count & WORD_MASK;
-        this.buttons[set] = buttons;
+        this.counts[set]    = count & WORD_MASK;
+        this.buttons[set]   = buttons;
         this.connected[set] = connected & WORD_MASK;
-                            this.replaced = true;
+
+        this.replaced = true;
+        this.revision++;
     }
 }

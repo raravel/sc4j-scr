@@ -76,13 +76,28 @@ final class ChatPromptTest {
      */
     @Test
     void route_should_keep_slash_lines_local_in_every_mode_and_route_other_text() {
-        Assertions.assertEquals(ChatPrompt.Route.COMMAND, ChatPrompt.route("/help", true));
-        Assertions.assertEquals(ChatPrompt.Route.COMMAND, ChatPrompt.route("/debug", false));
-        Assertions.assertEquals(ChatPrompt.Route.COMMAND, ChatPrompt.route("/nonsense", true), "An unknown command stays local too.");
-        Assertions.assertEquals(ChatPrompt.Route.COMMAND, ChatPrompt.route("/cheat", true), "The cheat switch is local.");
-        Assertions.assertEquals(ChatPrompt.Route.GAME_TEXT, ChatPrompt.route("show me the money", true), "A typed code is game text.");
-        Assertions.assertEquals(ChatPrompt.Route.GAME_TEXT, ChatPrompt.route("gg", true));
-        Assertions.assertEquals(ChatPrompt.Route.DROPPED, ChatPrompt.route("gg", false));
-        Assertions.assertEquals(ChatPrompt.Route.DROPPED, ChatPrompt.route("  ", true));
+        Assertions.assertEquals(ChatPrompt.Route.COMMAND, ChatPrompt.route("/help", true, false));
+        Assertions.assertEquals(ChatPrompt.Route.COMMAND, ChatPrompt.route("/debug", false, false));
+        Assertions.assertEquals(ChatPrompt.Route.COMMAND, ChatPrompt.route("/nonsense", true, false), "An unknown command stays local too.");
+        Assertions.assertEquals(ChatPrompt.Route.COMMAND, ChatPrompt.route("/cheat", true, false), "The cheat switch is local.");
+        Assertions.assertEquals(ChatPrompt.Route.GAME_TEXT, ChatPrompt.route("show me the money", true, false), "A typed code is game text.");
+        Assertions.assertEquals(ChatPrompt.Route.GAME_TEXT, ChatPrompt.route("gg", true, false));
+        Assertions.assertEquals(ChatPrompt.Route.DROPPED, ChatPrompt.route("gg", false, false));
+        Assertions.assertEquals(ChatPrompt.Route.DROPPED, ChatPrompt.route("  ", true, false));
+    }
+
+    /**
+     * Checks that the community commands go to the channel chat while the game has one, and that the client's commands stay local.
+     */
+    @Test
+    void route_should_send_community_commands_to_the_channel_chat_only_with_one() {
+        Assertions.assertEquals(ChatPrompt.Route.COMMUNITY, ChatPrompt.route("/w Zeratul#abcd12 gg", true, true));
+        Assertions.assertEquals(ChatPrompt.Route.COMMUNITY, ChatPrompt.route("/R thanks", true, true));
+        Assertions.assertEquals(ChatPrompt.Route.COMMUNITY, ChatPrompt.route("/whois Zeratul", true, true));
+        Assertions.assertEquals(ChatPrompt.Route.COMMAND, ChatPrompt.route("/w Zeratul gg", true, false), "Without the channel chat it is local.");
+        Assertions.assertEquals(ChatPrompt.Route.COMMAND, ChatPrompt.route("/help", true, true), "The client's help stays local.");
+        Assertions.assertEquals(ChatPrompt.Route.COMMAND, ChatPrompt.route("/join SC4J", true, true), "Channel commands stay out of the game.");
+        Assertions.assertEquals(ChatPrompt.Route.COMMAND, ChatPrompt.route("/wx", true, true));
+        Assertions.assertEquals(ChatPrompt.Route.GAME_TEXT, ChatPrompt.route("gg", true, true));
     }
 }

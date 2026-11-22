@@ -11,6 +11,7 @@ import org.fogofwarlabs.sc4j.scr.game.test.GameResourcesExtension;
 import org.fogofwarlabs.sc4j.scr.game.test.GameTestResources;
 import org.fogofwarlabs.sc4j.scr.game.test.InstallationTestResources;
 import org.fogofwarlabs.sc4j.scr.game.test.RunningGameScenario;
+import org.fogofwarlabs.sc4j.scr.game.trigger.eud.region.ClassicStorageRegion;
 import org.fogofwarlabs.sc4j.scr.game.trigger.eud.unit.ClassicUnitTableRegion;
 import org.fogofwarlabs.sc4j.scr.game.unit.Unit;
 import org.fogofwarlabs.sc4j.scr.game.unit.UnitPool;
@@ -47,6 +48,11 @@ final class ClassicAddressSpaceTest {
     private static final int ATTACK_ALERT_MARK = 100;
     private static final int FULL_ALERT_MARK = 255;
     private static final int IGNORED_WRITE_SAMPLE = 7;
+    /**
+     * The Terran console area table, a type-7 record region, and its size.
+     */
+    private static final int CONSOLE_AREAS = 0x515300;
+    private static final int CONSOLE_AREAS_SIZE = 0x48;
 
     @Test
     void read_for_trigger_should_report_access_failures_when_the_game_has_no_source_file(@NotNull InstallationTestResources resources) throws Exception {
@@ -119,6 +125,29 @@ final class ClassicAddressSpaceTest {
             game.getLocalInterfaceEffects().decrementAttackAlertMarks();
 
             Assertions.assertEquals(FULL_ALERT_MARK - 1, space.readDword(markWordAddress) >>> ALERT_MARK_SHIFT);
+        }
+    }
+
+    @Test
+    void type_7_records_are_emulation_storage_that_a_memory_source_may_replace() throws Exception {
+        try (GameData gameData = GameData.loadFrom(ExternalInput.INSTALLATION.getPath())) {
+            Game game = UnitFinderScenario.start(gameData);
+            ClassicAddressSpace space = ClassicAddressSpace.create(game);
+            ClassicRegion records = space.findRegion(CONSOLE_AREAS);
+
+            Assertions.assertNotNull(records);
+            Assertions.assertTrue(records.isEmulatorStorage());
+
+            byte[] table = new byte[CONSOLE_AREAS_SIZE];
+            ClassicMemorySink sink = new ClassicMemorySink(space);
+
+            Assertions.assertEquals(CONSOLE_AREAS_SIZE, sink.read(CONSOLE_AREAS, table, 0, table.length));
+
+            sink.add(new ClassicStorageRegion(CONSOLE_AREAS, table.clone()));
+            space.writeDword(CONSOLE_AREAS, IGNORED_WRITE_SAMPLE);
+
+            Assertions.assertEquals(IGNORED_WRITE_SAMPLE, space.readDword(CONSOLE_AREAS));
+            Assertions.assertFalse(space.findRegion(CONSOLE_AREAS).isEmulatorStorage());
         }
     }
 }

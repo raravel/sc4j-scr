@@ -6,6 +6,7 @@ import org.fogofwarlabs.sc4j.scr.content.ScrUnitIds;
 import org.fogofwarlabs.sc4j.scr.data.type.ScrUnitTypeView;
 import org.fogofwarlabs.sc4j.scr.data.type.constant.UnitTypeFlags;
 import org.fogofwarlabs.sc4j.scr.game.ai.UnitStrengthTable;
+import org.fogofwarlabs.sc4j.scr.game.extension.ScrSimulationPlugins;
 import org.fogofwarlabs.sc4j.scr.game.player.PlayerTypes;
 import org.fogofwarlabs.sc4j.scr.game.player.UnitAccounting;
 import org.fogofwarlabs.sc4j.scr.game.production.UnitMorphing;
@@ -177,6 +178,12 @@ public final class UnitCompletion {
         }
 
         this.game.getEngineGame().getUnitLifecycle().notifyCompleted(unit);
+
+        ScrSimulationPlugins simulation = this.game.getSimulationPlugins();
+
+        if (simulation != null) {
+            simulation.reportUnitCompleted(unit);
+        }
 
         int initialOrder = switch (ownerPlayerType & BYTE_MASK) {
             case PlayerTypes.RESCUE_PASSIVE -> ScrOrderIds.RESCUE_PASSIVE;

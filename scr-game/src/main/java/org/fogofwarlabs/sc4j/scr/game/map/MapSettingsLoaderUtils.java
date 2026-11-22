@@ -351,8 +351,10 @@ public final class MapSettingsLoaderUtils {
                 }
 
                 for (int fieldIndex = 0; fieldIndex < UPGRADE_SETTINGS_FIELDS.length; fieldIndex++) {
-                    upgradeColumns.get(UPGRADE_SETTINGS_FIELDS[fieldIndex])[upgrade] =
-                            LittleEndianUtils.readUnsigned16(payload, defaultsLength + (fieldIndex * upgradeCount + upgrade) * Short.BYTES);
+                    int[] column = upgradeColumns.get(UPGRADE_SETTINGS_FIELDS[fieldIndex]);
+                    int valueOffset = defaultsLength + (fieldIndex * upgradeCount + upgrade) * Short.BYTES;
+
+                    column[upgrade] = LittleEndianUtils.readUnsigned16(payload, valueOffset);
                 }
             }
         }
@@ -374,8 +376,10 @@ public final class MapSettingsLoaderUtils {
                 }
 
                 for (int fieldIndex = 0; fieldIndex < TECHNOLOGY_SETTINGS_FIELDS.length; fieldIndex++) {
-                    technologyColumns.get(TECHNOLOGY_SETTINGS_FIELDS[fieldIndex])[technology] =
-                            LittleEndianUtils.readUnsigned16(payload, technologyCount + (fieldIndex * technologyCount + technology) * Short.BYTES);
+                    int[] column = technologyColumns.get(TECHNOLOGY_SETTINGS_FIELDS[fieldIndex]);
+                    int valueOffset = technologyCount + (fieldIndex * technologyCount + technology) * Short.BYTES;
+
+                    column[technology] = LittleEndianUtils.readUnsigned16(payload, valueOffset);
                 }
             }
         }

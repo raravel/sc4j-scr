@@ -1322,7 +1322,8 @@ final class ComputerScripts {
                                   boolean expansion,
                                   int instructionLimit) {
         this.addresses[index] = this.callReturn;
-                                this.callReturn = 0;
+
+        this.callReturn = 0;
 
         return true;
     }

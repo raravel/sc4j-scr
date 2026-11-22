@@ -31,8 +31,8 @@ import java.io.IOException;
 final class MapUnitRoutingTest {
     private static final int DAT_BLOCK_ALIGNMENT = 16;
     private static final int FIRST_GROUP_GAP_IDENTIFIER = UnitsDat.UNIT_COUNT;
-    private static final int NEXT_GROUP_COLUMN_IDENTIFIER =
-            (UnitsDat.UNIT_COUNT + DAT_BLOCK_ALIGNMENT - 1) / DAT_BLOCK_ALIGNMENT * DAT_BLOCK_ALIGNMENT;
+    private static final int UNIT_BLOCK_COUNT = (UnitsDat.UNIT_COUNT + DAT_BLOCK_ALIGNMENT - 1) / DAT_BLOCK_ALIGNMENT;
+    private static final int NEXT_GROUP_COLUMN_IDENTIFIER = UNIT_BLOCK_COUNT * DAT_BLOCK_ALIGNMENT;
     private static final int LAST_GROUP_GAP_IDENTIFIER = NEXT_GROUP_COLUMN_IDENTIFIER - 1;
     private static final int SUPPLY_ALIAS_ELEMENT_INDEX = 0;
     private static final int HIGH_UNIT_IDENTIFIER_BITS = 0x10000;

@@ -65,12 +65,22 @@ final class StatusOverlayTest {
     void create_turn_rate_text_should_show_the_turn_rate_only_in_a_network_game() {
         InterfaceSettings settings = new InterfaceSettings();
 
-        Assertions.assertNull(StatusOverlay.createTurnRateText(settings, true, TURN_RATE, "Low"));
+        Assertions.assertNull(StatusOverlay.createTurnRateText(settings, true, TURN_RATE, "Low", ""));
 
         settings.setTurnRateShown(true);
 
-        Assertions.assertEquals("TR: 24 | Low", StatusOverlay.createTurnRateText(settings, true, TURN_RATE, "Low"));
-        Assertions.assertNull(StatusOverlay.createTurnRateText(settings, false, TURN_RATE, "Low"), "no turn rate outside a network game");
+        Assertions.assertEquals("TR: 24 | Low", StatusOverlay.createTurnRateText(settings, true, TURN_RATE, "Low", ""));
+        Assertions.assertNull(StatusOverlay.createTurnRateText(settings, false, TURN_RATE, "Low", ""), "no turn rate outside a network game");
+    }
+
+    @Test
+    void create_turn_rate_text_should_show_the_scan_text_instead_while_scanning() {
+        InterfaceSettings settings = new InterfaceSettings();
+
+        settings.setTurnRateShown(true);
+
+        Assertions.assertEquals("Calculating TR...", StatusOverlay.createTurnRateText(settings, true, TURN_RATE, "Low", "Calculating TR..."));
+        Assertions.assertEquals("bnet_dtr_scanInProgress", StatusOverlay.getScanKey());
     }
 
     @Test

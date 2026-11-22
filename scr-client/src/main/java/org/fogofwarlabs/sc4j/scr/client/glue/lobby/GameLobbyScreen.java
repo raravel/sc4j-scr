@@ -5,8 +5,10 @@ import org.fogofwarlabs.sc4j.base.log.Logger;
 import org.fogofwarlabs.sc4j.engine.client.host.HostWindow;
 import org.fogofwarlabs.sc4j.engine.net.beaconlink.BeaconLinkSession;
 import org.fogofwarlabs.sc4j.engine.net.beaconlink.community.PlayerStatus;
+import org.fogofwarlabs.sc4j.engine.net.beaconlink.community.chat.ChannelChat;
 import org.fogofwarlabs.sc4j.engine.resource.dialog.DialogControl;
 import org.fogofwarlabs.sc4j.engine.resource.dialog.DialogDefinition;
+import org.fogofwarlabs.sc4j.scr.client.GameCommunityChat;
 import org.fogofwarlabs.sc4j.scr.client.glue.*;
 import org.fogofwarlabs.sc4j.scr.client.ui.dialog.*;
 import org.fogofwarlabs.sc4j.scr.client.ui.text.ForceNamesUtils;
@@ -300,6 +302,32 @@ public final class GameLobbyScreen extends GlueScreen {
     }
 
     /**
+     * Lists the kinds of the panel's lines for the slot groups: each group's header ({@link #LINE_HEADER}) and then a line per slot
+     * ({@link #LINE_SLOT}), for the groups that fit the panel's {@value #TEAM_LINES} lines.
+     *
+     * @param groups the slot groups
+     * @return the line kinds from the top
+     */
+    private static int @NotNull [] createLineKinds(@NotNull List<Group> groups) {
+        int[] kinds = new int[TEAM_LINES];
+        int line = 0;
+
+        for (Group group : groups) {
+            if (line + 1 + group.slots.size() > TEAM_LINES) {
+                break;
+            }
+
+            kinds[line++] = LINE_HEADER;
+
+            for (int ignored : group.slots) {
+                kinds[line++] = LINE_SLOT;
+            }
+        }
+
+        return Arrays.copyOf(kinds, line);
+    }
+
+    /**
      * Sets the status the player's Beacon.Link presence shows, when the client plays over Beacon.Link.
      *
      * @param client the LAN client of the lobby, or {@code null}
@@ -311,6 +339,24 @@ public final class GameLobbyScreen extends GlueScreen {
         if (session != null) {
             session.getCommunity().setStatus(status);
         }
+    }
+
+    /**
+     * Creates the Beacon.Link community part of the starting game: the channel chat of the client's network, with the install's texts.
+     *
+     * @param glueContext the glue context, which holds the channel chat
+     * @param client      the LAN client of the lobby
+     * @return the created {@link GameCommunityChat} instance, or {@code null} if the client plays without Beacon.Link or the channel chat is not
+     * open
+     */
+    private static @Nullable GameCommunityChat createCommunityChat(@NotNull GlueContext glueContext, @NotNull LanClient client) {
+        ChannelChat chat = glueContext.getChannelChat();
+
+        if (client.getNetwork().getBeaconLinkSession() == null || chat == null) {
+            return null;
+        }
+
+        return new GameCommunityChat(chat, glueContext.getGluText()::get);
     }
 
     private final @NotNull LobbyChatLog chatLog;
@@ -359,9 +405,18 @@ public final class GameLobbyScreen extends GlueScreen {
      * Creates a {@link GameLobbyScreen} instance.
      */
     public GameLobbyScreen() {
+        this(new LobbyChatLog(CHAT_HISTORY));
+    }
+
+    /**
+     * Creates a {@link GameLobbyScreen} instance that shows a chat log kept from an earlier lobby screen of the same lobby.
+     *
+     * @param chatLog the chat log
+     */
+    private GameLobbyScreen(@NotNull LobbyChatLog chatLog) {
         super(DIALOG, SHARED_PALETTE_FOLDER, getPaletteBackground(SHARED_PALETTE_FOLDER));
 
-        this.chatLog       = new LobbyChatLog(CHAT_HISTORY);
+        this.chatLog       = chatLog;
         this.headers       = new ArrayList<>();
         this.names         = new ArrayList<>();
         this.races         = new ArrayList<>();
@@ -429,30 +484,26 @@ public final class GameLobbyScreen extends GlueScreen {
         float nameLeft = left + PERCENT_SHARE * width;
         float raceLeft = nameLeft + (NAME_SHARE + RACE_BEFORE_SHARE) * width;
         float colorLeft = raceLeft + (LIST_SHARE + PLAYER_LIST_COUNT * LIST_GAP_SHARE) * width;
-        int line = 0;
+        int[] kinds = lobby == null ? new int[0] : createLineKinds(this.groupSlots(lobby, glueContext.getGluText()));
         int top = panel.getY();
 
-        if (lobby != null) {
-            for (Group group : this.groupSlots(lobby, glueContext.getGluText())) {
-                if (line + 1 + group.slots.size() > TEAM_LINES) {
-                    break;
-                }
+        for (int line = 0; line < kinds.length; line++) {
+            this.lineKinds[line] = kinds[line];
 
-                this.lineKinds[line] = LINE_HEADER;
-                controls.add(createComboBoxControl(FIRST_HEADER + line++, left, top, HEADER_SHARE * width, HEADER_HEIGHT));
+            if (kinds[line] == LINE_HEADER) {
+                controls.add(createComboBoxControl(FIRST_HEADER + line, left, top, HEADER_SHARE * width, HEADER_HEIGHT));
                 top += HEADER_HEIGHT + ROW_MARGIN;
 
-                for (int ignored : group.slots) {
-                    this.lineKinds[line] = LINE_SLOT;
-                    controls.add(createComboBoxControl(FIRST_NAME + line, nameLeft, top, NAME_SHARE * width, ROW_HEIGHT));
-                    controls.add(createComboBoxControl(FIRST_RACE + line, raceLeft, top, LIST_SHARE * width, ROW_HEIGHT));
-                    controls.add(createComboBoxControl(FIRST_COLOR + line++, colorLeft, top, LIST_SHARE * width, ROW_HEIGHT));
-                    top += ROW_HEIGHT + ROW_MARGIN;
-                }
+                continue;
             }
+
+            controls.add(createComboBoxControl(FIRST_NAME + line, nameLeft, top, NAME_SHARE * width, ROW_HEIGHT));
+            controls.add(createComboBoxControl(FIRST_RACE + line, raceLeft, top, LIST_SHARE * width, ROW_HEIGHT));
+            controls.add(createComboBoxControl(FIRST_COLOR + line, colorLeft, top, LIST_SHARE * width, ROW_HEIGHT));
+            top += ROW_HEIGHT + ROW_MARGIN;
         }
 
-        this.lineCount = line;
+        this.lineCount = kinds.length;
 
         // The observers at the bottom: the header, then the rows of two lists.
         int observerTop = panel.getY() + panel.getHeight() - OBSERVER_ROWS * (ROW_HEIGHT + ROW_MARGIN);
@@ -631,7 +682,8 @@ public final class GameLobbyScreen extends GlueScreen {
      * Called by {@link #update} for screen-specific timers.
      * <p>
      * Polls the LAN client, shows the chat and the notices, leaves on a refusal or a departure, runs the countdown and
-     * starts the game once the lobby reaches it.
+     * starts the game once the lobby reaches it. A join that failed or ended without a lobby shows the join error and returns to the list;
+     * slot lines built for other slot groups than the lobby's are built again.
      *
      * @param time the time in milliseconds
      */
@@ -647,7 +699,12 @@ public final class GameLobbyScreen extends GlueScreen {
 
         LanLobby lobby = client.getLobby();
 
+        // A join that has not reached the lobby yet keeps the screen waiting; a failed or left one returns to the list.
         if (lobby == null) {
+            if (client.getState() != LanClient.State.JOINING) {
+                this.fail(GameListScreen.getJoinFailureText(this.getContext(), client));
+            }
+
             return;
         }
 
@@ -691,6 +748,17 @@ public final class GameLobbyScreen extends GlueScreen {
 
         if (lobby.isTimedOut() && lobby.hasLeft()) {
             this.fail(text.get(BOOTED_KEY));
+
+            return;
+        }
+
+        // The slot lines follow the first slot record; lines built for other groups are built again.
+        if (lobby.getState() < LanLobby.STATE_LOBBY) {
+            return;
+        }
+
+        if (!Arrays.equals(createLineKinds(this.groupSlots(lobby, text)), Arrays.copyOf(this.lineKinds, this.lineCount))) {
+            this.rebuild();
 
             return;
         }
@@ -1201,6 +1269,7 @@ public final class GameLobbyScreen extends GlueScreen {
                                                                 client.getPlayerName(),
                                                                 glueContext.isExpansion(),
                                                                 client,
+                                                                createCommunityChat(glueContext, client),
                                                                 client.getSpeed(),
                                                                 glueContext.getMultiplayerHome());
 
@@ -1228,6 +1297,15 @@ public final class GameLobbyScreen extends GlueScreen {
         }
 
         this.showError(message, () -> this.leave(() -> glueContext.getNavigator().show(glueContext.getMultiplayerHome())));
+    }
+
+    /**
+     * Shows the lobby on a new lobby screen, whose dialog has the slot lines of the lobby's groups, with this screen's chat log.
+     */
+    private void rebuild() {
+        this.finished = true;
+
+        this.getContext().getNavigator().replace(new GameLobbyScreen(this.chatLog));
     }
 
     /**
@@ -1310,9 +1388,9 @@ public final class GameLobbyScreen extends GlueScreen {
     }
 
     /**
-     * Called first for every press of the screen that no open popup or open combo box takes.
+     * Called first for every press of the screen that no open popup or open combo box takes, while the screen takes input.
      * <p>
-     * Takes presses on the chat scroll bar, and presses on a team or observers header to request a move to that team or to the observers.
+     * Takes presses on the chat scroll bar and the chat text (a selection), and presses on a team or observers header to request a move to that team or to the observers.
      *
      * @param x the interface x
      * @param y the interface y
@@ -1320,7 +1398,7 @@ public final class GameLobbyScreen extends GlueScreen {
      */
     @Override
     protected boolean onPointerPressed(float x, float y) {
-        if (this.chatLog.press(x, y)) {
+        if (this.chatLog.press(this.getContext().getCanvas(), x, y, this.isExtendingPress(), this.isDoublePress())) {
             return true;
         }
 
@@ -1694,20 +1772,20 @@ public final class GameLobbyScreen extends GlueScreen {
     /**
      * Called for every pointer move of the screen (after an open combo box or popup takes it).
      * <p>
-     * Drags the chat scroll bar.
+     * Drags the chat scroll bar or the chat selection.
      *
      * @param x the interface x
      * @param y the interface y
      */
     @Override
     protected void onPointerMoved(float x, float y) {
-        this.chatLog.drag(y);
+        this.chatLog.drag(this.getContext().getCanvas(), x, y);
     }
 
     /**
      * Called for every release of the left button of the screen.
      * <p>
-     * Releases the chat scroll bar.
+     * Releases the chat scroll bar and the chat selection.
      *
      * @param x the interface x
      * @param y the interface y
@@ -1715,6 +1793,19 @@ public final class GameLobbyScreen extends GlueScreen {
     @Override
     protected void onPointerReleased(float x, float y) {
         this.chatLog.release();
+    }
+
+    /**
+     * Called first for a copy (Ctrl+C or the edit menu's Copy): a screen whose read-only text (a chat log) holds a selection copies it here,
+     * before the focused edit control.
+     * <p>
+     * Copies the chat log's selection.
+     *
+     * @return {@code true} if the copy was consumed, {@code false} otherwise
+     */
+    @Override
+    protected boolean onCopy() {
+        return this.chatLog.copy(this.getContext().getClipboard());
     }
 
     /**

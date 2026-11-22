@@ -119,6 +119,37 @@ final class SpriteImagePoolTest {
     }
 
     @Test
+    void allocate_should_stamp_each_allocation_with_the_next_generation() {
+        SpriteImagePool pool = new SpriteImagePool(POOL_CAPACITY);
+
+        Assertions.assertEquals(0, pool.getGeneration());
+
+        SpriteImage first = pool.allocate();
+        SpriteImage second = pool.allocate();
+
+        Assertions.assertNotNull(first);
+        Assertions.assertNotNull(second);
+        Assertions.assertEquals(1, pool.getGeneration(first.getIndex()));
+        Assertions.assertEquals(2, pool.getGeneration(second.getIndex()));
+
+        pool.clear();
+
+        Assertions.assertEquals(0, pool.getGeneration(first.getIndex()));
+
+        SpriteImagePool single = new SpriteImagePool(SINGLE_SLOT_CAPACITY);
+        SpriteImage image = single.allocate();
+
+        Assertions.assertNotNull(image);
+
+        single.recycle(image);
+
+        Assertions.assertEquals(1, single.getGeneration(image.getIndex()));
+        Assertions.assertSame(image, single.allocate());
+        Assertions.assertEquals(2, single.getGeneration(image.getIndex()));
+        Assertions.assertEquals(2, single.getGeneration());
+    }
+
+    @Test
     void recycle_should_reject_foreign_and_already_recycled_images() {
         SpriteImagePool pool = new SpriteImagePool(SINGLE_SLOT_CAPACITY);
         SpriteImage image = pool.allocate();

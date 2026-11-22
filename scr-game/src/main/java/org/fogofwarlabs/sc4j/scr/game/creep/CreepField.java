@@ -838,6 +838,37 @@ public final class CreepField {
     }
 
     /**
+     * Starts the recession of one creep tile, as the scan of {@link #removeProvider} does for each tile of a removed building: a creep tile that
+     * is not receding, not occupied and not sustained by a grounded Zerg building takes a free recession record.
+     *
+     * @param game       the game owning the map, unit finder and recession records
+     * @param horizontal the tile column
+     * @param vertical   the tile row
+     * @return {@code true} if the tile took a recession record, {@code false} if it was skipped or no record was free
+     * @throws IllegalArgumentException      if the game has another map
+     * @throws UnsupportedOperationException if recession storage is unavailable
+     */
+    public boolean recedeTile(@NotNull Game game, int horizontal, int vertical) {
+        if (game.getMap() != this.map) {
+            throw Exceptions.newIllegalArgumentException("Creep recession requires the retained map.");
+        }
+
+        CreepRecession recession = game.getCreepRecession();
+
+        if (recession == null) {
+            throw Exceptions.newUnsupportedOperationException("Creep recession requires the receding creep records.");
+        }
+
+        if (!TerrainTileset.isCreepTile(this.map.getTileIdentifier(horizontal, vertical)) ||
+            (this.map.getTileFlags(horizontal, vertical) & (MapTileFlags.CREEP_RECEDING | MapTileFlags.OCCUPIED)) != 0 ||
+            this.isSustained(game, horizontal, vertical)) {
+            return false;
+        }
+
+        return recession.markReceding(game, horizontal, vertical);
+    }
+
+    /**
      * Retries the removal of a dead creep provider whose removal ran out of recession records. While the shared countdown
      * runs it only counts down; otherwise it restarts the countdown and repeats the scan of {@link #removeProvider}.
      *

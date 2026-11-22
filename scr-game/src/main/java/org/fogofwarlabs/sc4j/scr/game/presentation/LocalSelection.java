@@ -95,6 +95,33 @@ public interface LocalSelection {
     void addHatchedUnit(@NotNull Unit egg, @NotNull Unit second);
 
     /**
+     * Shows units that a game change selected for the local player as the local selection, as a local select shows its selection
+     * ({@link #replaceSlots}); nothing is sent and no sound plays.
+     * <p>
+     * The default implementation replaces the slots through {@link #setSelectedPoolIndexRaw}.
+     *
+     * @param units the selected units in slot order, at most {@link #CAPACITY}
+     */
+    default void showSelection(@NotNull Unit @NotNull [] units) {
+        int[] slots = new int[CAPACITY];
+        int[] selection = new int[units.length];
+
+        for (int position = 0; position < CAPACITY; position++) {
+            slots[position] = this.getSelectedPoolIndex(position);
+        }
+
+        for (int index = 0; index < units.length; index++) {
+            selection[index] = units[index].getIndex();
+        }
+
+        replaceSlots(slots, selection, units.length);
+
+        for (int position = 0; position < CAPACITY; position++) {
+            this.setSelectedPoolIndexRaw(position, slots[position]);
+        }
+    }
+
+    /**
      * Removes a retired or hidden unit from the local selection array, as the lifecycle deselection clears it from every selection
      * ({@link UnitSelection#removeUnit}), and a selected unit the local player stops seeing or detecting; nothing is sent.
      * <p>

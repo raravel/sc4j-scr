@@ -164,6 +164,24 @@ public final class RenderAssets {
     }
 
     /**
+     * Finds the megatile a terrain tile shows in the CV5 records, excluding bit {@code 15} from the group reference.
+     *
+     * @param groups         the CV5 records
+     * @param tileIdentifier the value from the {@code MTXM} section
+     * @return the megatile index
+     * @throws IOException if the tile group is outside the given records
+     */
+    static int findMegatileIndex(byte @NotNull [] groups, int tileIdentifier) throws IOException {
+        int groupOffset = TerrainTileset.getGroupIndex(tileIdentifier) * TerrainTileset.CV5_RECORD_SIZE;
+
+        if (tileIdentifier < 0 || tileIdentifier > MAXIMUM_TILE_IDENTIFIER || groupOffset + (long) TerrainTileset.CV5_RECORD_SIZE > groups.length) {
+            throw Exceptions.newIOException("Tile group is out of bounds: {0}", tileIdentifier);
+        }
+
+        return LittleEndianUtils.readUnsigned16(groups, TerrainTileset.getMegatileOffset(tileIdentifier));
+    }
+
+    /**
      * Decodes a terrain tile from the CV5 records and the megatile graphics into {@code 32x32} palette indices, excluding bit {@code 15} from the
      * group reference.
      *
@@ -174,14 +192,7 @@ public final class RenderAssets {
      * @throws IOException if the tile group or the megatile is outside the given records
      */
     static byte @NotNull [] decodeTile(byte @NotNull [] groups, @NotNull TileGraphics tiles, int tileIdentifier) throws IOException {
-        int groupOffset = TerrainTileset.getGroupIndex(tileIdentifier) * TerrainTileset.CV5_RECORD_SIZE;
-
-        if (tileIdentifier < 0 || tileIdentifier > MAXIMUM_TILE_IDENTIFIER || groupOffset + (long) TerrainTileset.CV5_RECORD_SIZE > groups.length) {
-            throw Exceptions.newIOException("Tile group is out of bounds: {0}", tileIdentifier);
-        }
-
-        int megatileOffset = TerrainTileset.getMegatileOffset(tileIdentifier);
-        int tileIndex = LittleEndianUtils.readUnsigned16(groups, megatileOffset);
+        int tileIndex = findMegatileIndex(groups, tileIdentifier);
 
         if (tileIndex >= tiles.getTileCount()) {
             throw Exceptions.newIOException("Megatile is out of bounds: {0}", tileIndex);
@@ -645,6 +656,17 @@ public final class RenderAssets {
      */
     public byte @NotNull [] decodeTile(int tileIdentifier) throws IOException {
         return decodeTile(this.groups, this.tiles, tileIdentifier);
+    }
+
+    /**
+     * Returns the megatile a CHK terrain tile shows, excluding bit {@code 15} from the group reference.
+     *
+     * @param tileIdentifier the value from the {@code MTXM} section
+     * @return the megatile index
+     * @throws IOException if the tile group is outside the installed assets
+     */
+    public int getMegatileIndex(int tileIdentifier) throws IOException {
+        return findMegatileIndex(this.groups, tileIdentifier);
     }
 
     /**

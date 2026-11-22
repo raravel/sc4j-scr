@@ -21,6 +21,14 @@ final class ChatHistoryTest {
      */
     private static final double CHARACTER_WIDTH = 10.0;
     private static final @NotNull ToDoubleFunction<String> MEASURE = text -> text.length() * CHARACTER_WIDTH;
+    /**
+     * Measures every code point but an unpaired surrogate {@code 10} pixels wide.
+     */
+    private static final @NotNull ToDoubleFunction<String> CODE_POINT_MEASURE = text -> text.codePoints()
+                                                                                            .filter(codePoint -> codePoint < Character.MIN_SURROGATE ||
+                                                                                                                 codePoint > Character.MAX_SURROGATE)
+                                                                                            .count() * CHARACTER_WIDTH;
+    private static final @NotNull String EMOJI = "\uD83D\uDE00";
     private static final int CODE = 2;
     private static final int SENDER = 0xF40404FF;
     /**
@@ -32,12 +40,16 @@ final class ChatHistoryTest {
      */
     private static final float SHORT_TEXT_WIDTH = 100;
     /**
-     * A row width that no test line exceeds.
+     * The row width of the list control: its right edge {@code 16 + 370 - 1} less {@code 50}.
      */
-    private static final float WIDE_WIDTH = 1000;
+    private static final float ROW_WIDTH = 335;
     private static final int SHOWN_ROWS = 3;
     private static final int MANY_SHOWN_ROWS = 10;
     private static final int EXTRA_LINES = 10;
+    /**
+     * The first shown row of a scrolled full list.
+     */
+    private static final int SCROLLED_ROW = 100;
     /**
      * The most rows that the history fills into its list.
      */
@@ -67,6 +79,23 @@ final class ChatHistoryTest {
     }
 
     @Test
+    void row_width_should_end_before_the_list_right_edge() {
+        Assertions.assertEquals(ROW_WIDTH, ChatHistory.getRowWidth(createListControl()));
+    }
+
+    @Test
+    void wrap_should_carry_only_color_codes() {
+        Assertions.assertEquals(List.of("ab\tc", "defg", "h"), ChatHistory.wrap("ab\tcdefgh", MEASURE, NARROW_WIDTH));
+    }
+
+    @Test
+    void wrap_should_keep_surrogate_pairs_in_one_row() {
+        List<String> rows = ChatHistory.wrap("a" + EMOJI.repeat(5), CODE_POINT_MEASURE, NARROW_WIDTH);
+
+        Assertions.assertEquals(List.of("a" + EMOJI.repeat(3), EMOJI.repeat(2)), rows);
+    }
+
+    @Test
     void chat_history_keeps_records_and_appends_only_while_open() {
         ChatHistory history = new ChatHistory();
 
@@ -75,7 +104,7 @@ final class ChatHistoryTest {
 
         ListBox list = new ListBox(createListControl(), "dlg");
 
-        history.open(list, MEASURE, WIDE_WIDTH, SHOWN_ROWS);
+        history.open(list, MEASURE, SHOWN_ROWS);
 
         Assertions.assertEquals(2, list.getCount());
 
@@ -100,7 +129,7 @@ final class ChatHistoryTest {
         ChatHistory history = new ChatHistory();
         ListBox list = new ListBox(createListControl(), "dlg");
 
-        history.open(list, MEASURE, WIDE_WIDTH, SHOWN_ROWS);
+        history.open(list, MEASURE, SHOWN_ROWS);
         history.add("one", CODE, SENDER);
 
         Assertions.assertEquals(0, list.getSelection(), "adding a line selects the new last row");
@@ -120,8 +149,34 @@ final class ChatHistoryTest {
 
         ListBox list = new ListBox(createListControl(), "dlg");
 
-        history.open(list, MEASURE, WIDE_WIDTH, MANY_SHOWN_ROWS);
+        history.open(list, MEASURE, MANY_SHOWN_ROWS);
 
         Assertions.assertEquals(MAXIMUM_ROWS, list.getCount());
+    }
+
+    @Test
+    void add_to_full_list_should_keep_shown_rows() {
+        ChatHistory history = new ChatHistory();
+
+        for (int index = 0; index < ChatHistory.MAXIMUM_ROWS; index++) {
+            history.add("line " + index, CODE);
+        }
+
+        ListBox list = new ListBox(createListControl(), "dlg");
+
+        history.open(list, MEASURE, MANY_SHOWN_ROWS);
+        list.select(SCROLLED_ROW, MANY_SHOWN_ROWS);
+        history.add("new", CODE);
+
+        Assertions.assertEquals(MAXIMUM_ROWS, list.getCount());
+        Assertions.assertEquals(SCROLLED_ROW - 1, list.getTopRow(), "the first row goes and the shown rows stay in view");
+
+        list.select(list.getCount() - MANY_SHOWN_ROWS - 1, MANY_SHOWN_ROWS);
+
+        int topRow = list.getTopRow();
+
+        history.add("newer", CODE);
+
+        Assertions.assertEquals(topRow - 1, list.getTopRow(), "a list one row above its end does not follow the new row");
     }
 }

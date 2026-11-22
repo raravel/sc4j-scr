@@ -760,7 +760,8 @@ public final class ComputerMilitary {
             }
 
             this.firstGuards[owner] = guard;
-                                      guard.guardType = type;
+
+            guard.guardType = type;
         }
 
         guard.unit         = unit;

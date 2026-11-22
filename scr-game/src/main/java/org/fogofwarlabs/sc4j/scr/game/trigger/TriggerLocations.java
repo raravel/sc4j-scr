@@ -80,7 +80,7 @@ public final class TriggerLocations {
      * @param unit     the unit
      * @return {@code true} if the unit provides space, {@code false} otherwise
      */
-    static boolean providesSpace(@NotNull ScrUnitTypeView units, @Nullable PlayerUpgrades upgrades, @NotNull Unit unit) {
+    public static boolean providesSpace(@NotNull ScrUnitTypeView units, @Nullable PlayerUpgrades upgrades, @NotNull Unit unit) {
         int type = unit.getUnitId();
 
         return (unit.getStatus() & UnitStatusFlags.HALLUCINATION) == 0 && units.getSpaceProvided(type) != 0 &&
@@ -124,15 +124,13 @@ public final class TriggerLocations {
     /**
      * Moves a location: the rectangle is offset so its center is the given point, a negative left or top edge moves the
      * rectangle to zero keeping its extent, and a right or bottom edge at or beyond the map pixel extent moves it back to
-     * end at the last pixel.
+     * end at the last pixel. Move Location moves its destination location here.
      *
-     * @param context     the trigger context
-     * @param destination the location index
-     * @param centerX     the new horizontal center
-     * @param centerY     the new vertical center
+     * @param location the location, one of the game's trigger locations ({@link TriggerContext#getLocation})
+     * @param centerX  the new horizontal center
+     * @param centerY  the new vertical center
      */
-    void moveLocation(@NotNull TriggerContext context, int destination, int centerX, int centerY) {
-        TriggerLocation location = context.locations[destination];
+    public void moveLocation(@NotNull TriggerLocation location, int centerX, int centerY) {
         int left = location.getLeft();
         int top = location.getTop();
         int right = location.getRight();

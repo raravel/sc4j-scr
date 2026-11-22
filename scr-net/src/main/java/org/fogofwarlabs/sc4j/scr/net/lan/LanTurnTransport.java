@@ -3,6 +3,7 @@ package org.fogofwarlabs.sc4j.scr.net.lan;
 import org.fogofwarlabs.sc4j.base.binary.LittleEndianUtils;
 import org.fogofwarlabs.sc4j.base.log.Logger;
 import org.fogofwarlabs.sc4j.engine.lockstep.*;
+import org.fogofwarlabs.sc4j.engine.net.beaconlink.ParticipantChannel;
 import org.fogofwarlabs.sc4j.scr.data.format.replay.ReplayCommandCodecs;
 import org.fogofwarlabs.sc4j.scr.data.format.replay.ReplayCommandIds;
 import org.fogofwarlabs.sc4j.scr.game.player.PlayerTable;
@@ -16,6 +17,7 @@ import org.fogofwarlabs.sc4j.scr.net.provider.ProviderSession;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HexFormat;
@@ -27,9 +29,11 @@ import java.util.List;
  * observer turns are excluded. Session accesses hold the supplied lock shared with {@link LanClient#startNetworkThread()}.
  * <p>
  * Once a second it logs the game's network state at {@code INFO} ({@code LAN GAME}): turns sent and received in that
- * second, the last turn numbers both ways, per peer the expected turn, the queued turns and the time since its last packet,
- * the last Sync command sent, the local player, the packets in and out, the slots a waiting receive misses, and every
- * departure with its reason. A peer that sends nothing for more than {@value #SILENCE_MILLISECONDS} milliseconds is logged
+ * second, the last turn numbers both ways, per peer the expected turn, the queued turns, the time since its last packet, the
+ * round trip time of its keep-alive pings, its turns that arrived after their turn step was due ({@link LateTurnCounts}) and the
+ * turn resend requests sent for its turns and received from it in that second, and on a network with channels the channel's
+ * delay and whether it is relayed; the last Sync command sent, the local player, the packets in and out, the slots a waiting
+ * receive misses, and every departure with its reason. A peer that sends nothing for more than {@value #SILENCE_MILLISECONDS} milliseconds is logged
  * ({@code LAN GAME PEER SILENT}).
  * <p>
  * The players a waiting receive misses are the awaited participants of the engine waiting state ({@link #getWaitingPeers()}), whose wait
@@ -103,6 +107,7 @@ public final class LanTurnTransport implements LockstepTransport {
     private int waitsInSecond;
     private byte @Nullable [] lastSync;
     private long lastReport;
+    private final @NotNull LateTurnCounts lateTurns;
 
     private volatile long lastExchange;
     private int lastCompleted;
@@ -167,6 +172,7 @@ public final class LanTurnTransport implements LockstepTransport {
         this.waitsInSecond    = 0;
         this.lastSync         = null;
         this.lastReport       = System.currentTimeMillis();
+        this.lateTurns        = new LateTurnCounts(LanLobby.PLAYER_IDENTIFIER_COUNT);
 
         this.lastExchange  = 0;
         this.lastCompleted = session.getTime();
@@ -183,6 +189,14 @@ public final class LanTurnTransport implements LockstepTransport {
         this.pendingDepartures  = new ArrayList<>();
         this.reportedDepartures = new ArrayList<>();
         this.silent             = new boolean[LanLobby.PLAYER_IDENTIFIER_COUNT];
+
+        // The game's report counts the resend requests from its start, without the lobby's.
+        synchronized (this.lock) {
+            for (ProviderPeer peer : this.session.getPeers()) {
+                peer.takeTurnResendRequestsSent();
+                peer.takeTurnResendRequestsReceived();
+            }
+        }
 
         LOGGER.info("LAN GAME START: local player " + session.getLocalIdentifier() + ", own turns: next " +
                     this.session.getSelf().getChannel(ProviderPacket.TURN).getNextOutgoingSequence() +
@@ -333,6 +347,7 @@ public final class LanTurnTransport implements LockstepTransport {
             } else {
                 List<LockstepPeer> awaited = new ArrayList<>();
                 long waited = Integer.toUnsignedLong(now - this.lastCompleted);
+                int turn = this.session.getSelf().getChannel(ProviderPacket.TURN).getExpectedSequence();
 
                 this.waitsInSecond++;
 
@@ -340,7 +355,10 @@ public final class LanTurnTransport implements LockstepTransport {
                     int status = batch.getStatus(slot);
 
                     if ((status & ProviderSession.TURN_PRESENT) != 0 && (status & ProviderSession.TURN_READY) == 0) {
-                        awaited.add(NetworkPeerUtils.getPeer(LanLobby.getSlotIdentifier(slot)));
+                        int identifier = LanLobby.getSlotIdentifier(slot);
+
+                        awaited.add(NetworkPeerUtils.getPeer(identifier));
+                        this.lateTurns.recordMissing(identifier, turn);
                     }
                 }
 
@@ -588,6 +606,22 @@ public final class LanTurnTransport implements LockstepTransport {
         }
     }
 
+    /**
+     * Describes a channel for the report: its delay and whether it is relayed.
+     *
+     * @param channel the channel, or {@code null} for a network without channels
+     * @return the description with a leading space, for example {@code " link 48 ms relayed"}, or an empty string without a channel
+     */
+    private static @NotNull String describeChannel(@Nullable ParticipantChannel channel) {
+        if (channel == null) {
+            return "";
+        }
+
+        long delay = channel.getDelayMillis();
+
+        return " link " + (delay == ParticipantChannel.UNKNOWN_DELAY ? "-" : delay + " ms") + (channel.isRelayed() ? " relayed" : " direct");
+    }
+
     private void report() {
         long now = System.currentTimeMillis();
 
@@ -599,19 +633,24 @@ public final class LanTurnTransport implements LockstepTransport {
 
         StringBuilder peers = new StringBuilder();
         int tick = LanClient.getCurrentTick();
+        LanClient owner = this.client;
 
         for (ProviderPeer peer : this.session.getPeers()) {
             ProviderChannel turns = peer.getChannel(ProviderPacket.TURN);
+            InetSocketAddress address = peer.getAddress();
+            ParticipantChannel channel = owner == null || address == null ? null : owner.getNetwork().findChannel(address);
 
-            peers.append(String.format(" [player %d flags 0x%X expected %d queued %d silent %d ms]",
+            peers.append(String.format(" [player %d flags 0x%X expected %d queued %d silent %d ms rtt %s late %d/s resends sent %d/s received %d/s%s]",
                                        peer.getIdentifier(),
                                        peer.getFlags(),
                                        turns.getExpectedSequence(),
                                        turns.getReceivedCount(),
-                                       tick - peer.getLastReceiveTime()));
+                                       tick - peer.getLastReceiveTime(),
+                                       peer.hasRoundTripTime() ? peer.getRoundTripTime() + " ms" : "-",
+                                       this.lateTurns.take(peer.getIdentifier()),
+                                       peer.takeTurnResendRequestsSent(), peer.takeTurnResendRequestsReceived(),
+                                       describeChannel(channel)));
         }
-
-        LanClient owner = this.client;
 
         LOGGER.info(
                 String.format(

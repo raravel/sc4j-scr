@@ -417,6 +417,20 @@ final class PlayerUpgradesTest {
     }
 
     @Test
+    void set_maximum_level_should_store_the_byte_without_the_expansion_gate() {
+        PlayerUpgrades classic = PlayerProgressTestUtils.createPlayerUpgrades(false);
+
+        classic.setMaximumLevel(SECOND_PLAYER, FIRST_EXPANSION_UPGRADE, WRITTEN_LEVEL);
+        classic.setMaximumLevel(SECOND_PLAYER, FIRST_UPGRADE, WIDE_LEVEL);
+        classic.setMaximumLevel(PAST_PLAYER, PAST_PLAYER_UPGRADE, WRITTEN_LEVEL);
+
+        Assertions.assertEquals(WRITTEN_LEVEL, classic.getMaximumLevel(SECOND_PLAYER, FIRST_EXPANSION_UPGRADE),
+                                "an expansion maximum of classic storage");
+        Assertions.assertEquals(WIDE_LEVEL & BYTE_MASK, classic.getMaximumLevel(SECOND_PLAYER, FIRST_UPGRADE));
+        Assertions.assertEquals(WRITTEN_LEVEL, classic.getLevel(FIRST_PLAYER, PAST_PLAYER_UPGRADE), "a classic level of player 0");
+    }
+
+    @Test
     void set_level_should_write_the_context_byte_a_player_past_the_slots_addresses_behind_the_expansion_gate() {
         RecordingContext context = new RecordingContext();
         PlayerUpgrades classic = PlayerProgressTestUtils.createPlayerUpgrades(new ContextExpansion(false), () -> context);

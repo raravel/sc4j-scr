@@ -13,7 +13,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
- * Verifies launch option validation, the replay camera, audio set, renderer and seek options, and file paths under the selected client root.
+ * Verifies launch option validation, the replay camera, audio set, renderer and seek options, the startup tips of hidden runs, and file paths
+ * under the selected client root.
  */
 final class ClientOptionsTest {
     private static final @NotNull String ROOT_PROPERTY = "sc4j.root";
@@ -54,6 +55,18 @@ final class ClientOptionsTest {
         Assertions.assertThrows(IllegalArgumentException.class, () -> ClientOptions.parse(new String[]{"--content-scale", "2"}));
         Assertions.assertThrows(IllegalArgumentException.class,
                                 () -> ClientOptions.parse(new String[]{"--hidden", "--frames", "3", "--content-scale", "0"}));
+    }
+
+    @Test
+    void parse_should_turn_the_startup_tips_off_for_a_hidden_run_unless_its_settings_turn_them_on(@TempDir @NotNull Path root) throws IOException {
+        Path settings = root.resolve("tips.json");
+
+        Files.writeString(settings, "{\"game\":{\"showTips\":true}}");
+
+        Assertions.assertTrue(ClientOptions.parse(new String[]{"--replay", "test.rep", "--settings", "none"}).getInterfaceSettings().isTipsShown());
+        Assertions.assertFalse(ClientOptions.parse(new String[]{"--hidden", "--frames", "3"}).getInterfaceSettings().isTipsShown());
+        Assertions.assertTrue(ClientOptions.parse(new String[]{"--hidden", "--frames", "3", "--settings", settings.toString()})
+                                           .getInterfaceSettings().isTipsShown());
     }
 
     @Test

@@ -71,6 +71,10 @@ public final class GameMap implements SightGrid {
      */
     private static final int BORDER_CLEARED_FLAGS = MapTileFlags.PARTIALLY_WALKABLE | MapTileFlags.HAS_CREEP | MapTileFlags.WALKABLE;
     /**
+     * The flags the game sets and clears on a tile after the map loader expanded its terrain: building occupancy and the creep state.
+     */
+    private static final int RUNTIME_FLAGS = MapTileFlags.OCCUPIED | MapTileFlags.CREEP_RECEDING | MapTileFlags.TEMPORARY_CREEP;
+    /**
      * The mask of an unsigned WORD: a tile identifier.
      */
     private static final int WORD_MASK = 0xFFFF;
@@ -225,6 +229,18 @@ public final class GameMap implements SightGrid {
      */
     public int getOverlayTileIdentifier(int tileIndex) {
         return this.requireOverlayTileIdentifiers()[tileIndex];
+    }
+
+    /**
+     * Returns the terrain of a tile: the tile retained below creep, otherwise the tile identifier.
+     *
+     * @param tileIndex the row-major tile index
+     * @return the terrain tile WORD
+     */
+    public int getTerrainTileIdentifier(int tileIndex) {
+        int retained = this.overlayTileIdentifiers == null ? 0 : this.overlayTileIdentifiers[tileIndex] & WORD_MASK;
+
+        return retained != 0 ? retained : this.tileIdentifiers[tileIndex];
     }
 
     /**
@@ -606,6 +622,22 @@ public final class GameMap implements SightGrid {
     }
 
     /**
+     * Replaces the visible and explored bytes of one tile, as an EUD write of the tile's low WORD does; the terrain bits remain unchanged. The
+     * visible bits last until the game updates the sight again; the explored bits stay.
+     *
+     * @param tileX the horizontal coordinate in tiles
+     * @param tileY the vertical coordinate in tiles
+     * @param bits  the low WORD: bit {@code p} if player {@code p} does not see the tile, bit {@code 8 + p} if it has not explored it
+     * @throws IllegalStateException     if expanded terrain flags are unavailable
+     * @throws IndexOutOfBoundsException if the coordinates are outside the map
+     */
+    public void setTileVisibility(int tileX, int tileY, int bits) {
+        int flags = this.getTileFlags(tileX, tileY);
+
+        this.tileFlags[tileY * this.width + tileX] = flags & ~MapTileFlags.NOT_VISIBLE_OR_EXPLORED | bits & MapTileFlags.NOT_VISIBLE_OR_EXPLORED;
+    }
+
+    /**
      * Clears the given per-player visibility bits of every tile, as the reveal cheat does with the masks {@code 0xFFFF} (visible and explored) and
      * {@code 0xFF} (visible).
      *
@@ -724,12 +756,59 @@ public final class GameMap implements SightGrid {
 
         for (int tileY = this.height - BORDER_ROWS; tileY < this.height; tileY++) {
             for (int tileX = 0; tileX < this.width; tileX++) {
-                if (tileY == this.height - 1 || tileX < BORDER_COLUMNS || tileX >= this.width - BORDER_COLUMNS) {
-                    int tileIndex = tileY * this.width + tileX;
+                int tileIndex = tileY * this.width + tileX;
 
-                    flags[tileIndex] = (flags[tileIndex] & ~BORDER_CLEARED_FLAGS) | MapTileFlags.UNBUILDABLE;
-                }
+                flags[tileIndex] = this.applyTerrainBorder(tileIndex, flags[tileIndex]);
             }
         }
+    }
+
+    /**
+     * Applies the bottom-edge terrain flag rectangles of {@link #initializeTerrainBorders} to the expanded flags of one tile: a tile inside them
+     * loses its walkable, creep and partially walkable flags and becomes unbuildable.
+     *
+     * @param tileIndex    the row-major tile index
+     * @param terrainFlags the tile's expanded terrain flags
+     * @return the terrain flags the map loader gives the tile
+     */
+    public int applyTerrainBorder(int tileIndex, int terrainFlags) {
+        int tileX = tileIndex % this.width;
+        int tileY = tileIndex / this.width;
+
+        if (tileY < this.height - BORDER_ROWS || tileY != this.height - 1 && tileX >= BORDER_COLUMNS && tileX < this.width - BORDER_COLUMNS) {
+            return terrainFlags;
+        }
+
+        return (terrainFlags & ~BORDER_CLEARED_FLAGS) | MapTileFlags.UNBUILDABLE;
+    }
+
+    /**
+     * Replaces the terrain of a tile with another tile, as a map that had the other tile from the start.
+     * <p>
+     * The terrain bits become the new tile's loaded terrain flags; the per-player visibility and the occupancy and creep bits the game set or
+     * cleared since the previous terrain was loaded stay. A tile below creep keeps the creep tile, its walkable and creep bits, and retains the
+     * new tile below the creep, which the creep's recession restores.
+     *
+     * @param tileIndex            the row-major tile index
+     * @param tileIdentifier       the new tile WORD
+     * @param previousTerrainFlags the loaded terrain flags of the previous terrain ({@link #getTerrainTileIdentifier})
+     * @param terrainFlags         the loaded terrain flags of the new tile ({@link #applyTerrainBorder})
+     * @throws IllegalStateException if expanded terrain flags or overlays are unavailable
+     */
+    public void replaceTerrain(int tileIndex, int tileIdentifier, int previousTerrainFlags, int terrainFlags) {
+        int[] overlays = this.requireOverlayTileIdentifiers();
+        int flags = this.getTileFlags(tileIndex);
+        int set = flags & ~previousTerrainFlags & RUNTIME_FLAGS;
+        int cleared = ~flags & previousTerrainFlags & RUNTIME_FLAGS;
+        int replaced = (terrainFlags | set) & ~cleared & ~MapTileFlags.NOT_VISIBLE_OR_EXPLORED | flags & MapTileFlags.NOT_VISIBLE_OR_EXPLORED;
+
+        if (overlays[tileIndex] != 0) {
+            overlays[tileIndex] = tileIdentifier & WORD_MASK;
+            replaced            = replaced & ~CREEP_TERRAIN_FLAGS | flags & CREEP_TERRAIN_FLAGS;
+        } else {
+            this.tileIdentifiers[tileIndex] = tileIdentifier & WORD_MASK;
+        }
+
+        this.tileFlags[tileIndex] = replaced;
     }
 }

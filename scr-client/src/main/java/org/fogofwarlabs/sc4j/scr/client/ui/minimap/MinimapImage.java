@@ -861,9 +861,9 @@ public final class MinimapImage {
                                : this.scale == MEDIUM_RENDERER_SCALE
                                  ? row * (MEDIUM_MINITILE_STEP * TerrainTileset.MINI_TILES_PER_ROW) + column * MEDIUM_MINITILE_STEP
                                  : 0;
+                int canvasIndex = (tileY * this.scale + row) * this.textureWidth + tileX * this.scale + column;
 
-                canvas[(tileY * this.scale + row) * this.textureWidth + tileX * this.scale + column] =
-                        sampleTerrainColor(assets, sampler, remap, megatile, right, minitile);
+                canvas[canvasIndex] = sampleTerrainColor(assets, sampler, remap, megatile, right, minitile);
             }
         }
     }

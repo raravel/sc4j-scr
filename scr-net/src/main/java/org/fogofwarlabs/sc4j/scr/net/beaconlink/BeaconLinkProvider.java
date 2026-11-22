@@ -69,15 +69,33 @@ public final class BeaconLinkProvider implements NetworkProvider {
     private static final @NotNull ScrRoomData NO_ROOM_DATA = new ScrRoomData(0, 0, 0, 0, 0);
 
     /**
+     * A game datagram the game link holds for the game socket, with its sender's address in the game.
+     */
+    private static final class HeldDatagram {
+        private final @NotNull InetSocketAddress source;
+        private final byte @NotNull [] payload;
+
+        private HeldDatagram(@NotNull InetSocketAddress source, byte @NotNull [] payload) {
+            this.source  = source;
+            this.payload = payload;
+        }
+    }
+
+    /**
      * Carries the game socket's datagrams on the Storm port, addressed by the participants' addresses.
      */
     private final class GameLink implements DatagramLink<@NotNull InetSocketAddress> {
         private final @NotNull DatagramLink<@NotNull LinkParticipant> stormPort;
         private final @NotNull DatagramLink<@NotNull LinkParticipant> roomPort;
+        /**
+         * The datagrams taken from the Storm port before their senders left the game, which the game socket receives first.
+         */
+        private final @NotNull Deque<@NotNull HeldDatagram> held;
 
         private GameLink(@NotNull DatagramLink<@NotNull LinkParticipant> stormPort, @NotNull DatagramLink<@NotNull LinkParticipant> roomPort) {
             this.stormPort = stormPort;
             this.roomPort  = roomPort;
+            this.held      = new ArrayDeque<>();
         }
 
         /**
@@ -116,6 +134,14 @@ public final class BeaconLinkProvider implements NetworkProvider {
         @Override
         public @Nullable InetSocketAddress receive(@NotNull ByteBuffer buffer) throws IOException {
             synchronized (BeaconLinkProvider.this) {
+                HeldDatagram first = this.held.pollFirst();
+
+                if (first != null) {
+                    buffer.put(first.payload, 0, Math.min(first.payload.length, buffer.remaining()));
+
+                    return first.source;
+                }
+
                 int start = buffer.position();
 
                 while (true) {
@@ -146,6 +172,24 @@ public final class BeaconLinkProvider implements NetworkProvider {
         public void close() {
             synchronized (BeaconLinkProvider.this) {
                 BeaconLinkProvider.this.closeGame(this);
+            }
+        }
+
+        /**
+         * Takes every datagram waiting at the Storm port, the datagrams the closed channels of leaving participants still hold included, into
+         * the link's queue with its sender's address, while the senders still have their addresses.
+         *
+         * @throws IOException if the Storm port is closed
+         */
+        private void holdWaitingDatagrams() throws IOException {
+            ByteBuffer buffer = ByteBuffer.allocate(LinkOverlay.MAXIMUM_DATAGRAM_LENGTH);
+
+            for (LinkParticipant sender = this.stormPort.receive(buffer); sender != null; sender = this.stormPort.receive(buffer.clear())) {
+                InetSocketAddress address = BeaconLinkProvider.this.book.findAddress(sender);
+
+                if (address != null) {
+                    this.held.addLast(new HeldDatagram(address, Arrays.copyOf(buffer.array(), buffer.position())));
+                }
             }
         }
     }
@@ -228,6 +272,10 @@ public final class BeaconLinkProvider implements NetworkProvider {
     private @Nullable LanRecord hostedRecord;
     private final @NotNull List<@NotNull LinkParticipant> members;
     private final @NotNull Map<@NotNull LinkParticipant, @NotNull Set<@NotNull LinkParticipant>> reports;
+    /**
+     * The addresses of the members that left the hosted game, until the client takes them ({@link #pollDeparture()}).
+     */
+    private final @NotNull Deque<@NotNull InetSocketAddress> departures;
     private long announceTime;
 
     private @Nullable FoundRoom joinedRoom;
@@ -259,6 +307,7 @@ public final class BeaconLinkProvider implements NetworkProvider {
         this.hostedRecord = null;
         this.members      = new ArrayList<>();
         this.reports      = new LinkedHashMap<>();
+        this.departures   = new ArrayDeque<>();
         this.announceTime = 0L;
 
         this.joinedRoom        = null;
@@ -283,6 +332,30 @@ public final class BeaconLinkProvider implements NetworkProvider {
     @Override
     public @NotNull BeaconLinkSession getBeaconLinkSession() {
         return this.session;
+    }
+
+    /**
+     * Finds the participant of the game that an address of the game names.
+     *
+     * @param address the address, as the provider session knows its peers
+     * @return the participant, or {@code null} if the address names no participant of the game
+     */
+    public synchronized @Nullable LinkParticipant findParticipant(@NotNull InetSocketAddress address) {
+        return this.book.findParticipant(address);
+    }
+
+    /**
+     * Finds the channel that carries a game participant's datagrams, whose delay and relay state the game's network report shows.
+     *
+     * @param address the participant's address, as the provider session knows its peers
+     * @return the channel, or {@code null} for a network without channels or an address of no participant of the game
+     * @implSpec Returns the overlay's channel to the participant that the address names.
+     */
+    @Override
+    public synchronized @Nullable ParticipantChannel findChannel(@NotNull InetSocketAddress address) {
+        LinkParticipant participant = this.book.findParticipant(address);
+
+        return participant == null ? null : this.session.getOverlay().getChannel(participant);
     }
 
     /**
@@ -578,6 +651,18 @@ public final class BeaconLinkProvider implements NetworkProvider {
         }
     }
 
+    /**
+     * Takes the address of the next player of the hosted game whose connection the network saw end, in the order the network saw them.
+     *
+     * @return the player's address in the game, or {@code null} if none is waiting or the network does not see connections end
+     * @implSpec Returns the address of the next member whose channel to the host closed; the datagrams the member sent before were taken for
+     * the game socket first.
+     */
+    @Override
+    public synchronized @Nullable InetSocketAddress pollDeparture() {
+        return this.departures.pollFirst();
+    }
+
     private void updateSearch(long now) {
         RoomSearch current = this.search;
 
@@ -613,6 +698,36 @@ public final class BeaconLinkProvider implements NetworkProvider {
             return;
         }
 
+        // A member whose channel to the host closed leaves the room, before a new channel of the same participant joins it again.
+        for (LinkParticipant member : List.copyOf(this.members)) {
+            ParticipantChannel channel = this.session.getOverlay().getChannel(member);
+
+            if (channel != null && channel.getState() != ChannelState.CLOSED) {
+                continue;
+            }
+
+            LOGGER.info("BEACON.LINK MEMBER LEFT: " + member);
+
+            // The game socket still receives what the member sent before its channel closed, such as its leave.
+            try {
+                game.holdWaitingDatagrams();
+            } catch (IOException exception) {
+                LOGGER.debug("BEACON.LINK GAME DATAGRAMS NOT HELD: " + exception.getMessage());
+            }
+
+            InetSocketAddress address = this.book.findAddress(member);
+
+            if (address != null) {
+                this.departures.addLast(address);
+            }
+
+            this.members.remove(member);
+            this.reports.remove(member);
+            this.removeParticipant(member);
+
+            changed = true;
+        }
+
         for (ParticipantChannel accepted = room.acceptChannel(); accepted != null; accepted = room.acceptChannel()) {
             LinkParticipant peer = accepted.getPeer();
 
@@ -632,20 +747,6 @@ public final class BeaconLinkProvider implements NetworkProvider {
             this.members.add(peer);
 
             changed = true;
-        }
-
-        // A member whose channel to the host closed leaves the room.
-        for (LinkParticipant member : List.copyOf(this.members)) {
-            ParticipantChannel channel = this.session.getOverlay().getChannel(member);
-
-            if (channel == null || channel.getState() == ChannelState.CLOSED) {
-                LOGGER.info("BEACON.LINK MEMBER LEFT: " + member);
-                this.members.remove(member);
-                this.reports.remove(member);
-                this.removeParticipant(member);
-
-                changed = true;
-            }
         }
 
         this.drainRoomPort(game, null);
@@ -819,7 +920,13 @@ public final class BeaconLinkProvider implements NetworkProvider {
             LinkParticipant participant = member.getKey();
             InetSocketAddress current = this.book.findAddress(participant);
 
-            if (participant.equals(self) || participant.equals(host) || member.getValue().equals(current)) {
+            if (participant.equals(self) || participant.equals(host)) {
+                continue;
+            }
+
+            if (member.getValue().equals(current)) {
+                this.reopenChannel(participant);
+
                 continue;
             }
 
@@ -828,6 +935,26 @@ public final class BeaconLinkProvider implements NetworkProvider {
             } else if (!this.book.put(participant, member.getValue())) {
                 LOGGER.warning("BEACON.LINK MEMBER ADDRESS IGNORED: " + participant + " at " + member.getValue());
             }
+        }
+    }
+
+    /**
+     * Opens a new channel to a member whose channel closed.
+     *
+     * @param participant the member
+     */
+    private void reopenChannel(@NotNull LinkParticipant participant) {
+        ParticipantChannel channel = this.session.getOverlay().getChannel(participant);
+
+        if (channel != null && channel.getState() != ChannelState.CLOSED) {
+            return;
+        }
+
+        try {
+            // noinspection resource
+            this.session.getOverlay().addParticipant(participant);
+        } catch (IllegalArgumentException | IllegalStateException exception) {
+            LOGGER.warning("BEACON.LINK CHANNEL NOT REOPENED: " + participant + ": " + exception.getMessage());
         }
     }
 
@@ -895,10 +1022,13 @@ public final class BeaconLinkProvider implements NetworkProvider {
 
         this.link = null;
 
+        game.held.clear();
+
         this.hostedRoom   = null;
         this.hostedRecord = null;
         this.members.clear();
         this.reports.clear();
+        this.departures.clear();
 
         this.joinedRoom    = null;
         this.hostChannel   = null;

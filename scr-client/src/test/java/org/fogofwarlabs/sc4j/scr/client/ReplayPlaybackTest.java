@@ -1,11 +1,13 @@
 package org.fogofwarlabs.sc4j.scr.client;
 
 import org.fogofwarlabs.sc4j.scr.client.configuration.ClientOptions;
+import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 /**
- * Verifies the replay viewer's playback speeds, the frames due at a speed, and its seek requests, seek options and Replay Seek command checks.
+ * Verifies the replay viewer's playback speeds, the frames due at a speed, the live frame pacing with its catch-up after a slow pass or a turn
+ * wait, and its seek requests, seek options and Replay Seek command checks.
  */
 final class ReplayPlaybackTest {
     /**
@@ -69,6 +71,31 @@ final class ReplayPlaybackTest {
     private static final double SLOW_PASS_SECONDS = 0.020;
     private static final int SLOW_PASS_FRAMES = 20;
     private static final double LATE_PASS_SECONDS = 0.200;
+    /**
+     * The most live frames one pass runs.
+     */
+    private static final int MAXIMUM_LIVE_FRAMES_PER_PASS = 4;
+    /**
+     * Live passes at Fastest: one that owes two frames, one that owes three within the lag limit, and one beyond it.
+     */
+    private static final double TWO_FRAME_PASS_SECONDS = 0.100;
+    private static final double THREE_FRAME_PASS_SECONDS = 0.150;
+    private static final double LAGGING_PASS_SECONDS = 0.170;
+    private static final int TWO_FRAMES = 2;
+    private static final int THREE_FRAMES = 3;
+    /**
+     * A pass shorter than a Fastest frame.
+     */
+    private static final double SHORT_PASS_SECONDS = 0.010;
+    /**
+     * A live game drawn every 16 ms for a second, whose turns stop after frame 5 from 200 ms to 300 ms, shorter than the lag limit.
+     */
+    private static final int PASS_MILLISECONDS = 16;
+    private static final int RUN_MILLISECONDS = 1000;
+    private static final int WAIT_START_MILLISECONDS = 200;
+    private static final int WAIT_END_MILLISECONDS = 300;
+    private static final int FRAMES_BEFORE_WAIT = 5;
+    private static final double MILLISECONDS_PER_SECOND = 1000;
 
     @Test
     void parse_speed_should_accept_speeds_beyond_fastest_and_reject_unknown_values() {
@@ -121,20 +148,106 @@ final class ReplayPlaybackTest {
     }
 
     @Test
-    void take_live_due_frame_should_run_one_frame_a_pass_and_restart_the_schedule_only_beyond_the_lag_limit() {
+    void take_live_due_frames_should_run_owed_frames_in_one_pass_and_restart_the_schedule_only_beyond_the_lag_limit() {
         ReplayPlayback playback = new ReplayPlayback(ReplayPlayback.getNormalSpeedIndex());
-        int dueFrames = 0;
 
-        // A slow pass owes twenty short frames, far more than three of their durations: the passes after it run them one by one.
-        for (double elapsed = SLOW_PASS_SECONDS; playback.takeLiveDueFrame(elapsed, SHORT_LIVE_FRAME_DURATION, FASTEST_LAG_LIMIT) == 1; elapsed = 0) {
-            dueFrames++;
+        Assertions.assertEquals(TWO_FRAMES, playback.takeLiveDueFrames(TWO_FRAME_PASS_SECONDS, FASTEST_FRAME_DURATION, FASTEST_LAG_LIMIT));
+        // 16 ms are left over: 166 ms owe three frames, 124 ms behind, within the lag limit.
+        Assertions.assertEquals(THREE_FRAMES, playback.takeLiveDueFrames(THREE_FRAME_PASS_SECONDS, FASTEST_FRAME_DURATION, FASTEST_LAG_LIMIT));
+        // 40 ms are left over: 210 ms are 168 ms behind, beyond the lag limit; the schedule restarts with one frame due.
+        Assertions.assertEquals(1, playback.takeLiveDueFrames(LAGGING_PASS_SECONDS, FASTEST_FRAME_DURATION, FASTEST_LAG_LIMIT));
+        Assertions.assertEquals(0, playback.takeLiveDueFrames(0, FASTEST_FRAME_DURATION, FASTEST_LAG_LIMIT));
+    }
+
+    @Test
+    void take_live_due_frames_should_run_at_most_the_bound_per_pass_and_keep_the_rest_owed() {
+        ReplayPlayback playback = new ReplayPlayback(ReplayPlayback.getNormalSpeedIndex());
+        int frames = 0;
+        int passes = 0;
+
+        // A slow pass owes twenty short frames, within the lag limit of the speed setting: the passes after it run them four at a time.
+        for (double elapsed = SLOW_PASS_SECONDS; ; elapsed = 0) {
+            int dueFrames = playback.takeLiveDueFrames(elapsed, SHORT_LIVE_FRAME_DURATION, FASTEST_LAG_LIMIT);
+
+            if (dueFrames == 0) {
+                break;
+            }
+
+            Assertions.assertTrue(dueFrames <= MAXIMUM_LIVE_FRAMES_PER_PASS, "frames of one pass: " + dueFrames);
+
+            frames += dueFrames;
+            passes++;
         }
 
-        Assertions.assertTrue(dueFrames >= SLOW_PASS_FRAMES - 1 && dueFrames <= SLOW_PASS_FRAMES, "frames run after the slow pass: " + dueFrames);
+        Assertions.assertTrue(frames >= SLOW_PASS_FRAMES - 1 && frames <= SLOW_PASS_FRAMES, "frames run after the slow pass: " + frames);
+        Assertions.assertTrue(passes <= SLOW_PASS_FRAMES / MAXIMUM_LIVE_FRAMES_PER_PASS + 1, "passes: " + passes);
 
         // A pass beyond the lag limit restarts the schedule with one frame due.
-        Assertions.assertEquals(1, playback.takeLiveDueFrame(LATE_PASS_SECONDS, SHORT_LIVE_FRAME_DURATION, FASTEST_LAG_LIMIT));
-        Assertions.assertEquals(0, playback.takeLiveDueFrame(0, SHORT_LIVE_FRAME_DURATION, FASTEST_LAG_LIMIT));
+        Assertions.assertEquals(1, playback.takeLiveDueFrames(LATE_PASS_SECONDS, SHORT_LIVE_FRAME_DURATION, FASTEST_LAG_LIMIT));
+        Assertions.assertEquals(0, playback.takeLiveDueFrames(0, SHORT_LIVE_FRAME_DURATION, FASTEST_LAG_LIMIT));
+    }
+
+    @Test
+    void refund_live_frames_should_keep_the_owed_time_of_frames_that_did_not_run() {
+        ReplayPlayback playback = new ReplayPlayback(ReplayPlayback.getNormalSpeedIndex());
+
+        Assertions.assertEquals(1, playback.takeLiveDueFrames(FRAME_SECONDS, FASTEST_FRAME_DURATION, FASTEST_LAG_LIMIT));
+
+        // The frame waited for a turn: it is due again in the next pass, however short.
+        playback.refundLiveFrames(1);
+
+        Assertions.assertEquals(1, playback.takeLiveDueFrames(SHORT_PASS_SECONDS, FASTEST_FRAME_DURATION, FASTEST_LAG_LIMIT));
+        Assertions.assertEquals(0, playback.takeLiveDueFrames(SHORT_PASS_SECONDS, FASTEST_FRAME_DURATION, FASTEST_LAG_LIMIT));
+
+        // A wait beyond the lag limit restarts the schedule with one frame due.
+        playback.refundLiveFrames(1);
+
+        Assertions.assertEquals(1, playback.takeLiveDueFrames(LATE_PASS_SECONDS, FASTEST_FRAME_DURATION, FASTEST_LAG_LIMIT));
+    }
+
+    @Test
+    void live_pacing_catches_up_after_a_short_turn_wait_without_losing_frames() {
+        int[] waiting = this.runLivePasses(true);
+        int[] steady = this.runLivePasses(false);
+
+        Assertions.assertEquals(FRAMES_BEFORE_WAIT, waiting[1], "frames when the wait ends");
+        Assertions.assertTrue(waiting[2] >= TWO_FRAMES, "frames of the pass after the wait: " + waiting[2]);
+        Assertions.assertEquals(steady[0], waiting[0], "a wait shorter than the lag limit loses no frame");
+    }
+
+    /**
+     * Runs a second of live passes as the client does: each pass takes its due frames and runs those whose turn arrived, giving the time of the
+     * others back.
+     *
+     * @param wait whether the turns after frame {@link #FRAMES_BEFORE_WAIT} arrive only at {@link #WAIT_END_MILLISECONDS}
+     * @return the frames run in the second, the frames run before the wait ended, and the frames of the first pass after it
+     */
+    private int @NotNull [] runLivePasses(boolean wait) {
+        ReplayPlayback playback = new ReplayPlayback(ReplayPlayback.getNormalSpeedIndex());
+        int frames = 0;
+        int framesBeforeWaitEnd = 0;
+        int firstPassAfterWait = 0;
+
+        for (int now = PASS_MILLISECONDS; now <= RUN_MILLISECONDS; now += PASS_MILLISECONDS) {
+            boolean turnsHeld = wait && now >= WAIT_START_MILLISECONDS && now < WAIT_END_MILLISECONDS;
+            int dueFrames = playback.takeLiveDueFrames(PASS_MILLISECONDS / MILLISECONDS_PER_SECOND, FASTEST_FRAME_DURATION, FASTEST_LAG_LIMIT);
+            int ran = 0;
+
+            while (ran < dueFrames && (!turnsHeld || frames < FRAMES_BEFORE_WAIT)) {
+                frames++;
+                ran++;
+            }
+
+            playback.refundLiveFrames(dueFrames - ran);
+
+            if (now < WAIT_END_MILLISECONDS) {
+                framesBeforeWaitEnd = frames;
+            } else if (now - PASS_MILLISECONDS < WAIT_END_MILLISECONDS) {
+                firstPassAfterWait = ran;
+            }
+        }
+
+        return new int[]{frames, framesBeforeWaitEnd, firstPassAfterWait};
     }
 
     @Test

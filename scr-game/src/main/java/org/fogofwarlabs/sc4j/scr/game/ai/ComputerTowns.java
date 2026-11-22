@@ -14,6 +14,7 @@ import org.fogofwarlabs.sc4j.scr.game.resource.ResourceAreas;
 import org.fogofwarlabs.sc4j.scr.game.sprite.Sprite;
 import org.fogofwarlabs.sc4j.scr.game.state.Game;
 import org.fogofwarlabs.sc4j.scr.game.terrain.RegionPathSearch;
+import org.fogofwarlabs.sc4j.scr.game.terrain.TerrainRegionLookupUtils;
 import org.fogofwarlabs.sc4j.scr.game.trigger.TriggerContext;
 import org.fogofwarlabs.sc4j.scr.game.unit.Unit;
 import org.fogofwarlabs.sc4j.scr.game.unit.UnitPool;
@@ -1221,18 +1222,20 @@ public final class ComputerTowns {
         if (Integer.compareUnsigned(second, first) < 0) {
             Unit swap = gas[GAS_FIRST];
 
-            gas[GAS_FIRST] = gas[GAS_SECOND];
+            gas[GAS_FIRST]  = gas[GAS_SECOND];
             gas[GAS_SECOND] = swap;
-                              nearest = second;
-                              second = first;
+
+            nearest = second;
+            second  = first;
         }
 
         if (Integer.compareUnsigned(third, second) < 0) {
             Unit swap = gas[GAS_SECOND];
 
             gas[GAS_SECOND] = gas[GAS_THIRD];
-            gas[GAS_THIRD] = swap;
-                             second = third;
+            gas[GAS_THIRD]  = swap;
+
+            second = third;
         }
 
         if (Integer.compareUnsigned(second, nearest) < 0) {
@@ -1366,7 +1369,8 @@ public final class ComputerTowns {
     /**
      * Scores one expansion area in a category: an area reached by a safe ground route whose intermediate regions are
      * quiet (required only with transports) competes by path tiles; with transports any other area competes by
-     * straight distance.
+     * straight distance. A position outside the tile grid ({@link TerrainRegionLookupUtils#isInTileGrid}) has no
+     * ground route.
      */
     private void scoreExpansionArea(@NotNull ComputerPlayerPhase phase,
                                     @NotNull ResourceAreas areas,
@@ -1381,16 +1385,21 @@ public final class ComputerTowns {
         int sourceY = (short) areas.getVerticalPosition(source);
         int targetX = (short) areas.getHorizontalPosition(area);
         int targetY = (short) areas.getVerticalPosition(area);
-        int sourceRegion = this.game.getComputerTerrain().getRegion((short) sourceX, (short) sourceY);
-        int targetRegion = this.game.getComputerTerrain().getRegion((short) targetX, (short) targetY);
-        boolean safe = phase.getMilitary().isRouteSafe(phase, owner, sourceRegion, targetRegion);
+        boolean safe = false;
+
+        if (TerrainRegionLookupUtils.isInTileGrid(sourceX, sourceY) && TerrainRegionLookupUtils.isInTileGrid(targetX, targetY)) {
+            int sourceRegion = this.game.getComputerTerrain().getRegion((short) sourceX, (short) sourceY);
+            int targetRegion = this.game.getComputerTerrain().getRegion((short) targetX, (short) targetY);
+
+            safe = phase.getMilitary().isRouteSafe(phase, owner, sourceRegion, targetRegion);
+
+            if (safe && !phase.getRegions().isRouteQuiet(owner, sourceRegion, targetRegion) && transports) {
+                safe = false;
+            }
+        }
 
         if (!safe && !transports) {
             return;
-        }
-
-        if (safe && !phase.getRegions().isRouteQuiet(owner, sourceRegion, targetRegion) && transports) {
-            safe = false;
         }
 
         if (!safe) {

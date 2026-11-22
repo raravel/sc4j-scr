@@ -256,6 +256,32 @@ public final class TerrainRegionLookupUtils {
     }
 
     /**
+     * Tests whether the tile index that {@link #lookup} computes for a pixel position selects an entry of the fixed {@code 256}-column tile grid.
+     * A position left of the grid or right of it in a row inside the grid selects a tile of a neighboring row.
+     *
+     * @param positionX the original horizontal pixel DWORD
+     * @param positionY the original vertical pixel DWORD
+     * @return {@code true} if the tile index lies in the grid, {@code false} otherwise
+     */
+    public static boolean isInTileGrid(int positionX, int positionY) {
+        long tileIndex = getTileIndex(positionX, positionY);
+
+        return tileIndex >= 0 && tileIndex < TerrainRegions.TILE_COUNT;
+    }
+
+    /**
+     * Computes the row-major tile index of a pixel position in the fixed {@code 256}-column tile grid, each coordinate divided with truncation toward
+     * zero and neither bounded.
+     *
+     * @param positionX the original horizontal pixel DWORD
+     * @param positionY the original vertical pixel DWORD
+     * @return the tile index
+     */
+    private static long getTileIndex(int positionX, int positionY) {
+        return (long) (positionY / TerrainTileset.TILE_SIZE) * TerrainRegions.GRID_WIDTH + positionX / TerrainTileset.TILE_SIZE;
+    }
+
+    /**
      * Looks up the region of a pixel position against the original fixed {@code 256}-column tile grid; a split tile selects its region by the
      * mini-tile mask.
      *
@@ -265,8 +291,7 @@ public final class TerrainRegionLookupUtils {
      * @return the unsigned region WORD
      */
     public static int lookup(@NotNull TerrainRegions regions, int positionX, int positionY) {
-        long tileIndex = (long) (positionY / TerrainTileset.TILE_SIZE) * TerrainRegions.GRID_WIDTH + positionX / TerrainTileset.TILE_SIZE;
-        int region = regions.getTileRegion(tileIndex);
+        int region = regions.getTileRegion(getTileIndex(positionX, positionY));
 
         if (region < TerrainRegions.PARTIAL_REGION_BASE) {
             return region;

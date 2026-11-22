@@ -1,6 +1,5 @@
 package org.fogofwarlabs.sc4j.scr.client.glue.lobby;
 
-import org.fogofwarlabs.sc4j.engine.client.community.RecordingCommunitySession;
 import org.fogofwarlabs.sc4j.engine.client.host.NoTextInputMethod;
 import org.fogofwarlabs.sc4j.engine.client.host.TextCompositionListener;
 import org.fogofwarlabs.sc4j.engine.client.host.TextInputMethod;
@@ -8,6 +7,7 @@ import org.fogofwarlabs.sc4j.engine.client.input.InputEvent;
 import org.fogofwarlabs.sc4j.engine.client.input.Key;
 import org.fogofwarlabs.sc4j.engine.net.beaconlink.community.ChatChannel;
 import org.fogofwarlabs.sc4j.engine.net.beaconlink.community.PlayerStatus;
+import org.fogofwarlabs.sc4j.engine.net.beaconlink.community.RecordingCommunitySession;
 import org.fogofwarlabs.sc4j.scr.client.glue.GlueCanvas;
 import org.fogofwarlabs.sc4j.scr.client.glue.GlueNavigator;
 import org.fogofwarlabs.sc4j.scr.client.ui.dialog.InputMethod;
@@ -28,7 +28,7 @@ import java.util.Locale;
 /**
  * Checks the keyboard focus and the window's text input over the Beacon.Link screens on a hidden context: the text input stays on from the
  * chat page to the game creation and the room list (each opens before the left one closes), and a click on the chat input of either gives
- * it the keys, so a typed line is said in the channel; back on the chat page a said line shows in its log.
+ * it the keys, so a typed line is said in the channel.
  */
 @RequiresInstallation
 final class BeaconLinkFocusTest {
@@ -44,12 +44,6 @@ final class BeaconLinkFocusTest {
      */
     private static final float CHAT_INPUT_X = 190;
     private static final float CHAT_INPUT_Y = 461;
-    /**
-     * The frames written to {@code build/glue-screenshots} (not compared), before the size and locale: the game creation with a line typed
-     * into the clicked chat input, and the chat page with the line said after the visit.
-     */
-    private static final @NotNull String CREATE_FRAME = "focus-create-";
-    private static final @NotNull String CHAT_FRAME = "focus-chat-";
 
     /**
      * Records whether text input is on; it has no composition.
@@ -139,7 +133,6 @@ final class BeaconLinkFocusTest {
             textInput.add("game creation " + method.isEnabled());
             scenario.click(CHAT_INPUT_X, CHAT_INPUT_Y);
             scenario.type("hello");
-            scenario.capture(CREATE_FRAME + frame);
             scenario.press(Key.ENTER);
 
             List<String> saidOnCreate = List.copyOf(getSaid(community));
@@ -152,12 +145,10 @@ final class BeaconLinkFocusTest {
 
             List<String> saidOnRooms = List.copyOf(getSaid(community));
 
-            // Back on the chat page, its log shows the line said there at once.
             scenario.show(GlueNavigator.Destination.CHANNEL_CHAT);
             textInput.add("chat page " + method.isEnabled());
             scenario.type("back");
             scenario.press(Key.ENTER);
-            scenario.capture(CHAT_FRAME + frame);
 
             Assertions.assertEquals(List.of("chat page true", "game creation true", "room list true", "chat page true"), textInput, frame);
             Assertions.assertEquals(List.of("hello"), saidOnCreate, frame);

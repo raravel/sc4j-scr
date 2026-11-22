@@ -5,6 +5,7 @@ import org.fogofwarlabs.sc4j.scr.content.ScrOrderIds;
 import org.fogofwarlabs.sc4j.scr.content.ScrUnitIds;
 import org.fogofwarlabs.sc4j.scr.data.type.ScrUnitTypeView;
 import org.fogofwarlabs.sc4j.scr.data.type.constant.UnitGroupFlags;
+import org.fogofwarlabs.sc4j.scr.game.extension.ScrSimulationPlugins;
 import org.fogofwarlabs.sc4j.scr.game.order.ScrOrderSystem;
 import org.fogofwarlabs.sc4j.scr.game.order.UnitOrderEligibility;
 import org.fogofwarlabs.sc4j.scr.game.player.Player;
@@ -182,6 +183,12 @@ public final class UnitTraining {
             }
 
             this.game.getComputerUnits().notifyCompleted(producer, worker, instructionLimit);
+
+            ScrSimulationPlugins simulation = this.game.getSimulationPlugins();
+
+            if (simulation != null) {
+                simulation.reportUnitTrained(worker, producer);
+            }
 
             // A completed Nuclear Missile hides inside its Silo.
             if (this.game.getBaseType(worker) == ScrUnitIds.TERRAN_NUCLEAR_MISSILE) {

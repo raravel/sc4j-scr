@@ -19,6 +19,9 @@ dependencies {
     testImplementation project(':sc-recorder')
 }
 
+// The service files of the tests (src/test/services), outside the test resources folder that other builds use.
+sourceSets.test.resources.srcDir 'src/test/services'
+
 tasks.withType(Test).configureEach {
     maxHeapSize = '2g'
 }

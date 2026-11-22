@@ -10,11 +10,13 @@ import org.fogofwarlabs.sc4j.scr.game.player.PlayerTable;
 import org.fogofwarlabs.sc4j.scr.game.player.PlayerTypes;
 import org.fogofwarlabs.sc4j.scr.game.save.SaveGameKind;
 import org.fogofwarlabs.sc4j.scr.game.save.ScrSaveFormat;
+import org.fogofwarlabs.sc4j.scr.game.session.LiveGame;
 import org.fogofwarlabs.sc4j.scr.game.session.setup.MeleeGameSetup;
 import org.fogofwarlabs.sc4j.scr.game.trigger.ScrTriggerSystem;
 import org.fogofwarlabs.sc4j.scr.net.discovery.LanDiscovery;
 import org.fogofwarlabs.sc4j.scr.net.discovery.LanGameInformation;
 import org.fogofwarlabs.sc4j.scr.net.discovery.LanPresenceInformation;
+import org.fogofwarlabs.sc4j.scr.net.extension.ScrNetworkExtensionUtils;
 import org.fogofwarlabs.sc4j.scr.net.provider.ProviderPeer;
 import org.fogofwarlabs.sc4j.scr.net.provider.ProviderSession;
 import org.fogofwarlabs.sc4j.scr.net.proxy.GameProxySocket;
@@ -22,6 +24,7 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
@@ -64,6 +67,14 @@ public final class LanClient implements AutoCloseable {
      * The network turn rate of a hosted game unless the host chooses another ({@link #setTurnRate}).
      */
     public static final int DEFAULT_TURN_RATE = 24;
+    /**
+     * The turn rate choice of the dynamic turn rate ({@link #setTurnRate}), which the create game page lists first.
+     */
+    public static final int DYNAMIC_TURN_RATE = 0;
+    /**
+     * Game flags bit {@code 5}: the dynamic turn rate.
+     */
+    public static final int DYNAMIC_TURN_RATE_FLAG = LiveGame.DYNAMIC_TURN_RATE_FLAG;
 
     private static final @NotNull Logger LOGGER = Logger.of(LanClient.class);
 
@@ -501,17 +512,33 @@ public final class LanClient implements AutoCloseable {
 
     /**
      * Sets the network turn rate of the next hosted game ({@code net_turn_rate}): its advertisement and its lobby carry it, every player's game
-     * takes it for its lockstep turns.
+     * takes it for its lockstep turns. {@link #DYNAMIC_TURN_RATE} hosts the provider's default turns per second
+     * ({@link ProviderSession#DEFAULT_TURNS_PER_SECOND}) and adds {@link #DYNAMIC_TURN_RATE_FLAG} to the advertised game flags.
      *
-     * @param turnRate the turns per second, one of {@link #TURN_RATES}
-     * @throws IllegalArgumentException if the turn rate is not one of {@link #TURN_RATES}
+     * @param turnRate the turns per second, one of {@link #TURN_RATES}, or {@link #DYNAMIC_TURN_RATE}
+     * @throws IllegalArgumentException if the turn rate is neither one of {@link #TURN_RATES} nor {@link #DYNAMIC_TURN_RATE}
      */
     public void setTurnRate(int turnRate) {
-        if (Arrays.stream(TURN_RATES).noneMatch(rate -> rate == turnRate)) {
+        if (turnRate != DYNAMIC_TURN_RATE && Arrays.stream(TURN_RATES).noneMatch(rate -> rate == turnRate)) {
             throw Exceptions.newIllegalArgumentException("The turn rate {0} is not one of {1}.", turnRate, Arrays.toString(TURN_RATES));
         }
 
         this.turnRate = turnRate;
+    }
+
+    /**
+     * @return the turns per second a hosted game advertises: the chosen turn rate, or the provider's default for {@link #DYNAMIC_TURN_RATE}
+     */
+    private int getHostedTurnRate() {
+        return this.turnRate == DYNAMIC_TURN_RATE ? ProviderSession.DEFAULT_TURNS_PER_SECOND : this.turnRate;
+    }
+
+    /**
+     * @param flags the game flags of a hosted game
+     * @return the flags with {@link #DYNAMIC_TURN_RATE_FLAG} when the chosen turn rate is {@link #DYNAMIC_TURN_RATE}
+     */
+    private int addTurnRateFlag(int flags) {
+        return this.turnRate == DYNAMIC_TURN_RATE ? flags | DYNAMIC_TURN_RATE_FLAG : flags;
     }
 
     /**
@@ -693,12 +720,12 @@ public final class LanClient implements AutoCloseable {
                                                              1, slots,
                                                              speed, LanGameStatistics.HOST_MAP_STATUS,
                                                              options.getTypeId(), options.getSubTypeId(),
-                                                             this.turnRate, scenario.getTileset(), false,
+                                                             this.getHostedTurnRate(), scenario.getTileset(), false,
                                                              this.playerName, map.getName(),
                                                              0, PlayerTable.OBSERVER_SLOTS, 0);
 
         // EUD maps advertise both original unit limits and the EUD flag.
-        int flags = this.gameFlags;
+        int flags = this.addTurnRateFlag(this.gameFlags);
 
         if (hasEudTriggers(scenario)) {
             flags |= ORIGINAL_LIMITS_FLAG | EUD_MAP_FLAG;
@@ -723,7 +750,8 @@ public final class LanClient implements AutoCloseable {
         // The lobby counts its slots, and the advertisement follows them.
         this.lobby = new LanLobby(created, LanClient::getCurrentTick, setup, this.playerName, new byte[LanLobby.PLAYER_BLOCK_SIZE]);
         this.lobby.setMapFolders(this.mapFolders);
-        this.lobby.setTurnRate(this.turnRate);
+        this.lobby.setMapDownloader(ScrNetworkExtensionUtils.createMapDownloader(this, this.lobby));
+        this.lobby.setTurnRate(this.getHostedTurnRate());
         this.lobby.shareMap(map.getPath());
         this.advertise();
 
@@ -772,10 +800,10 @@ public final class LanClient implements AutoCloseable {
                                                              1, slots,
                                                              setup.getSpeed(), LanGameStatistics.HOST_MAP_STATUS,
                                                              options.getTypeId(), options.getSubTypeId(),
-                                                             this.turnRate, scenario.getTileset(), false,
+                                                             this.getHostedTurnRate(), scenario.getTileset(), false,
                                                              this.playerName, setup.getScenarioName(),
                                                              0, PlayerTable.OBSERVER_SLOTS, 0);
-        int flags = this.gameFlags | (setup.isClassicLimits() ? ORIGINAL_LIMITS_FLAG : 0);
+        int flags = this.addTurnRateFlag(this.gameFlags | (setup.isClassicLimits() ? ORIGINAL_LIMITS_FLAG : 0));
 
         created.createGame(gameName, statistics.encode(), "", slots, PlayerTable.OBSERVER_SLOTS, 0, 0, options.encode(), this.playerName, "");
 
@@ -793,7 +821,8 @@ public final class LanClient implements AutoCloseable {
         // The lobby counts its slots, and the advertisement follows them.
         this.lobby = new LanLobby(created, LanClient::getCurrentTick, lobbySetup, this.playerName, new byte[LanLobby.PLAYER_BLOCK_SIZE]);
         this.lobby.setMapFolders(this.mapFolders);
-        this.lobby.setTurnRate(this.turnRate);
+        this.lobby.setMapDownloader(ScrNetworkExtensionUtils.createMapDownloader(this, this.lobby));
+        this.lobby.setTurnRate(this.getHostedTurnRate());
         this.advertise();
 
         this.state = State.LOBBY;
@@ -905,6 +934,7 @@ public final class LanClient implements AutoCloseable {
                 }
 
                 this.lobby.setMapFolders(this.mapFolders);
+                this.lobby.setMapDownloader(ScrNetworkExtensionUtils.createMapDownloader(this, this.lobby));
 
                 LanGameInformation joined = this.getGameInformation();
 
@@ -975,7 +1005,8 @@ public final class LanClient implements AutoCloseable {
 
     /**
      * Reads the game socket into the session and updates it: the network pump of the lobby and of the game's turn
-     * stream.
+     * stream. A player whose connection the network saw end is dropped from the lobby at once, unless the player's leave arrived
+     * first.
      */
     public synchronized void pump() {
         this.network.update();
@@ -992,6 +1023,10 @@ public final class LanClient implements AutoCloseable {
             current.receive(source, packet);
         });
         current.update();
+
+        for (InetSocketAddress departed = this.network.pollDeparture(); departed != null; departed = this.network.pollDeparture()) {
+            this.dropDeparted(current, departed);
+        }
     }
 
     /**
@@ -1151,6 +1186,32 @@ public final class LanClient implements AutoCloseable {
     }
 
     /**
+     * Drops the lobby's player at an address whose connection the network saw end ({@link ProviderSession#dropPlayer}), unless the player
+     * left already: the lobby frees the player's slot at its next step instead of after its timeout. The game's turn transport handles a
+     * missing player on its own.
+     *
+     * @param current the session
+     * @param address the player's address in the game
+     */
+    private void dropDeparted(@NotNull ProviderSession current, @NotNull InetSocketAddress address) {
+        LanLobby currentLobby = this.lobby;
+
+        if (currentLobby == null || currentLobby.getState() == LanLobby.STATE_GAME) {
+            return;
+        }
+
+        for (ProviderPeer peer : current.getPeers()) {
+            if (address.equals(peer.getAddress()) && peer.getIdentifier() != ProviderPeer.UNKNOWN_IDENTIFIER &&
+                (peer.getFlags() & ProviderPeer.FLAG_DEPARTED) == 0) {
+                LOGGER.info("LAN LOBBY DROP: player " + peer.getIdentifier() + " at " + address + " lost its connection");
+                current.dropPlayer(peer.getIdentifier(), LanLobby.DROP_REASON);
+
+                return;
+            }
+        }
+    }
+
+    /**
      * Creates a {@link ProviderSession} instance that sends through the game socket and counts the sent packets.
      *
      * @param gameSocket the game socket
@@ -1182,6 +1243,12 @@ public final class LanClient implements AutoCloseable {
 
 
     private void closeSession() {
+        LanLobby current = this.lobby;
+
+        if (current != null) {
+            current.closeMapDownloader();
+        }
+
         LanGameAdvertisement hosted = this.advertisement;
         LanGameInformation game = hosted == null ? null : hosted.getGameInformation();
 

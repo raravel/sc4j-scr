@@ -10,6 +10,7 @@ import org.fogofwarlabs.sc4j.scr.game.session.LiveGame;
 import org.fogofwarlabs.sc4j.scr.game.session.setup.MeleeGameSetup;
 import org.fogofwarlabs.sc4j.scr.net.discovery.LanDiscovery;
 import org.fogofwarlabs.sc4j.scr.net.discovery.LanGameInformation;
+import org.fogofwarlabs.sc4j.scr.net.provider.ProviderSession;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Assumptions;
@@ -55,6 +56,7 @@ final class LanClientLiveTest {
 
     private static final int ORIGINAL_LIMITS_FLAG = 4;
     private static final int EUD_MAP_FLAG = 0x10;
+    private static final int DYNAMIC_TURN_RATE_FLAG = 0x20;
 
     private static final int CLOSED_TYPE = 8;
     /**
@@ -216,6 +218,40 @@ final class LanClientLiveTest {
                                                             LanGameOptions.MELEE, GameSpeed.FASTEST, port));
 
             Assertions.assertEquals(0, host.getGameFlags());
+        }
+    }
+
+    /**
+     * Checks that a host choosing the dynamic turn rate advertises the provider's default turn rate and the dynamic turn rate flag, which a
+     * joiner reads back from the advertised record.
+     */
+    @Test
+    void dynamic_turn_rate_advertises_the_default_rate_and_its_flag() throws Exception {
+        Path mapPath = ExternalInput.INSTALLATION.resolveFile(ExternalInput.MAPS_FOLDER, MELEE_MAP);
+
+        ChkFile map = ChkFile.parseTolerant(MpqArchive.open(mapPath).readFile(SCENARIO));
+
+        try (LanClient host = LanClient.open("hostplayer", NO_MAP_FOLDERS)) {
+            host.setTurnRate(LanClient.DYNAMIC_TURN_RATE);
+
+            LanTestPortUtils.bindFreePort(port -> host.host(GAME_NAME, LanClient.HostedMap.read(mapPath, map, "Bottleneck"),
+                                                            LanGameOptions.MELEE, GameSpeed.FASTEST, port));
+
+            LanGameInformation hosted = host.getGameInformation();
+            LanLobby lobby = host.getLobby();
+
+            Assertions.assertNotNull(hosted);
+            Assertions.assertNotNull(lobby);
+            Assertions.assertEquals(DYNAMIC_TURN_RATE_FLAG, host.getGameFlags());
+            Assertions.assertEquals(LiveGame.DYNAMIC_TURN_RATE_FLAG, LanClient.DYNAMIC_TURN_RATE_FLAG);
+            Assertions.assertEquals(ProviderSession.DEFAULT_TURNS_PER_SECOND, hosted.getNetworkTurnRate());
+            Assertions.assertEquals(ProviderSession.DEFAULT_TURNS_PER_SECOND, lobby.getTurnRate());
+
+            LanGameInformation joined = LanGameInformation.of(hosted.toRecord(1L));
+
+            Assertions.assertNotNull(joined);
+            Assertions.assertEquals(DYNAMIC_TURN_RATE_FLAG, joined.getFlags(), "a joiner reads the flag from the advertised record");
+            Assertions.assertEquals(ProviderSession.DEFAULT_TURNS_PER_SECOND, joined.getNetworkTurnRate());
         }
     }
 

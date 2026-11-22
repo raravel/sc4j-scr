@@ -13,8 +13,8 @@ import java.util.Arrays;
 import java.util.HexFormat;
 
 /**
- * Checks fresh-map region construction against complete diagnostic storage, the index checks before mutation, and the signed centers and unsigned
- * identifiers that captured region fields read back as.
+ * Checks fresh-map region construction against complete diagnostic storage, the index checks before mutation, the component test of positions
+ * outside the tile grid, and the signed centers and unsigned identifiers that captured region fields read back as.
  */
 final class TerrainRegionsTest {
     private static final int MINIATURES_PER_TILE = 16;
@@ -34,6 +34,14 @@ final class TerrainRegionsTest {
     private static final int CASE_REGION_COUNT = 4;
     private static final int CASE_REGION = 3;
     private static final int CASE_NEIGHBOR_COUNT = 2;
+
+    /**
+     * The pixel extent of the tile grid, its last pixel, a pixel one tile left of the grid and a position WORD far outside the grid.
+     */
+    private static final int GRID_PIXEL_EXTENT = TerrainRegions.GRID_WIDTH * TerrainTileset.TILE_SIZE;
+    private static final int GRID_CORNER_PIXEL = GRID_PIXEL_EXTENT - 1;
+    private static final int OFF_MAP_PIXEL = -TerrainTileset.TILE_SIZE;
+    private static final int FAR_PIXEL = 50000;
 
     @RequiresInstallation
     @Test
@@ -112,6 +120,21 @@ final class TerrainRegionsTest {
         Assertions.assertThrows(IndexOutOfBoundsException.class, () -> regions.setPartialTile(TerrainRegionCheck.PARTIAL_COUNT, 1, 2, 3));
         Assertions.assertThrows(IndexOutOfBoundsException.class, () -> regions.getPartialFirstRegion(TerrainRegionCheck.PARTIAL_REGION_BASE - 1));
         Assertions.assertEquals(original, regions.computeStateHash(STATE_HASH_SEED));
+    }
+
+    @Test
+    void positions_outside_the_tile_grid_share_no_component() {
+        TerrainRegions regions = TerrainRegionCheck.create().getRegions();
+
+        Assertions.assertTrue(TerrainRegionLookupUtils.isInTileGrid(OFF_MAP_PIXEL, GRID_CORNER_PIXEL));
+        Assertions.assertFalse(TerrainRegionLookupUtils.isInTileGrid(OFF_MAP_PIXEL, 0));
+        Assertions.assertFalse(TerrainRegionLookupUtils.isInTileGrid(FAR_PIXEL, FAR_PIXEL));
+        Assertions.assertFalse(TerrainRegionLookupUtils.isInTileGrid((short) FAR_PIXEL, (short) FAR_PIXEL));
+        Assertions.assertTrue(regions.sharesComponent(OFF_MAP_PIXEL, GRID_CORNER_PIXEL, GRID_CORNER_PIXEL, GRID_CORNER_PIXEL));
+        Assertions.assertFalse(regions.sharesComponent(GRID_CORNER_PIXEL, GRID_CORNER_PIXEL, FAR_PIXEL, FAR_PIXEL));
+        Assertions.assertFalse(regions.sharesComponent(GRID_CORNER_PIXEL, GRID_CORNER_PIXEL, (short) FAR_PIXEL, (short) FAR_PIXEL));
+        Assertions.assertFalse(regions.sharesComponent(GRID_CORNER_PIXEL, GRID_PIXEL_EXTENT, GRID_CORNER_PIXEL, GRID_CORNER_PIXEL));
+        Assertions.assertFalse(regions.sharesComponent(OFF_MAP_PIXEL, 0, GRID_CORNER_PIXEL, GRID_CORNER_PIXEL));
     }
 
     @Test

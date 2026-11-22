@@ -72,6 +72,10 @@ public final class ChatPrompt {
      */
     enum Route {
         /**
+         * A Beacon.Link community command ({@link GameCommunityChat#isCommand}): run by the channel chat.
+         */
+        COMMUNITY,
+        /**
          * A client command: run locally, never sent.
          */
         COMMAND,
@@ -124,13 +128,19 @@ public final class ChatPrompt {
     }
 
     /**
-     * Chooses the route of a typed line. A {@code /} line is always a local command.
+     * Chooses the route of a typed line. A community command goes to the channel chat while the game has one; any other {@code /} line is a local
+     * command.
      *
-     * @param line the typed line
-     * @param live whether a live game runs
+     * @param line      the typed line
+     * @param live      whether a live game runs
+     * @param community whether the game has the Beacon.Link community ({@link ClientSession#hasCommunityChat})
      * @return the line's route
      */
-    static @NotNull Route route(@NotNull String line, boolean live) {
+    static @NotNull Route route(@NotNull String line, boolean live, boolean community) {
+        if (community && GameCommunityChat.isCommand(line)) {
+            return Route.COMMUNITY;
+        }
+
         if (ConsoleCommandRegistry.isCommand(line)) {
             return Route.COMMAND;
         }

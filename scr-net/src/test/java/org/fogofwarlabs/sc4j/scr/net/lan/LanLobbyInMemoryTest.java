@@ -35,10 +35,7 @@ import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayDeque;
-import java.util.Arrays;
-import java.util.HexFormat;
-import java.util.List;
+import java.util.*;
 
 /**
  * Verifies the {@link LanLobby} of a host and its joiners connected in memory: the color request {@code 0x67}, the
@@ -712,6 +709,24 @@ final class LanLobbyInMemoryTest {
     }
 
     /**
+     * Takes a lobby's notices and describes those of players that left or were dropped.
+     *
+     * @param lobby the lobby
+     * @return the kind and the name of each departure notice, in order
+     */
+    private static @NotNull List<String> pollDepartureNotices(@NotNull LanLobby lobby) {
+        List<String> departures = new ArrayList<>();
+
+        for (LanLobby.Notice notice = lobby.pollNotice(); notice != null; notice = lobby.pollNotice()) {
+            if (notice.getKind() != LanLobby.Notice.JOINED) {
+                departures.add(notice.getKind() + " " + notice.getName());
+            }
+        }
+
+        return departures;
+    }
+
+    /**
      * Joins two players to the melee saved game of {@link #createSavedMeleeSetup()} one after the other and checks on every
      * client that the first takes slot {@code 1} and the second slot {@code 2}, each with its own saved lobby race.
      *
@@ -969,11 +984,70 @@ final class LanLobbyInMemoryTest {
 
         Assertions.assertTrue(network.host.isTimedOut());
         Assertions.assertFalse(network.host.hasLeft(), "one responsive and one stalled player: the stalled one is dropped");
+        Assertions.assertEquals(List.of(LanLobby.Notice.DROPPED + " joiner"), pollDepartureNotices(network.host), "the drop names the joiner");
 
         // The departure reached its turn: the slot returns to the template's open slot, race and force kept.
         Assertions.assertEquals(NO_PLAYER, network.host.getRecord(JOINER_SLOT).getPlayerId());
         Assertions.assertEquals(OPEN_TYPE, network.host.getRecord(JOINER_SLOT).getType());
         Assertions.assertEquals(SECOND_FORCE, network.host.getRecord(JOINER_SLOT).getTeam());
+    }
+
+    /**
+     * Checks that the host and the other joiner name a joiner that left in a left notice.
+     */
+    @Test
+    void every_other_client_names_a_joiner_that_left() {
+        InMemoryLanScenario network = new InMemoryLanScenario(THREE_CLIENTS);
+
+        network.host(createMeleeSetup(), LanGameOptions.MELEE.encode(), null);
+        network.join(JOINER_CLIENT, null, null);
+        network.join(SECOND_JOINER_CLIENT, null, null);
+        network.run(SETTLE_MILLISECONDS);
+
+        LanLobby host = requireLobby(network, HOST_CLIENT);
+        LanLobby secondJoiner = requireLobby(network, SECOND_JOINER_CLIENT);
+
+        for (LanLobby lobby : new LanLobby[]{host, secondJoiner}) {
+            Assertions.assertEquals(List.of(), pollDepartureNotices(lobby), "no departure before the leave");
+        }
+
+        network.leave(JOINER_CLIENT);
+
+        for (LanLobby lobby : new LanLobby[]{host, secondJoiner}) {
+            Assertions.assertEquals(List.of(LanLobby.Notice.LEFT + " " + FIRST_JOINER_NAME), pollDepartureNotices(lobby));
+        }
+    }
+
+    /**
+     * Checks that the host and the other joiner name a joiner that the host dropped at once, as for a player whose connection ended, in a
+     * dropped notice.
+     */
+    @Test
+    void every_other_client_names_a_joiner_the_host_dropped() {
+        InMemoryLanScenario network = new InMemoryLanScenario(THREE_CLIENTS);
+
+        network.host(createMeleeSetup(), LanGameOptions.MELEE.encode(), null);
+        network.join(JOINER_CLIENT, null, null);
+        network.join(SECOND_JOINER_CLIENT, null, null);
+        network.run(SETTLE_MILLISECONDS);
+
+        LanLobby host = requireLobby(network, HOST_CLIENT);
+        LanLobby secondJoiner = requireLobby(network, SECOND_JOINER_CLIENT);
+
+        for (LanLobby lobby : new LanLobby[]{host, secondJoiner}) {
+            Assertions.assertEquals(List.of(), pollDepartureNotices(lobby), "no departure before the drop");
+        }
+
+        network.silence(JOINER_CLIENT);
+
+        Assertions.assertTrue(network.sessions[HOST_CLIENT].dropPlayer(JOINER_PLAYER, LanLobby.DROP_REASON));
+
+        network.run(SETTLE_MILLISECONDS);
+
+        for (LanLobby lobby : new LanLobby[]{host, secondJoiner}) {
+            Assertions.assertEquals(List.of(LanLobby.Notice.DROPPED + " " + FIRST_JOINER_NAME), pollDepartureNotices(lobby));
+            Assertions.assertEquals(NO_SLOT, lobby.getPlayerSlot(JOINER_PLAYER));
+        }
     }
 
     @Test

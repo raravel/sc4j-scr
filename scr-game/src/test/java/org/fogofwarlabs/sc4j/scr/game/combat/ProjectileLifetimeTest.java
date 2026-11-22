@@ -5,6 +5,8 @@ import org.fogofwarlabs.sc4j.scr.content.ScrWeaponIds;
 import org.fogofwarlabs.sc4j.scr.core.LcgRandom;
 import org.fogofwarlabs.sc4j.scr.core.test.ExternalInput;
 import org.fogofwarlabs.sc4j.scr.core.test.RequiresInstallation;
+import org.fogofwarlabs.sc4j.scr.data.format.iscript.IscriptFile;
+import org.fogofwarlabs.sc4j.scr.data.format.iscript.IscriptInstruction;
 import org.fogofwarlabs.sc4j.scr.data.format.replay.ReplayLimits;
 import org.fogofwarlabs.sc4j.scr.game.frame.GameFrame;
 import org.fogofwarlabs.sc4j.scr.game.frame.UnitPhase;
@@ -29,7 +31,8 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 
 /**
- * Checks mining projectile signals, recycling and the creation limits: a full bullet pool and the Halo Rockets limit.
+ * Checks mining projectile signals, recycling, a bullet whose image ends before its order signal, and the creation limits: a full bullet pool and
+ * the Halo Rockets limit.
  */
 @RequiresInstallation
 final class ProjectileLifetimeTest {
@@ -96,6 +99,26 @@ final class ProjectileLifetimeTest {
      */
     private static final int DYING_ORDER_STATE = 5;
     /**
+     * The order state of a bullet waiting for its order signal.
+     */
+    private static final int INIT_ORDER_STATE = 0;
+    /**
+     * The {@code iscript.bin} entry whose Init animation shows a frame, waits two frames and ends without an order signal.
+     */
+    private static final int SELF_ENDING_ISCRIPT = 250;
+    /**
+     * The {@code iscript.bin} animation index of Init.
+     */
+    private static final int INIT_ANIMATION = 0;
+    /**
+     * The instructions of an Init animation read before the test gives up looking for its end.
+     */
+    private static final int MAXIMUM_INIT_INSTRUCTIONS = 16;
+    /**
+     * The frames a bullet whose image ended is updated.
+     */
+    private static final int SPRITELESS_UPDATE_FRAMES = 10;
+    /**
      * The mask of a heading.
      */
     private static final int HEADING_MASK = 255;
@@ -153,6 +176,24 @@ final class ProjectileLifetimeTest {
         unit.setSprite(new Sprite(1));
 
         return unit;
+    }
+
+    private static void assertEndsWithoutOrderSignal(@NotNull IscriptFile iscript, int scriptIdentifier) throws IOException {
+        int offset = iscript.getAnimationOffset(scriptIdentifier, INIT_ANIMATION);
+
+        for (int count = 0; count < MAXIMUM_INIT_INSTRUCTIONS; count++) {
+            IscriptInstruction instruction = iscript.decodeInstruction(offset);
+
+            Assertions.assertNotEquals("sigorder", instruction.getName());
+
+            if (instruction.getName().equals("end")) {
+                return;
+            }
+
+            offset += iscript.getInstructionSize(offset);
+        }
+
+        Assertions.fail("The Init animation has no end.");
     }
 
     private static @Nullable ProjectilePhase.Bullet createHaloRockets(int capacity, int activeCount) throws IOException {
@@ -224,6 +265,39 @@ final class ProjectileLifetimeTest {
         Assertions.assertNotNull(following);
         Assertions.assertEquals((HEADING_SUM_FACTOR * worker.getHeading()) & HEADING_MASK, (firstHeading + following.getHeading()) & HEADING_MASK);
         Assertions.assertEquals(beforeRandom, game.getRandom().getTotalRandomCounts());
+    }
+
+    @Test
+    void bullet_whose_image_ends_before_its_order_signal_waits_in_the_init_state_without_a_sprite() throws IOException {
+        Game game = createGame(MINING_BULLET_CAPACITY);
+        ProjectilePhase projectilePhase = game.getProjectilePhase();
+        GameFrame activeFrame = game.getFrame();
+
+        Assertions.assertNotNull(activeFrame);
+
+        ProjectilePhase.Context context = activeFrame.getProjectiles();
+
+        assertEndsWithoutOrderSignal(game.requireGameData().getIscript(), SELF_ENDING_ISCRIPT);
+        game.requireGameData().getImages().set("Iscript", MINING_BULLET_IMAGE, SELF_ENDING_ISCRIPT);
+
+        ProjectilePhase.Bullet bullet = projectilePhase.create(createSourceUnit(), ScrWeaponIds.UNKNOWN_63, LAUNCH_POSITION, LAUNCH_POSITION,
+                                                               INSTRUCTION_LIMIT);
+
+        Assertions.assertNotNull(bullet);
+        Assertions.assertNotNull(bullet.sprite);
+
+        for (int frame = 0; frame < SPRITELESS_UPDATE_FRAMES; frame++) {
+            projectilePhase.updateBullets(context, INSTRUCTION_LIMIT);
+        }
+
+        Assertions.assertNull(bullet.sprite);
+        Assertions.assertEquals(INIT_ORDER_STATE, bullet.orderState);
+        Assertions.assertEquals(1, context.getActiveCount());
+
+        SpriteImagePool imagePool = game.getSpriteSystem().getImagePool();
+
+        Assertions.assertNotNull(imagePool);
+        Assertions.assertEquals(0, imagePool.getAllocatedCount());
     }
 
     @Test

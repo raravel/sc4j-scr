@@ -632,7 +632,9 @@ public final class GlueInterface implements AutoCloseable {
         this.stack.update(time);
 
         if (this.getScreen() == this.titleScreen && this.titleScreen.isFinished()) {
-            GlueNavigator.Destination destination = GlueNavigator.Destination.MAIN_MENU;
+            // A run without an account chooses its local ID first.
+            GlueNavigator.Destination destination = this.context.hasPlayer() ? GlueNavigator.Destination.MAIN_MENU
+                                                                             : GlueNavigator.Destination.LOGIN;
 
             this.stack.switchTo(this.scenes.create(this.context, destination));
         }

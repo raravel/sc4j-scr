@@ -2,6 +2,7 @@ package org.fogofwarlabs.sc4j.scr.net.lan;
 
 import org.fogofwarlabs.sc4j.engine.net.beaconlink.BeaconLinkSession;
 import org.fogofwarlabs.sc4j.engine.net.beaconlink.FoundRoom;
+import org.fogofwarlabs.sc4j.engine.net.beaconlink.ParticipantChannel;
 import org.fogofwarlabs.sc4j.engine.net.lobby.JoinRefusal;
 import org.fogofwarlabs.sc4j.scr.net.discovery.LanDiscovery;
 import org.fogofwarlabs.sc4j.scr.net.discovery.LanRecord;
@@ -11,6 +12,7 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.util.List;
 
 /**
@@ -78,6 +80,16 @@ public interface NetworkProvider extends AutoCloseable {
     }
 
     /**
+     * Finds the channel that carries a game participant's datagrams, whose delay and relay state the game's network report shows.
+     *
+     * @param address the participant's address, as the provider session knows its peers
+     * @return the channel, or {@code null} for a network without channels or an address of no participant of the game
+     */
+    default @Nullable ParticipantChannel findChannel(@NotNull InetSocketAddress address) {
+        return null;
+    }
+
+    /**
      * Sets the password of the games this network hosts from now on and of the game {@link #connect} joins next: a hosted game with a
      * password is private, and a private game's host refuses a joiner without its password. A network without private games ignores it.
      *
@@ -129,6 +141,15 @@ public interface NetworkProvider extends AutoCloseable {
      * Carries out the network's due work without waiting.
      */
     void update();
+
+    /**
+     * Takes the address of the next player of the hosted game whose connection the network saw end, in the order the network saw them.
+     *
+     * @return the player's address in the game, or {@code null} if none is waiting or the network does not see connections end
+     */
+    default @Nullable InetSocketAddress pollDeparture() {
+        return null;
+    }
 
     /**
      * Closes the network: it withdraws what it published and closes its sockets.

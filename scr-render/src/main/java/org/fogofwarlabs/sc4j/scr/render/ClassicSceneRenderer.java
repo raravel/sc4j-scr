@@ -2,12 +2,14 @@ package org.fogofwarlabs.sc4j.scr.render;
 
 import org.fogofwarlabs.sc4j.base.exception.Exceptions;
 import org.fogofwarlabs.sc4j.scr.data.format.image.AnimFile;
+import org.fogofwarlabs.sc4j.scr.data.resource.ScrImageSheet;
 import org.fogofwarlabs.sc4j.scr.data.resource.ScrResourceProvider;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.util.function.IntFunction;
 import java.util.function.IntUnaryOperator;
 
 /**
@@ -175,6 +177,20 @@ public final class ClassicSceneRenderer implements SceneRenderer, AutoCloseable 
     }
 
     /**
+     * Draws the visible terrain from the current game tile identifiers, including creep edges, with megatile pictures that replace installed ones
+     * ({@link WorldRenderer#drawTerrain(IntUnaryOperator, IntFunction)}).
+     *
+     * @param tileIdentifiers the current row-major tile identifier for each tile index of the loaded map extent
+     * @param megatiles       the picture of a megatile index, the same array while it is unchanged, or {@code null} for the installed picture
+     * @throws IOException if a tile identifier is outside the installed assets
+     */
+    @Override
+    public void drawTerrain(@NotNull IntUnaryOperator tileIdentifiers, @NotNull IntFunction<byte @Nullable []> megatiles) throws IOException {
+        this.overlay.end(false);
+        this.renderer.drawTerrain(tileIdentifiers, megatiles);
+    }
+
+    /**
      * Draws one image of a sprite.
      *
      * @param imageIndex   the image identifier
@@ -233,6 +249,35 @@ public final class ClassicSceneRenderer implements SceneRenderer, AutoCloseable 
                                                                              flipped);
             case DRAW_FUNCTION_WARP_FLASH -> this.renderer.drawBrightenImage(imageIndex, frameIndex, modifierData, worldX, worldY, flipped);
             default -> throw Exceptions.newIOException("Runtime image modifier {0} is not rendered.", modifier);
+        }
+    }
+
+    /**
+     * Draws one image of a sprite with the frames of an override sheet instead of the image's installed graphics, with the image's draw function.
+     * The baked-remap and warp-texture draws fall back to the palette draw of the sheet's frame.
+     *
+     * @param sheet        the indexed frames the image draws, their canvas centered on the image position
+     * @param imageIndex   the image identifier
+     * @param frameIndex   the image frame, a frame of the sheet
+     * @param modifier     the image draw modifier
+     * @param modifierData the image modifier data
+     * @param playerColor  the owner's player color index {@code 0..15}, or {@link #PLAYER_COLOR}{@code + owner}
+     * @param worldX       the canvas center world coordinate
+     * @param worldY       the canvas center world coordinate
+     * @param flipped      whether the image is horizontally flipped
+     * @throws IOException if the frame cannot be drawn or the modifier is not drawn by this backend
+     */
+    @Override
+    public void drawImageSheet(@NotNull ScrImageSheet sheet,
+                               int imageIndex, int frameIndex,
+                               int modifier, int modifierData, int playerColor,
+                               int worldX, int worldY, boolean flipped) throws IOException {
+        this.renderer.setImageSheet(sheet.getFrame(frameIndex));
+
+        try {
+            this.drawImage(imageIndex, 0, modifier, modifierData, playerColor, worldX, worldY, flipped);
+        } finally {
+            this.renderer.setImageSheet(null);
         }
     }
 

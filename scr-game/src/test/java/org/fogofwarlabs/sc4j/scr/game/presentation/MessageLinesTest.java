@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
@@ -360,6 +361,25 @@ final class MessageLinesTest {
         Assertions.assertEquals(WHISPER_STYLE, lines.getStyle(FIRST_LINE));
         Assertions.assertEquals(NO_PLAYER_COLOR, lines.getColor(FIRST_LINE), "No player colour: the whole line is yellow.");
         Assertions.assertEquals(ONE_SOUND, lines.takeTransmissionSounds());
+    }
+
+    /**
+     * Checks that a whisper with a named player shows the formatted prefix, a space and the text, all yellow, and reaches the chat listener.
+     */
+    @Test
+    void write_whisper_should_show_named_prefix_in_yellow() {
+        MessageLines lines = createChatLines();
+        List<String> written = new ArrayList<>();
+
+        lines.setChatListener((line, style, color) -> written.add(new String(line, StandardCharsets.UTF_8)));
+
+        lines.writeWhisper("<To: %s>", "Zeratul#abcd12", "en taro".getBytes(StandardCharsets.UTF_8));
+
+        Assertions.assertEquals("<To: Zeratul#abcd12> en taro", new String(lines.getLine(FIRST_LINE), StandardCharsets.UTF_8));
+        Assertions.assertEquals(WHISPER_STYLE, lines.getStyle(FIRST_LINE));
+        Assertions.assertEquals(NO_PLAYER_COLOR, lines.getColor(FIRST_LINE));
+        Assertions.assertEquals(ONE_SOUND, lines.takeTransmissionSounds());
+        Assertions.assertEquals(List.of("<To: Zeratul#abcd12> en taro"), written);
     }
 
     /**

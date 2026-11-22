@@ -1,13 +1,18 @@
 package org.fogofwarlabs.sc4j.scr.game.combat;
 
+import org.fogofwarlabs.sc4j.scr.content.ScrOrderIds;
 import org.fogofwarlabs.sc4j.scr.content.ScrUnitIds;
 import org.fogofwarlabs.sc4j.scr.content.ScrWeaponIds;
 import org.fogofwarlabs.sc4j.scr.core.test.ExternalInput;
 import org.fogofwarlabs.sc4j.scr.core.test.RequiresInstallation;
 import org.fogofwarlabs.sc4j.scr.data.format.dat.DatTable;
+import org.fogofwarlabs.sc4j.scr.data.format.dat.FlingyDat;
+import org.fogofwarlabs.sc4j.scr.data.format.dat.SpritesDat;
 import org.fogofwarlabs.sc4j.scr.data.format.dat.UnitsDat;
+import org.fogofwarlabs.sc4j.scr.data.type.constant.UnitTypeFlags;
 import org.fogofwarlabs.sc4j.scr.game.frame.GameFrame;
 import org.fogofwarlabs.sc4j.scr.game.movement.FlingyMotionUtils;
+import org.fogofwarlabs.sc4j.scr.game.movement.UnitMovement;
 import org.fogofwarlabs.sc4j.scr.game.replay.ReplayRuntime;
 import org.fogofwarlabs.sc4j.scr.game.sprite.Sprite;
 import org.fogofwarlabs.sc4j.scr.game.state.Game;
@@ -25,7 +30,8 @@ import java.io.IOException;
 
 /**
  * Checks the routines that use a unit's weapon or turret type unchecked: the {@code attackwith} script command of a unit without that weapon,
- * the attack-angle test of a Lurker and the morph of a unit with a turret into a type without one.
+ * the attack-angle test of a Lurker, the morph of a unit with a turret into a type without one, the movement of a turret whose type lost the
+ * subunit flag and the turret orders of a unit without a main unit.
  */
 @RequiresInstallation
 final class UncheckedTypeDataTest {
@@ -51,6 +57,15 @@ final class UncheckedTypeDataTest {
      * A heading away from the target below the unit.
      */
     private static final int NORTH_HEADING = 0;
+    /**
+     * The flingy and the sprite that a map points the Edmund Duke turret at, so that it draws {@link #IMAGE_WITHOUT_SPECIAL_OVERLAY}.
+     */
+    private static final int TURRET_FLINGY = 17;
+    private static final int TURRET_SPRITE = 218;
+    /**
+     * An image whose {@code images.dat} Special Overlay is {@code 0}.
+     */
+    private static final int IMAGE_WITHOUT_SPECIAL_OVERLAY = 956;
 
     private static @Nullable GameData gameData;
     private static @Nullable ReplayRuntime runtime;
@@ -172,6 +187,95 @@ final class UncheckedTypeDataTest {
             Assertions.assertEquals(ScrUnitIds.TERRAN_SIEGE_TANK_SIEGE_MODE, tank.getUnitId());
             Assertions.assertSame(turret, tank.getSubunit());
             Assertions.assertEquals(ScrUnitIds.NONE, turret.getUnitId());
+        });
+    }
+
+    @Test
+    void movement_of_a_turret_whose_type_lost_the_subunit_flag_should_fail_on_the_special_overlay_its_image_lacks() {
+        RunningGameScenario.runInCommandDispatch(runtime, () -> {
+            Assertions.assertNotNull(runtime);
+
+            Game game = runtime.getGame();
+            GameData data = game.getGameData();
+
+            Assertions.assertNotNull(data);
+
+            DatTable units = data.getUnits();
+            DatTable flingy = data.getFlingy();
+            DatTable sprites = data.getSprites();
+            int turretType = ScrUnitIds.HERO_EDMUND_DUKE_TANK_MODE_TURRET;
+            int turretFlingy = units.get(UnitsDat.FLINGY_TYPE, turretType);
+            int turretFlags = units.get(UnitsDat.FLAGS, turretType);
+            int flingySprite = flingy.get(FlingyDat.SPRITE, TURRET_FLINGY);
+            int spriteImage = sprites.get(SpritesDat.IMAGE, TURRET_SPRITE);
+
+            units.set(UnitsDat.FLINGY_TYPE, turretType, TURRET_FLINGY);
+            units.set(UnitsDat.FLAGS, turretType, turretFlags & ~UnitTypeFlags.SUBUNIT);
+            flingy.set(FlingyDat.SPRITE, TURRET_FLINGY, TURRET_SPRITE);
+            sprites.set(SpritesDat.IMAGE, TURRET_SPRITE, IMAGE_WITHOUT_SPECIAL_OVERLAY);
+
+            try {
+                Unit tank = RunningGameScenario.createUnit(game, ScrUnitIds.HERO_EDMUND_DUKE_TANK_MODE, POSITION_X, POSITION_Y,
+                                                           RunningGameScenario.COMPUTER);
+                Unit turret = tank.getSubunit();
+
+                Assertions.assertNotNull(turret);
+                Assertions.assertSame(tank, turret.getSubunit());
+                Assertions.assertEquals(IMAGE_WITHOUT_SPECIAL_OVERLAY, turret.requireSprite().requireMainImage().getImageTypeId());
+
+                UnitMovement.Context context = new UnitMovement.Context(0, 0);
+
+                // The turret's own movement continues with its base as its turret and reads the special overlay of the turret's image.
+                IllegalStateException failure = Assertions.assertThrows(
+                        IllegalStateException.class,
+                        () -> game.getUnitPhase().updateMovement(context, tank, RunningGameScenario.INSTRUCTION_LIMIT)
+                );
+
+                Assertions.assertInstanceOf(IOException.class, failure.getCause());
+            } finally {
+                units.set(UnitsDat.FLINGY_TYPE, turretType, turretFlingy);
+                units.set(UnitsDat.FLAGS, turretType, turretFlags);
+                flingy.set(FlingyDat.SPRITE, TURRET_FLINGY, flingySprite);
+                sprites.set(SpritesDat.IMAGE, TURRET_SPRITE, spriteImage);
+            }
+        });
+    }
+
+    @Test
+    void turret_orders_of_a_unit_without_a_main_unit_should_fail_where_they_read_it() {
+        RunningGameScenario.runInCommandDispatch(runtime, () -> {
+            Assertions.assertNotNull(runtime);
+
+            Game game = runtime.getGame();
+            GameData data = game.getGameData();
+
+            Assertions.assertNotNull(data);
+
+            DatTable units = data.getUnits();
+            int critterType = ScrUnitIds.CRITTER_SCANTID;
+            int computerIdleOrder = units.get(UnitsDat.COMPUTER_IDLE_ORDER, critterType);
+            int humanIdleOrder = units.get(UnitsDat.HUMAN_IDLE_ORDER, critterType);
+
+            units.set(UnitsDat.COMPUTER_IDLE_ORDER, critterType, ScrOrderIds.TURRET_GUARD);
+            units.set(UnitsDat.HUMAN_IDLE_ORDER, critterType, ScrOrderIds.TURRET_GUARD);
+
+            try {
+                Unit critter = createAttacker(game, critterType);
+
+                Assertions.assertNull(critter.getSubunit());
+                Assertions.assertEquals(ScrOrderIds.TURRET_GUARD, critter.getPrimaryOrder());
+                Assertions.assertThrows(IllegalStateException.class,
+                                        () -> game.getUnitTurret().updateGuard(critter, RunningGameScenario.INSTRUCTION_LIMIT));
+
+                // TurretAttack returns to TurretGuard before it reads the main unit when the unit cannot attack its target.
+                critter.setPrimaryOrder(ScrOrderIds.TURRET_ATTACK);
+                game.getUnitTurret().updateAttack(critter, RunningGameScenario.INSTRUCTION_LIMIT);
+
+                Assertions.assertEquals(ScrOrderIds.TURRET_GUARD, critter.getPrimaryOrder());
+            } finally {
+                units.set(UnitsDat.COMPUTER_IDLE_ORDER, critterType, computerIdleOrder);
+                units.set(UnitsDat.HUMAN_IDLE_ORDER, critterType, humanIdleOrder);
+            }
         });
     }
 }

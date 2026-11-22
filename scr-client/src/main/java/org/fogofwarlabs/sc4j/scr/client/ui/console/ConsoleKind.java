@@ -45,7 +45,7 @@ enum ConsoleKind {
      */
     private static final int CLASSIC_TIME_PEN_Y = 365;
     /**
-     * The classic pen x the APM number ends at.
+     * The classic pen x of the APM number.
      */
     private static final int CLASSIC_APM_PEN_X = 398;
     /**
@@ -61,7 +61,7 @@ enum ConsoleKind {
      */
     private static final int REMASTERED_TIME_PEN_Y = 363;
     /**
-     * The remastered pen x the APM number ends at.
+     * The remastered pen x of the APM number.
      */
     private static final int REMASTERED_APM_PEN_X = 397;
     /**
@@ -247,7 +247,7 @@ enum ConsoleKind {
     }
 
     /**
-     * @return the pen x the right-aligned APM number ends at, before the extra interface width moves it
+     * @return the pen x of the APM number, before the extra interface width moves it
      */
     int getApmPenX() {
         return this.apmPenX;
@@ -258,6 +258,19 @@ enum ConsoleKind {
      */
     int getApmPenY() {
         return this.apmPenY;
+    }
+
+    /**
+     * Calculates where the right-aligned APM number ends. The number is drawn in a text box as wide as the interface, and right alignment ends the
+     * text as far left of the box's right edge as the pen, moved right by half the extra interface width, lies right of the box's left edge.
+     *
+     * @param interfaceWidth the interface width in interface pixels
+     * @return the x the APM number ends at
+     */
+    int calculateApmTextRight(int interfaceWidth) {
+        int penX = this.apmPenX + (interfaceWidth - ConsoleLayout.INTERFACE_WIDTH) / 2;
+
+        return interfaceWidth - 1 - penX;
     }
 
     /**

@@ -113,6 +113,26 @@ final class AnimFileTest {
     }
 
     @Test
+    void find_content_size_should_ask_for_the_records_then_give_the_end_of_frames_and_layers() {
+        int textureOffset = HEADER_SIZE + 36;
+        int frameOffset = textureOffset + TEXTURE_SIZE;
+        int size = frameOffset + 16;
+        ByteBuffer contents = createHeader(size + 8, HD_SCALE, 2, 1, "diffuse", "teamcolor");
+
+        contents.putShort((short) 1).putShort((short) 0).putShort((short) 16).putShort((short) 16).putInt(frameOffset);
+        contents.putInt(textureOffset).putInt(TEXTURE_SIZE).putShort((short) 4).putShort((short) 4);
+
+        byte[] data = contents.array();
+
+        Assertions.assertEquals(HEADER_SIZE, AnimFile.findContentSize(data, 0));
+        Assertions.assertEquals(HEADER_SIZE + Integer.BYTES, AnimFile.findContentSize(data, HEADER_SIZE));
+        Assertions.assertEquals(HEADER_SIZE + 36, AnimFile.findContentSize(data, HEADER_SIZE + Integer.BYTES));
+        Assertions.assertEquals(size, AnimFile.findContentSize(data, HEADER_SIZE + 36));
+        Assertions.assertEquals(size, AnimFile.findContentSize(data, data.length));
+        Assertions.assertEquals(-1, AnimFile.findContentSize(new byte[HEADER_SIZE], HEADER_SIZE));
+    }
+
+    @Test
     void parse_should_reject_frames_outside_the_content_and_short_headers() {
         ByteBuffer contents = createHeader(HEADER_SIZE + 24, HD_SCALE, 2, 1, "diffuse");
 

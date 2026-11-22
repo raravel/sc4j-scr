@@ -4,6 +4,7 @@ import org.fogofwarlabs.sc4j.base.exception.Exceptions;
 import org.fogofwarlabs.sc4j.engine.command.CommandRegistry;
 import org.fogofwarlabs.sc4j.scr.content.ScrOrderIds;
 import org.fogofwarlabs.sc4j.scr.data.format.replay.*;
+import org.fogofwarlabs.sc4j.scr.game.extension.ScrSimulationPlugins;
 import org.fogofwarlabs.sc4j.scr.game.frame.GameSpeed;
 import org.fogofwarlabs.sc4j.scr.game.order.UnitSelection;
 import org.jetbrains.annotations.NotNull;
@@ -13,7 +14,8 @@ import java.util.List;
 /**
  * Creates the native command types of one command dispatcher ({@link ReplayCommandExecutor}): an {@link ScrCommandType} for every command type
  * byte the native dispatcher has a case for, with its payload codec ({@link ReplayCommandCodecs}, the one codec of the type) and its case,
- * registered in an engine {@link CommandRegistry} by type byte. A type byte without a type is not dispatched.
+ * registered in an engine {@link CommandRegistry} by type byte, and the SC4J mod command ({@link ReplayCommandIds#MOD_COMMAND}), which hands
+ * its data to the game's simulation plugins. A type byte without a type is not dispatched.
  */
 final class NativeCommandTable {
     /**
@@ -27,11 +29,23 @@ final class NativeCommandTable {
                                      ScrCommandType.@NotNull Action<C> action,
                                      int @NotNull ... ids) {
         for (int id : ids) {
-            if (ReplayCommandCodecs.find(id) != codec) {
-                throw Exceptions.newIllegalStateException("The command type {0} is registered with another codec than its own.", id);
-            }
-
+            requireOwnCodec(codec, id);
             registry.register(new ScrCommandType<>(id, codec, dispatch, action));
+        }
+    }
+
+    private static <C> void registerWithIssuer(@NotNull CommandRegistry<ScrCommandType<?>> registry,
+                                               @NotNull ReplayCommandCodec<C> codec,
+                                               ScrCommandType.@NotNull Dispatch dispatch,
+                                               ScrCommandType.@NotNull IssuerAction<C> action,
+                                               int id) {
+        requireOwnCodec(codec, id);
+        registry.register(new ScrCommandType<>(id, codec, dispatch, action));
+    }
+
+    private static void requireOwnCodec(@NotNull ReplayCommandCodec<?> codec, int id) {
+        if (ReplayCommandCodecs.find(id) != codec) {
+            throw Exceptions.newIllegalStateException("The command type {0} is registered with another codec than its own.", id);
         }
     }
 
@@ -133,6 +147,15 @@ final class NativeCommandTable {
         // The minimap ping has no simulation-state effect.
         register(registry, ReplayPositionCommand.CODEC, ScrCommandType.Dispatch.SELECTION, (game, commandPlayer, command) -> {
         }, ReplayCommandIds.MINIMAP_PING);
+        // The plugins receive the issuing record, not its command player (a team's leader); a game without simulation plugins runs the mod
+        // command without an effect.
+        registerWithIssuer(registry, ReplayModCommand.CODEC, ScrCommandType.Dispatch.SESSION, (game, issuer, commandPlayer, command) -> {
+            ScrSimulationPlugins simulation = game.getSimulationPlugins();
+
+            if (simulation != null) {
+                simulation.runModCommand(issuer, command.copyData());
+            }
+        }, ReplayCommandIds.MOD_COMMAND);
     }
 
     private void registerPlayer(@NotNull CommandRegistry<ScrCommandType<?>> registry) {

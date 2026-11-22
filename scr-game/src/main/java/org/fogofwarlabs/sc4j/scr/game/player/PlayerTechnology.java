@@ -87,7 +87,7 @@ public final class PlayerTechnology implements ContextDwordTable, GameContextByt
      */
     private static final int WORD_MASK = 0xFFFF;
     /**
-     * The availability byte the fresh default branch stores for every technology of every player.
+     * The availability byte the fresh default branch and the availability setter store for an available technology.
      */
     static final byte AVAILABLE = 1;
     /**
@@ -263,6 +263,28 @@ public final class PlayerTechnology implements ContextDwordTable, GameContextByt
         }
 
         return this.contextAccess.readByte(getTableOffset(CLASSIC_AVAILABLE_OFFSET, EXPANSION_AVAILABLE_OFFSET, playerIndex, technology)) != 0;
+    }
+
+    /**
+     * Sets whether the player may research or use the technology, as an EUD write of the game-data block stores the availability byte, without an
+     * expansion gate. A player outside the player slots or a technology WORD outside the technology table writes the game-context byte the
+     * availability layout addresses.
+     *
+     * @param playerIndex the original player DWORD, without truncation
+     * @param technology  the original technology WORD
+     * @param available   whether the technology is available
+     * @throws UnsupportedOperationException if the addressed byte lies past the game context, or outside the technology tables without one
+     */
+    public void setAvailable(int playerIndex, int technology, boolean available) {
+        technology &= WORD_MASK;
+
+        int value = available ? AVAILABLE : 0;
+
+        if (isTableEntry(playerIndex, technology)) {
+            this.storeAvailableByte(playerIndex * TechdataDat.TECH_COUNT + technology, value);
+        } else {
+            this.contextAccess.writeByte(getTableOffset(CLASSIC_AVAILABLE_OFFSET, EXPANSION_AVAILABLE_OFFSET, playerIndex, technology), value);
+        }
     }
 
     /**

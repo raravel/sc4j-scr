@@ -15,8 +15,8 @@ final class GameProxyCaptureTest {
     /**
      * {@code 192.168.0.2} to {@code .88}: the first join request (class {@code 0} subtype {@code 1}), a probe.
      */
-    static final @NotNull String PROBE =
-            "080112140000000028c41000000001000001ff00010000002886ff84f28ab9bdfd4f48feb5a0b5e89597035a1218cb81c4c30c20e02f30c0d182c00538e02f";
+    static final @NotNull String PROBE = "080112140000000028c41000000001000001ff00010000002886ff84f28ab9bdfd4f" +
+                                         "48feb5a0b5e89597035a1218cb81c4c30c20e02f30c0d182c00538e02f";
 
     /**
      * {@code 192.168.0.88} to {@code .2}: the answer to that probe.

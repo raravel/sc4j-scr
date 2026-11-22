@@ -81,11 +81,22 @@ public final class ObserverConsoleUtils {
     }
 
     /**
+     * Returns the minimap frame drawn at the bottom left: {@link #SQUARE_RIGHT} while the game time is shown, else
+     * {@link #SQUARE_RIGHT_NO_TIMER}. The dialogs are placed by {@link #SQUARE_RIGHT} either way ({@link #createLayout}).
+     *
+     * @param timer whether the game time is shown
+     * @return the frame path without the asset set prefix
+     */
+    public static @NotNull String getMinimapFrame(boolean timer) {
+        return timer ? SQUARE_RIGHT : SQUARE_RIGHT_NO_TIMER;
+    }
+
+    /**
      * Creates a {@link ConsoleLayout} instance with observer dialog positions.
      *
      * @param replay            the replay console layout ({@code statbtnn})
      * @param width             the interface width {@code W}
-     * @param squareRightHeight {@code h(SquareRight)}
+     * @param squareRightHeight {@code h(SquareRight)}, the frame with the timer band, whether or not the game time is shown
      * @param squareFullWidth   {@code w(SquareFull)}
      * @param squareFullHeight  {@code h(SquareFull)}
      * @return the created {@link ConsoleLayout} instance

@@ -91,9 +91,9 @@ public final class TilesetGraphicsUtils {
                 for (int pixelY = 0; pixelY < TerrainTileset.MINI_TILE_SIZE; pixelY++) {
                     for (int pixelX = 0; pixelX < TerrainTileset.MINI_TILE_SIZE; pixelX++) {
                         int sourceX = (reference & MINI_TILE_MIRRORED) != 0 ? TerrainTileset.MINI_TILE_SIZE - 1 - pixelX : pixelX;
+                        int destinationIndex = destinationOffset + (destinationY + pixelY) * TerrainTileset.TILE_SIZE + destinationX + pixelX;
 
-                        pixels[destinationOffset + (destinationY + pixelY) * TerrainTileset.TILE_SIZE + destinationX + pixelX] =
-                                minitiles[(int) miniTileOffset + pixelY * TerrainTileset.MINI_TILE_SIZE + sourceX];
+                        pixels[destinationIndex] = minitiles[(int) miniTileOffset + pixelY * TerrainTileset.MINI_TILE_SIZE + sourceX];
                     }
                 }
             }

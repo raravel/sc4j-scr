@@ -29,6 +29,14 @@ import java.util.List;
  */
 public final class ClassicDatRegion implements ClassicRegion {
     /**
+     * The number of draw functions an image may name.
+     */
+    public static final int DRAW_FUNCTION_LIMIT = 0x12;
+    /**
+     * The number of iscript ids an image may name.
+     */
+    public static final int ISCRIPT_LIMIT = 0x19B;
+    /**
      * The mask of the low WORD.
      */
     private static final int WORD_MASK = 0xFFFF;
@@ -73,15 +81,6 @@ public final class ClassicDatRegion implements ClassicRegion {
      * The first kind whose writes are validated; every kind from it on keeps validated shadows.
      */
     private static final int FIRST_VALIDATED_KIND = VALIDATED_FLINGY_BYTES;
-
-    /**
-     * The number of draw functions an image may name.
-     */
-    private static final int DRAW_FUNCTION_LIMIT = 0x12;
-    /**
-     * The number of iscript ids an image may name.
-     */
-    private static final int ISCRIPT_LIMIT = 0x19B;
 
     /**
      * {classic base, size, DAT file, column block, kind}: the classic DAT arrays the EUD emulation serves.

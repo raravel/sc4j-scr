@@ -5,6 +5,7 @@ import org.fogofwarlabs.sc4j.scr.content.ScrOrderIds;
 import org.fogofwarlabs.sc4j.scr.content.ScrTechIds;
 import org.fogofwarlabs.sc4j.scr.content.ScrUnitIds;
 import org.fogofwarlabs.sc4j.scr.data.type.constant.SoundIds;
+import org.fogofwarlabs.sc4j.scr.game.extension.ScrSimulationPlugins;
 import org.fogofwarlabs.sc4j.scr.game.order.ScrOrderSystem;
 import org.fogofwarlabs.sc4j.scr.game.order.UnitSelection;
 import org.fogofwarlabs.sc4j.scr.game.sprite.Sprite;
@@ -211,6 +212,7 @@ public final class UnitTechnology {
         }
 
         this.game.getUnitEnergy().spend(unit, cost);
+        this.reportSelfCast(unit, technology);
 
         ScrOrderSystem.setSecondaryOrder(unit, ScrOrderIds.CLOAK);
     }
@@ -279,6 +281,7 @@ public final class UnitTechnology {
         this.game.getInterfaceLink().getSoundEvents().add(sound,
                                                           sprite == null ? 0 : sprite.getX(), sprite == null ? 0 : sprite.getY(),
                                                           unit.getUnitId());
+        this.reportSelfCast(unit, ScrTechIds.STIM_PACKS);
         this.game.getEngineGame().getCombat().dealDamage(unit, STIM_PACK_DAMAGE << FIXED_POINT_SHIFT, null, instructionLimit);
 
         if (unit.getSpeedIncreaseByte() < STIM_PACK_TIMER) {
@@ -287,5 +290,22 @@ public final class UnitTechnology {
         }
 
         return true;
+    }
+
+    /**
+     * Reports a technology a unit used on itself to the simulation plugins ({@link ScrSimulationPlugins#reportSpellCast}), at the unit's
+     * position, when the game has them.
+     *
+     * @param unit       the unit
+     * @param technology the techdata.dat entry
+     */
+    private void reportSelfCast(@NotNull Unit unit, int technology) {
+        ScrSimulationPlugins simulation = this.game.getSimulationPlugins();
+
+        if (simulation != null) {
+            Sprite sprite = unit.getSpriteOrNull();
+
+            simulation.reportSpellCast(unit, technology, null, sprite == null ? 0 : sprite.getX(), sprite == null ? 0 : sprite.getY());
+        }
     }
 }

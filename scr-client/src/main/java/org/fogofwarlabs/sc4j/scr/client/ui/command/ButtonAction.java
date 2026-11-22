@@ -5,7 +5,8 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * Classifies command-card actions and retains their native function identifiers and represented command opcodes.
+ * Classifies command-card actions and retains their native function identifiers and represented command opcodes, followed by SC:R's own
+ * actions.
  * Command actions send immediately, while targeting and placement actions establish the mode used by a later click.
  * Interface and replay actions are handled locally by the command input layer.
  */
@@ -249,7 +250,16 @@ public enum ButtonAction {
     /**
      * Increases replay speed.
      */
-    REPLAY_SPEED_UP(0x1403bacb0L, Kind.REPLAY, -1);
+    REPLAY_SPEED_UP(0x1403bacb0L, Kind.REPLAY, -1),
+    /**
+     * Sends nothing: only the game plugins see the press. SC:R's own action, whose identifier is no native function address.
+     */
+    SCRIPT(0x2L, Kind.SCRIPT, -1),
+    /**
+     * Enters a targeting mode whose target only the game plugins see, a unit or the ground, instead of an order. SC:R's own action, as
+     * {@link #SCRIPT}.
+     */
+    SCRIPT_TARGET(0x3L, Kind.SCRIPT_TARGET, -1);
 
     /**
      * Classifies the effect of pressing a button.
@@ -274,7 +284,15 @@ public enum ButtonAction {
         /**
          * Controls replay playback.
          */
-        REPLAY
+        REPLAY,
+        /**
+         * Tells the game plugins about the press only.
+         */
+        SCRIPT,
+        /**
+         * Enters a targeting mode whose target the game plugins receive.
+         */
+        SCRIPT_TARGET
     }
 
     /**

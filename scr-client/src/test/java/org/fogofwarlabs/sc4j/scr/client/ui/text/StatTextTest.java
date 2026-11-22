@@ -19,8 +19,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
 /**
- * Checks the {@code stat_txt} string tables: the product name substitution of a parsed table, and the committed
- * game-specific button strings and hotkeys with their isolation from the next game.
+ * Checks the {@code stat_txt} string tables: the product name substitution of a parsed table, the committed game-specific button strings and
+ * hotkeys with their isolation from the next game, and the strings a plugin overrides, unit names included.
  */
 final class StatTextTest {
     private static final int MOVE = 664;
@@ -53,7 +53,7 @@ final class StatTextTest {
 
         int moveTextOffset = headerLength + body.size();
 
-        body.writeBytes(new byte[]{'m', 0, 3, 'M', 1, 'o', 'v', 'e', 0});
+        body.writeBytes(new byte[]{'z', 1, 4, 'M', 'o', 'v', 'e', ' ', 2, '(', 'Z', ')', 0});
 
         for (int identifier = 1; identifier <= MOVE; identifier++) {
             int offset = identifier == CUSTOM ? customTextOffset : identifier == MOVE ? moveTextOffset : emptyTextOffset;
@@ -98,12 +98,51 @@ final class StatTextTest {
             Assertions.assertEquals("q\0[Q] 스킬", text.getString(new ScrGameView(game), CUSTOM), "Type 0: the text from the pointer plus two.");
             Assertions.assertEquals("q\0[Q] 스킬", profile.getString(new ScrGameView(game), CUSTOM), "An id outside the profile table is the plain string.");
             Assertions.assertEquals('q', profile.getHotkey(new ScrGameView(game), CUSTOM), "The map's key.");
-            Assertions.assertEquals("m\0Move [\u0003M\u0001]", profile.getString(new ScrGameView(game), MOVE), "A profile id keeps its entry key.");
+            Assertions.assertEquals("z\u0001\u0004Move \u0002(Z)", profile.getString(new ScrGameView(game), MOVE), "A profile id is the plain string.");
+            Assertions.assertEquals('z', profile.getHotkey(new ScrGameView(game), MOVE), "A profile id takes the map's key.");
 
             Game next = Game.create(data.createGameCopy(), new GameMap(1, 1, 0, new int[1]), new LcgRandom(0));
 
             Assertions.assertEquals("Young Chrysalis\0*\0Powerups", text.getString(new ScrGameView(next), CUSTOM), "A new game reads the installed strings.");
             Assertions.assertEquals('Y', profile.getHotkey(new ScrGameView(next), CUSTOM));
+            Assertions.assertEquals("m\0Move [\u0003M\u0001]", profile.getString(new ScrGameView(next), MOVE), "A new game applies the profile.");
+            Assertions.assertEquals('m', profile.getHotkey(new ScrGameView(next), MOVE));
+        }
+    }
+
+    @Test
+    void plugin_overrides_win_over_the_committed_table() throws IOException {
+        StatText text = StatTextScenario.createStatText(MOVE, identifier -> identifier == CUSTOM ? "Installed" : "");
+        Game game = Game.create(null, new GameMap(1, 1, 0, new int[1]), new LcgRandom(0));
+        ScrGameView view = new ScrGameView(game);
+
+        game.getGameContext().setStatTextTable(createCommittedTextTable());
+        game.getInterfaceLink().getStatTextOverrides().set(CUSTOM, "Script");
+        game.getInterfaceLink().getStatTextOverrides().set(MOVE + 1, "Beyond the table");
+
+        Assertions.assertEquals("Script", text.getString(view, CUSTOM));
+        Assertions.assertEquals("Beyond the table", text.getString(view, MOVE + 1));
+
+        game.getInterfaceLink().getStatTextOverrides().set(CUSTOM, null);
+
+        Assertions.assertEquals("q\0[Q] 스킬", text.getString(view, CUSTOM), "The committed table again.");
+    }
+
+    @RequiresInstallation
+    @Test
+    void an_overridden_unit_name_wins_over_the_installed_name() throws IOException {
+        StatText text = StatTextScenario.createStatText(MOVE, identifier -> identifier == 1 ? "Terran Marine" : "");
+
+        try (GameData data = GameData.loadFrom(ExternalInput.INSTALLATION.getPath())) {
+            Game game = Game.create(data.createGameCopy(), new GameMap(1, 1, 0, new int[1]), new LcgRandom(0));
+            ScrGameView view = new ScrGameView(game);
+
+            Assertions.assertEquals("Terran Marine", text.getUnitName(view, 0));
+
+            game.getInterfaceLink().getStatTextOverrides().set(1, "Space Marine");
+
+            Assertions.assertNull(game.getUnitDisplayName(0));
+            Assertions.assertEquals("Space Marine", text.getUnitName(view, 0));
         }
     }
 }

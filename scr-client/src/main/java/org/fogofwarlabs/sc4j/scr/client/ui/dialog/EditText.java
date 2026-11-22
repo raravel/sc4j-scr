@@ -1,5 +1,6 @@
 package org.fogofwarlabs.sc4j.scr.client.ui.dialog;
 
+import org.fogofwarlabs.sc4j.base.text.TextBoundaryUtils;
 import org.fogofwarlabs.sc4j.engine.client.dialog.TextClipboard;
 import org.fogofwarlabs.sc4j.engine.client.dialog.TextEditKey;
 import org.fogofwarlabs.sc4j.engine.client.dialog.TextEditModel;
@@ -13,8 +14,9 @@ import java.util.function.ToDoubleFunction;
 
 /**
  * Edits the text of an edit control in the client's look: the engine {@link TextEditModel} holds the text, the limits, the selection, the
- * clipboard operations and the undo/redo history; this class adds the caret glyph, its blinking on the interface timers and the first visible
- * character that the active scroll mode selects. Every key restarts the caret blink.
+ * clipboard operations and the undo/redo history; this class adds the caret glyph, its blinking on the interface timers, the first visible
+ * character that the active scroll mode selects and the left edge of the drawn text, which maps a pointer position to an index
+ * ({@link #findIndexAt}). Every key and press restarts the caret blink.
  */
 public final class EditText {
     /**
@@ -49,6 +51,10 @@ public final class EditText {
      * The first visible UTF-16 character index.
      */
     private int scroll;
+    /**
+     * The interface x of the first visible character at the last draw ({@link #setTextLeft}).
+     */
+    private float textLeft;
 
     /**
      * The interface timer list used for caret blinking while attached.
@@ -64,8 +70,9 @@ public final class EditText {
      * @param rejected      the refused characters
      */
     public EditText(@NotNull String text, int maximumLength, @NotNull String rejected) {
-        this.model  = new TextEditModel(text, maximumLength, rejected);
-        this.scroll = 0;
+        this.model    = new TextEditModel(text, maximumLength, rejected);
+        this.scroll   = 0;
+        this.textLeft = 0;
 
         this.timers  = null;
         this.caretOn = true;
@@ -107,6 +114,15 @@ public final class EditText {
     }
 
     /**
+     * Sets the interface x of the first visible character, where the text was drawn.
+     *
+     * @param textLeft the left edge of the drawn text in interface pixels
+     */
+    public void setTextLeft(float textLeft) {
+        this.textLeft = textLeft;
+    }
+
+    /**
      * Sets the owner's test of the whole text a change would leave; a change it refuses does not happen (typing refuses
      * the character, pasting stops at it).
      *
@@ -136,6 +152,21 @@ public final class EditText {
         return current.substring(0, caret - first) + CARET + current.substring(caret - first);
     }
 
+
+    /**
+     * Finds the index under a pointer position on the drawn line ({@link TextBoundaryUtils#findIndexAt}): from the first visible character
+     * at the left edge of the last draw.
+     *
+     * @param x       the pointer's interface x
+     * @param measure the width of a text in the drawn font
+     * @return the UTF-16 index of the text
+     */
+    public int findIndexAt(float x, @NotNull ToDoubleFunction<String> measure) {
+        String text = this.model.getText();
+        int first = Math.min(this.scroll, text.length());
+
+        return first + TextBoundaryUtils.findIndexAt(text.substring(first), x - this.textLeft, measure);
+    }
 
     /**
      * Updates the first visible character within the supplied text room.
@@ -201,17 +232,52 @@ public final class EditText {
     }
 
     /**
-     * Applies an editing key ({@link TextEditModel#press}); Backspace and Delete remove the selection when there is one, Left and Right end it
-     * at its start or end.
+     * Applies an editing key without extending the selection ({@link #press(TextEditKey, boolean, long)}).
      *
      * @param key  the key
      * @param time the current time in milliseconds
      * @return {@code true} if the text changed, {@code false} otherwise
      */
     public boolean press(@NotNull TextEditKey key, long time) {
+        return this.press(key, false, time);
+    }
+
+    /**
+     * Applies an editing key ({@link TextEditModel#press(TextEditKey, boolean)}); Backspace and Delete remove the selection when there is one,
+     * Left and Right end it at its start or end; while extending, the caret keys extend it.
+     *
+     * @param key    the key
+     * @param extend whether the caret keys extend the selection (Shift held)
+     * @param time   the current time in milliseconds
+     * @return {@code true} if the text changed, {@code false} otherwise
+     */
+    public boolean press(@NotNull TextEditKey key, boolean extend, long time) {
         this.restartCaret(time);
 
-        return this.model.press(key);
+        return this.model.press(key, extend);
+    }
+
+    /**
+     * Moves the caret to an index under the pointer ({@link TextEditModel#moveCaret}).
+     *
+     * @param index  the UTF-16 index
+     * @param extend whether the move extends the selection (a drag, or a press with Shift held)
+     * @param time   the current time in milliseconds
+     */
+    public void moveCaret(int index, boolean extend, long time) {
+        this.restartCaret(time);
+        this.model.moveCaret(index, extend);
+    }
+
+    /**
+     * Selects the word around an index ({@link TextEditModel#selectWord}).
+     *
+     * @param index the UTF-16 index
+     * @param time  the current time in milliseconds
+     */
+    public void selectWord(int index, long time) {
+        this.restartCaret(time);
+        this.model.selectWord(index);
     }
 
     /**

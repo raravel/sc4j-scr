@@ -537,7 +537,8 @@ public final class ClassicStormArchives {
         }
 
         this.head[HEAD_LAST_LINK] = node.base;
-                                    this.lastNode = node;
+
+        this.lastNode = node;
 
         this.regions.add(node);
     }

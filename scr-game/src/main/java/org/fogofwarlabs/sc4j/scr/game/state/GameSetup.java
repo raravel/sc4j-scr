@@ -5,6 +5,9 @@ import org.fogofwarlabs.sc4j.engine.game.*;
 import org.fogofwarlabs.sc4j.scr.content.ScrNativeIds;
 import org.fogofwarlabs.sc4j.scr.core.GameSettings;
 import org.fogofwarlabs.sc4j.scr.core.LcgRandom;
+import org.fogofwarlabs.sc4j.scr.data.format.chk.ChkFile;
+import org.fogofwarlabs.sc4j.scr.data.format.mpq.MpqArchive;
+import org.fogofwarlabs.sc4j.scr.data.format.replay.ReplayFile;
 import org.fogofwarlabs.sc4j.scr.game.path.PathPool;
 import org.fogofwarlabs.sc4j.scr.game.player.Player;
 import org.fogofwarlabs.sc4j.scr.game.player.PlayerTable;
@@ -13,10 +16,12 @@ import org.fogofwarlabs.sc4j.scr.game.terrain.GameMap;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.io.IOException;
+
 /**
- * Holds the explicit inputs a game is created from: the game data, the map, the random generator in its initial state,
- * the C runtime generator in its initial state, the setup seed, the game options, the rules version, the cheat option,
- * the pool limits and the players.
+ * Holds the explicit inputs a game is created from: the game data, the map, the scenario the map was built from, the archive of the map file,
+ * the replay the game runs, the random generator in its initial state, the C runtime generator in its initial state, the setup seed, the game
+ * options, the rules version, the cheat option, the pool limits and the players.
  * <p>
  * {@link Game#create(GameSetup)} creates the engine game of the setup ({@link #createEngineSetup()}), whose SC:R game
  * system applies the rules version, the cheat option, the limits (creating the object pools) and the players. The setup
@@ -79,6 +84,9 @@ public final class GameSetup {
     public static final class Builder {
         private final @Nullable GameData gameData;
         private final @NotNull GameMap map;
+        private @Nullable ChkFile scenario;
+        private @Nullable MpqArchive mapArchive;
+        private @Nullable ReplayFile replay;
         private final @NotNull LcgRandom random;
         private @NotNull RuntimeRandom runtimeRandom;
         private int seed;
@@ -91,8 +99,8 @@ public final class GameSetup {
         private final @Nullable Player @NotNull [] players;
 
         /**
-         * Creates a {@link Builder} instance with the given inputs and a C runtime generator that nothing has seeded
-         * ({@link RuntimeRandom#DEFAULT_SEED}).
+         * Creates a {@link Builder} instance with the given inputs, no scenario, map archive or replay and a C runtime generator that
+         * nothing has seeded ({@link RuntimeRandom#DEFAULT_SEED}).
          *
          * @param gameData the game data tables, or {@code null} for a world built without game data
          * @param map      the map
@@ -101,6 +109,9 @@ public final class GameSetup {
         public Builder(@Nullable GameData gameData, @NotNull GameMap map, @NotNull LcgRandom random) {
             this.gameData      = gameData;
             this.map           = map;
+            this.scenario      = null;
+            this.mapArchive    = null;
+            this.replay        = null;
             this.random        = random;
             this.runtimeRandom = new RuntimeRandom(RuntimeRandom.DEFAULT_SEED);
             this.seed          = 0;
@@ -111,6 +122,42 @@ public final class GameSetup {
 
             this.limits  = null;
             this.players = new Player[PlayerTable.PLAYER_SLOTS];
+        }
+
+        /**
+         * Sets the scenario the map was built from.
+         *
+         * @param scenario the parsed scenario ({@code .chk}), which the game shares
+         * @return this instance for chaining
+         */
+        public @NotNull Builder setScenario(@NotNull ChkFile scenario) {
+            this.scenario = scenario;
+
+            return this;
+        }
+
+        /**
+         * Sets the archive of the map file the game starts from.
+         *
+         * @param mapArchive the opened map archive, which the game shares, or {@code null} for a game started otherwise
+         * @return this instance for chaining
+         */
+        public @NotNull Builder setMapArchive(@Nullable MpqArchive mapArchive) {
+            this.mapArchive = mapArchive;
+
+            return this;
+        }
+
+        /**
+         * Sets the replay the game runs: the recording a live game writes or the replay file it plays back.
+         *
+         * @param replay the replay, which the game shares
+         * @return this instance for chaining
+         */
+        public @NotNull Builder setReplay(@NotNull ReplayFile replay) {
+            this.replay = replay;
+
+            return this;
         }
 
         /**
@@ -215,8 +262,8 @@ public final class GameSetup {
     }
 
     /**
-     * Creates a {@link GameSetup} instance with only the data, the map and the random generator: an unseeded C runtime
-     * generator, no options, a new game's rules version, cheats disabled, no pools and no players.
+     * Creates a {@link GameSetup} instance with only the data, the map and the random generator: no scenario, map archive or replay, an
+     * unseeded C runtime generator, no options, a new game's rules version, cheats disabled, no pools and no players.
      *
      * @param gameData the game data tables, or {@code null} for a world built without game data
      * @param map      the map
@@ -255,6 +302,9 @@ public final class GameSetup {
 
     private final @Nullable GameData gameData;
     private final @NotNull GameMap map;
+    private final @Nullable ChkFile scenario;
+    private final @Nullable MpqArchive mapArchive;
+    private final @Nullable ReplayFile replay;
     private final @NotNull LcgRandom random;
     private final @NotNull RuntimeRandom runtimeRandom;
     private final int seed;
@@ -274,6 +324,9 @@ public final class GameSetup {
     private GameSetup(@NotNull Builder builder) {
         this.gameData      = builder.gameData;
         this.map           = builder.map;
+        this.scenario      = builder.scenario;
+        this.mapArchive    = builder.mapArchive;
+        this.replay        = builder.replay;
         this.random        = builder.random;
         this.runtimeRandom = builder.runtimeRandom;
         this.seed          = builder.seed;
@@ -298,6 +351,47 @@ public final class GameSetup {
      */
     public @NotNull GameMap getMap() {
         return this.map;
+    }
+
+    /**
+     * Returns the scenario ({@code .chk}) the map was built from; for a saved game, the scenario built from the save.
+     *
+     * @return the scenario, or {@code null} for a setup without one (previews and synthetic test worlds)
+     */
+    public @Nullable ChkFile getScenario() {
+        return this.scenario;
+    }
+
+    /**
+     * Returns the archive of the map file a live game starts from (single player, a network host, or a joiner with the map it received), which
+     * holds the scenario. The archive holds the whole file content, shared with the game's start and not copied.
+     *
+     * @return the archive, or {@code null} for a replay, a saved game, a campaign mission, a raw scenario file or a setup without one
+     */
+    public @Nullable MpqArchive getMapArchive() {
+        return this.mapArchive;
+    }
+
+    /**
+     * Reads a mod section of the replay the game plays back ({@link ReplayFile#readModSection}), which a game of the same mod wrote
+     * ({@link Game#setReplaySection}). Each call decodes the section anew. A live game, whose own recording holds no mod section, and a setup
+     * without a replay read none.
+     *
+     * @param tag the section tag: four printable ASCII characters other than SC:R's own tags ({@link ReplayFile#isModSectionTag})
+     * @return the section data, or {@code null} if the replay has no section of the tag
+     * @throws IOException              if the section is malformed or fails its checksum
+     * @throws IllegalArgumentException if the tag is not a mod section tag
+     */
+    public byte @Nullable [] readReplaySection(@NotNull String tag) throws IOException {
+        if (this.replay == null) {
+            if (!ReplayFile.isModSectionTag(tag)) {
+                throw Exceptions.newIllegalArgumentException("\"{0}\" is not a mod section tag.", tag);
+            }
+
+            return null;
+        }
+
+        return this.replay.readModSection(tag);
     }
 
     /**
@@ -371,8 +465,8 @@ public final class GameSetup {
      * @return the created engine {@link org.fogofwarlabs.sc4j.engine.game.GameSetup} instance
      */
     public org.fogofwarlabs.sc4j.engine.game.@NotNull GameSetup createEngineSetup() {
-        org.fogofwarlabs.sc4j.engine.game.GameSetup.Builder setup =
-                new org.fogofwarlabs.sc4j.engine.game.GameSetup.Builder(new MapReference("", new byte[0]));
+        MapReference map = new MapReference("", new byte[0]);
+        org.fogofwarlabs.sc4j.engine.game.GameSetup.Builder setup = new org.fogofwarlabs.sc4j.engine.game.GameSetup.Builder(map);
 
         for (int slotIdentifier = 0; slotIdentifier < this.players.length; slotIdentifier++) {
             Player player = this.players[slotIdentifier];

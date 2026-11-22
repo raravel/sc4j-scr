@@ -21,8 +21,8 @@ import java.util.Set;
 
 /**
  * Shows multiplayer provider information and the LAN protocol selection: the online service, which is Beacon.Link (the installed text names
- * it so), and the local network; the same game list, lobby and game screens play the games of both. Both play under the run's account
- * name, which the top right shows; Beacon.Link is offered only to a run with an account.
+ * it so), and the local network; the same game list, lobby and game screens play the games of both. Both play under the run player's
+ * name, which the top right shows in place of the login button; Beacon.Link is offered only to a run with an account.
  */
 public final class ConnectionScreen extends GlueScreen {
     private static final int LIST = 5;
@@ -36,6 +36,10 @@ public final class ConnectionScreen extends GlueScreen {
     private static final int PROTOCOL_PANEL = 17;
     private static final int PROTOCOL_TITLE = 30;
     private static final int PROTOCOL_UDP = 31;
+    /**
+     * The controls of LAN's pane, which move with the pane panel.
+     */
+    private static final int @NotNull [] PANE_CONTROLS = {PROTOCOL_PANEL, PROTOCOL_TITLE, PROTOCOL_UDP};
     private static final int LOGIN = 21;
     private static final int PLAYER_NAME = 22;
     /**
@@ -52,6 +56,10 @@ public final class ConnectionScreen extends GlueScreen {
      */
     private static final int BEACON_LINK_ROW = 0;
     private static final int LAN_ROW = 1;
+    /**
+     * The pane of a provider without one.
+     */
+    private static final int NO_PANE = -1;
     /**
      * The players a provider supports, as the screen shows it for LAN ({@code conSUPPORTED}).
      */
@@ -88,6 +96,10 @@ public final class ConnectionScreen extends GlueScreen {
 
     private @Nullable ListBox providers;
     /**
+     * The provider row whose pane the pane panel holds, or {@link #NO_PANE}.
+     */
+    private int paneProvider;
+    /**
      * The height of the heading line: the big glue font's line height, rounded up.
      */
     private int headingLine;
@@ -104,8 +116,9 @@ public final class ConnectionScreen extends GlueScreen {
     public ConnectionScreen() {
         super("gluConn", SHARED_PALETTE_FOLDER, getPaletteBackground(SHARED_PALETTE_FOLDER));
 
-        this.providers   = null;
-        this.headingLine = 0;
+        this.providers    = null;
+        this.paneProvider = NO_PANE;
+        this.headingLine  = 0;
 
         this.okButton       = null;
         this.protocolTitle  = null;
@@ -180,9 +193,15 @@ public final class ConnectionScreen extends GlueScreen {
             this.bindControl(control).setVisible(false);
         }
 
-        this.showPlayerName(LOGIN, PLAYER_NAME);
+        this.bindControl(LOGIN).setVisible(false);
+        this.bindControl(PLAYER_NAME).setReplacedText(glueContext.getTaggedPlayerName());
 
         this.setSwish(SWISH, SWISH_DELAY_MILLISECONDS);
+
+        for (int control : PANE_CONTROLS) {
+            this.moveWithPanel(control, PANE_PANEL);
+        }
+
         requireBound(this.protocolTitle).setReplacedText(glueContext.getGluText().get("bnet118_selectConnectionScreen_LANPane_title"));
         // Select the only supported LAN protocol.
         requireBound(this.protocolButton).setReplacedText(UDP_PROTOCOL_NAME);
@@ -195,20 +214,28 @@ public final class ConnectionScreen extends GlueScreen {
         list.select(glueContext.isBeaconLinkSelected() ? BEACON_LINK_ROW : LAN_ROW, list.getVisibleRows(glueContext.getCanvas()));
         this.providers = list;
 
-        this.updateProviderControls();
+        int pane = this.findPane();
+
+        if (pane == NO_PANE) {
+            this.keepPanelOut(PANE_PANEL);
+        }
+
+        this.setPane(pane);
+        this.updateOkButton();
     }
 
     /**
      * Called after the user changed the selection of a list or combo box, or the value of a slider.
      * <p>
-     * Updates the provider-dependent controls when the provider selection changes.
+     * Updates Ok and the pane when the provider selection changes.
      *
      * @param control the control id
      */
     @Override
     protected void onSelectionChanged(int control) {
         if (control == LIST) {
-            this.updateProviderControls();
+            this.updateOkButton();
+            this.selectPane();
         }
     }
 
@@ -226,14 +253,65 @@ public final class ConnectionScreen extends GlueScreen {
         return this.providers != null && this.providers.getSelection() == BEACON_LINK_ROW;
     }
 
-    private void updateProviderControls() {
-        boolean lanSelected = this.isLanSelected();
+    /**
+     * @return the selected provider's pane: {@link #LAN_ROW}, or {@link #NO_PANE} for Beacon.Link
+     */
+    private int findPane() {
+        return this.isLanSelected() ? LAN_ROW : NO_PANE;
+    }
 
-        requireBound(this.okButton).setEnabled(lanSelected || this.isBeaconLinkSelected() && this.getContext().getBeaconLink().isAvailable());
-        requireBound(this.protocolTitle).setVisible(lanSelected);
-        requireBound(this.protocolButton).setVisible(lanSelected);
-        requireBound(this.protocolPanel).setVisible(lanSelected);
-        requireBound(this.panePanel).setVisible(lanSelected);
+    private void updateOkButton() {
+        requireBound(this.okButton).setEnabled(this.isLanSelected() || this.isBeaconLinkSelected() && this.getContext().getBeaconLink().isAvailable());
+    }
+
+    /**
+     * Shows the selected provider's pane. The pane panel slides out when it holds another pane and then slides in with the new pane, or stays
+     * out when the provider has none; selecting the pane it holds slides it back in.
+     */
+    private void selectPane() {
+        int pane = this.findPane();
+
+        if (pane == this.paneProvider) {
+            if (pane != NO_PANE) {
+                this.slidePanelIn(PANE_PANEL);
+            }
+
+            return;
+        }
+
+        if (this.isPanelOnScreen(PANE_PANEL)) {
+            this.slidePanelOut(PANE_PANEL, () -> this.showPane(pane));
+        } else {
+            this.showPane(pane);
+        }
+    }
+
+    /**
+     * Fills the pane panel with a pane and slides it in.
+     *
+     * @param pane the provider row whose pane to show, or {@link #NO_PANE}
+     */
+    private void showPane(int pane) {
+        this.setPane(pane);
+
+        if (pane != NO_PANE) {
+            this.slidePanelIn(PANE_PANEL);
+        }
+    }
+
+    /**
+     * Sets the pane the pane panel holds: LAN's protocol pane is shown, no pane hides the panel.
+     *
+     * @param pane the provider row whose pane the panel holds, or {@link #NO_PANE}
+     */
+    private void setPane(int pane) {
+        boolean lan = pane == LAN_ROW;
+
+        this.paneProvider = pane;
+        requireBound(this.protocolTitle).setVisible(lan);
+        requireBound(this.protocolButton).setVisible(lan);
+        requireBound(this.protocolPanel).setVisible(lan);
+        requireBound(this.panePanel).setVisible(lan);
     }
 
     /**
@@ -291,7 +369,7 @@ public final class ConnectionScreen extends GlueScreen {
                 String supported = String.format(Locale.ROOT, glueContext.getGluText().get("conSUPPORTED"), SUPPORTED_PLAYERS);
                 String requirements = lanSelected
                                       ? glueContext.getGluText().get(LAN_REQUIREMENTS_KEY)
-                                      : BeaconLinkText.CONNECTION_REQUIREMENTS.get(glueContext.getLocale());
+                                      : OwnText.CONNECTION_REQUIREMENTS.get(glueContext.getLocale());
 
                 float innerLeft = left + PAGE_PADDING;
                 float innerWidth = control.getWidth() - SIDE_COUNT * PAGE_PADDING;

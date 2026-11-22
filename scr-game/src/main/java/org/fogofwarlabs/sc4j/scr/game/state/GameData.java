@@ -36,6 +36,8 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
@@ -87,14 +89,6 @@ public final class GameData implements AutoCloseable {
      */
     private static final int OVERLAY_TABLE_COUNT = ScrImageTypeView.OVERLAY_SHIELD + 1;
     /**
-     * The offset of the frame count DWORD of an overlay resource.
-     */
-    private static final int OVERLAY_FRAME_COUNT_OFFSET = 0;
-    /**
-     * The offset of the position count DWORD of an overlay resource.
-     */
-    private static final int OVERLAY_POSITION_COUNT_OFFSET = 4;
-    /**
      * The size of the overlay resource header; the frame offset DWORDs follow it.
      */
     private static final int OVERLAY_HEADER_SIZE = 8;
@@ -106,6 +100,10 @@ public final class GameData implements AutoCloseable {
      * The size of one position of an overlay frame: a signed horizontal and a signed vertical byte.
      */
     private static final int OVERLAY_POSITION_SIZE = 2;
+    /**
+     * Little-endian DWORD access to a resource at any byte offset.
+     */
+    private static final @NotNull VarHandle LITTLE_ENDIAN_DWORD = MethodHandles.byteArrayViewVarHandle(int[].class, ByteOrder.LITTLE_ENDIAN);
     /**
      * The damage-overlay positions of the first frame that the damage-overlay byte counts.
      */
@@ -262,8 +260,10 @@ public final class GameData implements AutoCloseable {
      * itself.
      */
     private final @Nullable GameData imageDamageOverlayBase;
-    private final int @NotNull [] @Nullable [] imageOverlayOffsets;
-    private final int @NotNull [] imageOverlayPositionCounts;
+    /**
+     * The overlay resources by image and overlay table, loaded on first use.
+     */
+    private final byte @NotNull [] @Nullable [] imageOverlayResources;
 
     /* Process-wide caches shared by the game copies. */
     private final @Nullable TerrainTileset @NotNull [] terrainTilesets;
@@ -358,10 +358,9 @@ public final class GameData implements AutoCloseable {
 
         this.codeConstants.loadExecutable(storage.getInstallRoot().resolve(EXECUTABLE_DIRECTORY).resolve(EXECUTABLE_FILE_NAME));
 
-        this.imageDamageOverlayCounts   = new int[ImagesDat.IMAGE_COUNT];
-        this.imageDamageOverlayBase     = null;
-        this.imageOverlayOffsets        = new int[ImagesDat.IMAGE_COUNT * OVERLAY_TABLE_COUNT][];
-        this.imageOverlayPositionCounts = new int[ImagesDat.IMAGE_COUNT * OVERLAY_TABLE_COUNT];
+        this.imageDamageOverlayCounts = new int[ImagesDat.IMAGE_COUNT];
+        this.imageDamageOverlayBase   = null;
+        this.imageOverlayResources    = new byte[ImagesDat.IMAGE_COUNT * OVERLAY_TABLE_COUNT][];
 
         Arrays.fill(this.imageDamageOverlayCounts, -1);
 
@@ -437,10 +436,9 @@ public final class GameData implements AutoCloseable {
         this.codeConstants  = base.codeConstants;
 
         // A game's own table for EUD writes, read through to the installed bytes until written.
-        this.imageDamageOverlayCounts   = new int[ImagesDat.IMAGE_COUNT];
-        this.imageDamageOverlayBase     = base.imageDamageOverlayBase == null ? base : base.imageDamageOverlayBase;
-        this.imageOverlayOffsets        = base.imageOverlayOffsets;
-        this.imageOverlayPositionCounts = base.imageOverlayPositionCounts;
+        this.imageDamageOverlayCounts = new int[ImagesDat.IMAGE_COUNT];
+        this.imageDamageOverlayBase   = base.imageDamageOverlayBase == null ? base : base.imageDamageOverlayBase;
+        this.imageOverlayResources    = base.imageOverlayResources;
 
         Arrays.fill(this.imageDamageOverlayCounts, -1);
 
@@ -1178,7 +1176,7 @@ public final class GameData implements AutoCloseable {
      * @param frameIndex   the actual image frame index
      * @param overlayIndex the coordinate pair within that frame
      * @return the horizontal signed WORD in the low half and vertical signed WORD in the high half
-     * @throws IOException if the resource is absent, malformed, or does not contain the requested position
+     * @throws IOException if the image has no Special Overlay resource or the read lies past the resource
      */
     public int getImageSpecialOverlayOffset(int imageTypeId, int frameIndex, int overlayIndex) throws IOException {
         return this.getImageOverlayOffset(imageTypeId, ScrImageTypeView.OVERLAY_SPECIAL, frameIndex, overlayIndex);
@@ -1186,6 +1184,9 @@ public final class GameData implements AutoCloseable {
 
     /**
      * Reads one signed coordinate pair from an image overlay resource.
+     * <p>
+     * The frame offset DWORD and the coordinate pair are read wherever they lie in the resource: neither the frame count nor the position count of
+     * the resource bounds the frame or the position.
      *
      * @param imageTypeId  the {@code images.dat} index
      * @param overlayType  the original overlay table index from attack {@code 0} through shield {@code 5}
@@ -1193,7 +1194,7 @@ public final class GameData implements AutoCloseable {
      * @param overlayIndex the coordinate pair within that frame
      * @return the horizontal signed WORD in the low half and vertical signed WORD in the high half
      * @throws IllegalArgumentException if the overlay table index is unsupported
-     * @throws IOException              if the resource or requested position is unavailable
+     * @throws IOException              if the image has no resource for the overlay table or the read lies past the resource
      */
     public int getImageOverlayOffset(int imageTypeId, int overlayType, int frameIndex, int overlayIndex) throws IOException {
         if (overlayType < ScrImageTypeView.OVERLAY_ATTACK || overlayType > ScrImageTypeView.OVERLAY_SHIELD) {
@@ -1216,59 +1217,38 @@ public final class GameData implements AutoCloseable {
         }
 
         int resourceIndex = imageTypeId * OVERLAY_TABLE_COUNT + overlayType;
-        int[] offsets = this.imageOverlayOffsets[resourceIndex];
+        byte[] contents = this.imageOverlayResources[resourceIndex];
 
-        if (offsets == null) {
+        if (contents == null) {
             int stringIndex = this.imageTypes.getOverlay(imageTypeId, overlayType) - 1;
 
-            if (stringIndex < 0 || stringIndex >= this.imagesTbl.getStringCount()) {
+            if (stringIndex < 0) {
+                throw Exceptions.newIOException("Image {0} has no overlay table {1}.", imageTypeId, overlayType);
+            }
+
+            if (stringIndex >= this.imagesTbl.getStringCount()) {
                 throw Exceptions.newIOException("Invalid image-overlay string index for image {0}: {1}", imageTypeId, stringIndex);
             }
 
-            String path = "unit/" + this.imagesTbl.getString(stringIndex).replace('\\', '/');
-            byte[] contents = this.storage.readFile(path);
-
-            if (contents.length < OVERLAY_HEADER_SIZE) {
-                throw Exceptions.newIOException("Image-overlay data lacks its header: {0}", path);
-            }
-
-            ByteBuffer source = ByteBuffer.wrap(contents).order(ByteOrder.LITTLE_ENDIAN);
-            long frameCount = Integer.toUnsignedLong(source.getInt(OVERLAY_FRAME_COUNT_OFFSET));
-            long positionCount = Integer.toUnsignedLong(source.getInt(OVERLAY_POSITION_COUNT_OFFSET));
-
-            if (frameCount == 0 || positionCount == 0 || frameCount > (contents.length - OVERLAY_HEADER_SIZE) / OVERLAY_FRAME_OFFSET_SIZE ||
-                positionCount > contents.length / OVERLAY_POSITION_SIZE || frameCount * positionCount > Integer.MAX_VALUE) {
-                throw Exceptions.newIOException("Invalid image-overlay dimensions: {0}", path);
-            }
-
-            offsets = new int[(int) (frameCount * positionCount)];
-
-            for (int frame = 0; frame < frameCount; frame++) {
-                long frameOffset = Integer.toUnsignedLong(source.getInt(OVERLAY_HEADER_SIZE + frame * OVERLAY_FRAME_OFFSET_SIZE));
-
-                if (frameOffset + positionCount * OVERLAY_POSITION_SIZE > contents.length) {
-                    throw Exceptions.newIOException("Image-overlay frame exceeds its resource: {0}", path);
-                }
-
-                for (int positionIndex = 0; positionIndex < positionCount; positionIndex++) {
-                    int offset = (int) frameOffset + positionIndex * OVERLAY_POSITION_SIZE;
-
-                    offsets[frame * (int) positionCount + positionIndex] = (contents[offset] & WORD_MASK) | contents[offset + 1] << Short.SIZE;
-                }
-            }
-
-            this.imageOverlayPositionCounts[resourceIndex] = (int) positionCount;
-            this.imageOverlayOffsets[resourceIndex]        = offsets;
+            contents                                  = this.storage.readFile("unit/" + this.imagesTbl.getString(stringIndex).replace('\\', '/'));
+            this.imageOverlayResources[resourceIndex] = contents;
         }
 
-        int positionCount = this.imageOverlayPositionCounts[resourceIndex];
+        long frameOffsetPosition = OVERLAY_HEADER_SIZE + (long) frameIndex * OVERLAY_FRAME_OFFSET_SIZE;
 
-        if (frameIndex < 0 || frameIndex >= offsets.length / positionCount || overlayIndex < 0 || overlayIndex >= positionCount) {
-            throw Exceptions.newIOException("Image-overlay position is unavailable for image {0}, frame {1}, position {2}",
+        if (frameIndex < 0 || frameOffsetPosition + OVERLAY_FRAME_OFFSET_SIZE > contents.length) {
+            throw Exceptions.newIOException("Image-overlay read of image {0}, frame {1} lies past the resource.", imageTypeId, frameIndex);
+        }
+
+        int frameOffset = (int) LITTLE_ENDIAN_DWORD.get(contents, (int) frameOffsetPosition);
+        long position = Integer.toUnsignedLong(frameOffset + overlayIndex * OVERLAY_POSITION_SIZE);
+
+        if (position + OVERLAY_POSITION_SIZE > contents.length) {
+            throw Exceptions.newIOException("Image-overlay read of image {0}, frame {1}, position {2} lies past the resource.",
                                             imageTypeId, frameIndex, overlayIndex);
         }
 
-        return offsets[frameIndex * positionCount + overlayIndex];
+        return (contents[(int) position] & WORD_MASK) | contents[(int) position + 1] << Short.SIZE;
     }
 
     /**

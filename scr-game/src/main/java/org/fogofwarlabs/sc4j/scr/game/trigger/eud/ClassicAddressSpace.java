@@ -2,6 +2,7 @@ package org.fogofwarlabs.sc4j.scr.game.trigger.eud;
 
 import org.fogofwarlabs.sc4j.base.exception.Exceptions;
 import org.fogofwarlabs.sc4j.scr.game.ai.ComputerPlayerPhase;
+import org.fogofwarlabs.sc4j.scr.game.extension.ScrGamePlugin;
 import org.fogofwarlabs.sc4j.scr.game.frame.GameSpeed;
 import org.fogofwarlabs.sc4j.scr.game.map.MapStringSection;
 import org.fogofwarlabs.sc4j.scr.game.movement.UnitMovement;
@@ -157,6 +158,10 @@ public final class ClassicAddressSpace implements ScrTriggerSystem.ExtendedDeath
      * The next-line byte of the message lines.
      */
     private static final int MESSAGE_CURSOR = 0x640B58;
+    /**
+     * The multiplier that combines the provided regions into the state hash ({@link #computeProvidedStateHash}).
+     */
+    private static final int HASH_MULTIPLIER = 31;
 
     /**
      * The game-data block (region type {@code 0x0C}, {@link #GAME_DATA_SIZE} bytes). Represented offsets: the minerals, gas,
@@ -767,7 +772,8 @@ public final class ClassicAddressSpace implements ScrTriggerSystem.ExtendedDeath
 
     /**
      * Creates a {@link ClassicAddressSpace} instance with a world's represented regions and the trigger state of a
-     * context.
+     * context and the regions of the world's memory sources ({@link ClassicMemorySource}), and hands a read-only view of it to the world's
+     * plugins ({@link ScrGamePlugin#onAddressSpaceCreated}).
      *
      * @param triggers the trigger context whose state the game-data block shows, or {@code null}
      * @param world    the world
@@ -995,14 +1001,14 @@ public final class ClassicAddressSpace implements ScrTriggerSystem.ExtendedDeath
                 space.addAll(space.buttonSets.getRegions());
             }
 
-            // The type-7 regions wider than a DWORD serve their 1.16 records unless a domain region shows them.
+            // The type-7 regions wider than a DWORD serve their 1.16 records, the emulation's own copies, unless a domain region shows them.
             for (int index = 0; index < NativeCodeConstants.SNAPSHOT_REGIONS.length; index += NativeRegionLayout.REGION_ROW_SIZE) {
                 int base = NativeCodeConstants.SNAPSHOT_REGIONS[index];
                 int size = NativeCodeConstants.SNAPSHOT_REGIONS[index + 1];
                 byte[] bytes = world.getGameContext().getCodeConstants().getSnapshot(base, size);
 
                 if (bytes != null && space.isFree(base, size)) {
-                    space.add(new ClassicStorageRegion(base, bytes));
+                    space.add(ClassicStorageRegion.createEmulatorStorageRegion(base, bytes));
                 }
             }
         }
@@ -1037,9 +1043,32 @@ public final class ClassicAddressSpace implements ScrTriggerSystem.ExtendedDeath
             space.addAll(ClassicStormArchives.create(world.getGameContext().getCodeConstants().getStormArchives(), mapPath, mapFile, next));
         }
 
+        ClassicConsoleAreasUtils.fill(space, world.getGameContext().getContextStorage()[GameStructureView.CONSOLE_RACE_OFFSET]);
+
+        ClassicMemorySource[] sources = world.getMemorySources();
+
+        if (sources.length != 0) {
+            ClassicMemorySink sink = new ClassicMemorySink(space);
+
+            for (ClassicMemorySource source : sources) {
+                source.provideRegions(sink);
+            }
+        }
+
         // The map-dependent regions are complete with the trigger nodes when the archive list is built or not made at all.
         space.mapRegionsComplete = triggers != null && triggers.getExtendedDeathsMode() != 0 && (!archiveList || archivesKnown);
         space.archiveListAbsent  = !archiveList;
+
+        // The game's plugins observe the complete address space through a read-only view.
+        ScrGamePlugin[] plugins = world.getPlugins();
+
+        if (plugins.length != 0) {
+            ClassicMemoryView view = new ClassicMemoryView(space);
+
+            for (ScrGamePlugin plugin : plugins) {
+                plugin.onAddressSpaceCreated(view);
+            }
+        }
 
         return space;
     }
@@ -1122,6 +1151,21 @@ public final class ClassicAddressSpace implements ScrTriggerSystem.ExtendedDeath
     private int layoutVersion;
 
     /**
+     * The write observers ({@link #addWriteObserver}) and the unsigned bases and ends of their ranges, in the order they were added.
+     */
+    private @NotNull ClassicWriteObserver @NotNull [] writeObservers;
+    private long @NotNull [] observedBases;
+    private long @NotNull [] observedEnds;
+
+    /**
+     * The regions of the memory sources ({@link #provide}) in the order they were added, with the state hash digest of each and the change count
+     * the digest was made at ({@code -1} for none).
+     */
+    private @NotNull ClassicRegion @NotNull [] provided;
+    private int @NotNull [] providedDigests;
+    private long @NotNull [] providedChangeCounts;
+
+    /**
      * Creates an empty {@link ClassicAddressSpace} instance.
      */
     public ClassicAddressSpace() {
@@ -1144,6 +1188,14 @@ public final class ClassicAddressSpace implements ScrTriggerSystem.ExtendedDeath
         this.lastHitIndex     = -1;
         this.previousHitIndex = -1;
         this.layoutVersion    = 0;
+
+        this.writeObservers = new ClassicWriteObserver[0];
+        this.observedBases  = new long[0];
+        this.observedEnds   = new long[0];
+
+        this.provided             = new ClassicRegion[0];
+        this.providedDigests      = new int[0];
+        this.providedChangeCounts = new long[0];
     }
 
     /**
@@ -1300,6 +1352,154 @@ public final class ClassicAddressSpace implements ScrTriggerSystem.ExtendedDeath
     }
 
     /**
+     * Adds an observer of the aligned DWORD writes to a range ({@link ClassicWriteObserver}).
+     *
+     * @param base     the classic address of the range
+     * @param size     the size of the range in bytes, at least {@code 1}
+     * @param observer the observer
+     * @throws IllegalArgumentException if the size is not positive
+     */
+    void addWriteObserver(int base, int size, @NotNull ClassicWriteObserver observer) {
+        if (size <= 0) {
+            throw Exceptions.newIllegalArgumentException("The observed range size must be positive: {0}", size);
+        }
+
+        int count = this.writeObservers.length;
+
+        this.writeObservers = Arrays.copyOf(this.writeObservers, count + 1);
+        this.observedBases  = Arrays.copyOf(this.observedBases, count + 1);
+        this.observedEnds   = Arrays.copyOf(this.observedEnds, count + 1);
+
+        this.writeObservers[count] = observer;
+        this.observedBases[count]  = base & DWORD_MASK;
+        this.observedEnds[count]   = (base & DWORD_MASK) + size;
+    }
+
+    /**
+     * Adds a region of a memory source ({@link ClassicMemorySink#add}), replacing the emulation storage regions it covers.
+     *
+     * @param region the region
+     * @throws IllegalArgumentException if the region may not be added
+     */
+    void provide(@NotNull ClassicRegion region) {
+        long base = region.getBase() & DWORD_MASK;
+        long end = base + region.getSize();
+
+        if (region.getSize() <= 0 || end > (NativeRegionLayout.MAP_REGION_BASE & DWORD_MASK)) {
+            throw Exceptions.newIllegalArgumentException("Provided region 0x{0} is empty or reaches the map-dependent regions.",
+                                                         String.format("%08X", region.getBase()));
+        }
+
+        List<ClassicRegion> replaced = new ArrayList<>();
+        long next = base;
+
+        for (int index = 0; index < this.sorted.length; index++) {
+            if (this.sortedEnds[index] <= base || this.sortedBases[index] >= end) {
+                continue;
+            }
+
+            ClassicRegion existing = this.sorted[index];
+
+            if (!existing.isEmulatorStorage() || this.sortedBases[index] < base || this.sortedEnds[index] > end) {
+                throw Exceptions.newIllegalArgumentException("Provided region 0x{0} overlaps region 0x{1}, which is not emulation storage it covers.",
+                                                             String.format("%08X", region.getBase()),
+                                                             String.format("%08X", existing.getBase()));
+            }
+
+            requireNativeGap(region, next, this.sortedBases[index]);
+            replaced.add(existing);
+            next = this.sortedEnds[index];
+        }
+
+        requireNativeGap(region, next, end);
+
+        for (ClassicRegion existing : replaced) {
+            this.remove(existing);
+        }
+
+        this.add(region);
+
+        int count = this.provided.length;
+
+        this.provided             = Arrays.copyOf(this.provided, count + 1);
+        this.providedDigests      = Arrays.copyOf(this.providedDigests, count + 1);
+        this.providedChangeCounts = Arrays.copyOf(this.providedChangeCounts, count + 1);
+
+        this.provided[count]             = region;
+        this.providedChangeCounts[count] = -1;
+    }
+
+    private static void requireNativeGap(@NotNull ClassicRegion region, long start, long end) {
+        if (start < end && !NativeRegionLayout.isRangeUnmapped((int) start, (int) (end - start))) {
+            throw Exceptions.newIllegalArgumentException("Provided region 0x{0} covers native memory at 0x{1} that no region serves.",
+                                                         String.format("%08X", region.getBase()),
+                                                         String.format("%08X", start));
+        }
+    }
+
+    /**
+     * Mixes the bytes of the memory sources' regions ({@link #provide}) into a state hash; without provided regions it returns the hash
+     * unchanged. A region that tracks its changes ({@link ClassicRegion#getChangeCount()}) is read again only after a change.
+     *
+     * @param hash the hash so far
+     * @return the hash with the provided regions mixed in
+     */
+    public int computeProvidedStateHash(int hash) {
+        for (int index = 0; index < this.provided.length; index++) {
+            ClassicRegion region = this.provided[index];
+            long changeCount = region.getChangeCount();
+
+            if (changeCount < 0 || changeCount != this.providedChangeCounts[index]) {
+                byte[] bytes = new byte[region.getSize()];
+
+                region.read(0, bytes, 0, bytes.length);
+
+                this.providedDigests[index]      = Arrays.hashCode(bytes);
+                this.providedChangeCounts[index] = changeCount;
+            }
+
+            hash = HASH_MULTIPLIER * hash + region.getBase();
+            hash = HASH_MULTIPLIER * hash + this.providedDigests[index];
+        }
+
+        return hash;
+    }
+
+    /**
+     * Tells whether an observer's range holds a byte of an aligned DWORD.
+     *
+     * @param address the aligned classic address
+     * @return {@code true} if a write to the DWORD calls an observer, {@code false} otherwise
+     */
+    private boolean isObserved(int address) {
+        long target = address & DWORD_MASK;
+
+        for (int index = 0; index < this.writeObservers.length; index++) {
+            if (target + Integer.BYTES > this.observedBases[index] && target < this.observedEnds[index]) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Calls the observers whose range holds an aligned DWORD write.
+     *
+     * @param address the aligned classic address
+     * @param value   the DWORD the write stores
+     */
+    private void notifyWrite(int address, int value) {
+        long target = address & DWORD_MASK;
+
+        for (int index = 0; index < this.writeObservers.length; index++) {
+            if (target + Integer.BYTES > this.observedBases[index] && target < this.observedEnds[index]) {
+                this.writeObservers[index].onWrite(address, value);
+            }
+        }
+    }
+
+    /**
      * Commits the regions a write modified: the {@code stat_txt} copy becomes the world's table and the classic button
      * sets rebuild the world's button set table and a written free-list head rebuilds its pool's free list
      * ({@link ClassicPoolHeads}).
@@ -1396,6 +1596,55 @@ public final class ClassicAddressSpace implements ScrTriggerSystem.ExtendedDeath
     }
 
     /**
+     * Reads bytes as the aligned DWORD reads of a trigger condition give them, without reporting an access failure: a range of a plain memory
+     * region ({@link ClassicRegion#isPlainMemory()}) outside the overlay is copied whole, other bytes are read by DWORD. The read stops at the first
+     * DWORD no represented region serves.
+     *
+     * @param address     the classic address of the first byte
+     * @param destination the receiving array
+     * @param offset      the first index written
+     * @param length      the number of bytes
+     * @return the number of bytes read, {@code length} unless the read stopped
+     */
+    public int readQuietly(int address, byte @NotNull [] destination, int offset, int length) {
+        int[] dword = new int[1];
+        int count = 0;
+
+        while (count < length) {
+            int current = address + count;
+            int regionIndex = this.findRegionIndex(current);
+
+            if (regionIndex >= 0 && this.sorted[regionIndex].isPlainMemory()) {
+                long start = current & DWORD_MASK;
+                int chunk = (int) Math.min(length - count, this.sortedEnds[regionIndex] - start);
+
+                if (this.overlay == null || start >= this.overlayEnd || start + chunk <= this.overlayBase) {
+                    this.sorted[regionIndex].read((int) (start - this.sortedBases[regionIndex]), destination, offset + count, chunk);
+                    count += chunk;
+
+                    continue;
+                }
+            }
+
+            int aligned = current & ~ClassicRegion.DWORD_OFFSET_MASK;
+
+            try {
+                if (!this.readQuietly(aligned, dword)) {
+                    return count;
+                }
+            } catch (UnsupportedOperationException exception) {
+                return count;
+            }
+
+            for (int index = current - aligned; index < Integer.BYTES && count < length; index++) {
+                destination[offset + count++] = (byte) (dword[0] >>> index * Byte.SIZE);
+            }
+        }
+
+        return count;
+    }
+
+    /**
      * Reads the DWORD at a classic address as the low-level read of the emulation: an unaligned address combines the two
      * aligned DWORDs it spans, each read through its own region.
      *
@@ -1489,6 +1738,10 @@ public final class ClassicAddressSpace implements ScrTriggerSystem.ExtendedDeath
     private void writeAligned(int address, int value) {
         int regionIndex = this.requireRegionIndex(address);
         ClassicRegion region = this.sorted[regionIndex];
+
+        if (this.writeObservers.length != 0) {
+            this.notifyWrite(address, value);
+        }
 
         if (region.isWriteIgnored() && !this.overlapsOverlay(address)) {
             return;
@@ -1638,6 +1891,12 @@ public final class ClassicAddressSpace implements ScrTriggerSystem.ExtendedDeath
                 int offset = (int) ((address & DWORD_MASK) - this.sortedBases[regionIndex]);
 
                 if (this.sortedEnds[regionIndex] - (address & DWORD_MASK) >= Integer.BYTES && !region.isWriteIgnored()) {
+                    if (this.writeObservers.length != 0 && this.isObserved(address)) {
+                        int stored = modifier == TriggerModifiers.SET_TO ? amount : PlayerScores.modify(region.readDword(offset), modifier, amount);
+
+                        this.notifyWrite(address, stored);
+                    }
+
                     region.writeModified(offset, modifier, amount);
                     this.notifyWatch(address);
 

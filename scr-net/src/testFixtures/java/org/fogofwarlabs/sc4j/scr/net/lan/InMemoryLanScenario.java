@@ -18,8 +18,8 @@ import java.util.function.Predicate;
 /**
  * Provider sessions and their lobbies over in-memory datagrams routed by address, on one millisecond clock: client {@code 0}
  * hosts, the others join it one after another. A client can be silenced (its datagrams vanish both ways, as a player whose
- * network went away) or leave. A datagram arrives {@link #latency} milliseconds after it was sent; every client's packets
- * are recorded ({@link #sentPackets}).
+ * network went away) or leave. A datagram arrives {@link #latency} milliseconds after it was sent, up to {@link #jitter}
+ * milliseconds later at random, and {@link #lossPercent} percent of them are lost; every client's packets are recorded ({@link #sentPackets}).
  */
 final class InMemoryLanScenario {
     private static final int CLOCK_BASE = 10_000_000;
@@ -32,8 +32,9 @@ final class InMemoryLanScenario {
     private static final @NotNull String DEFAULT_GAME_NAME = "game";
 
     private static final int HOST = 0;
+    private static final int PERCENT = 100;
 
-    private static final int JOIN_LIMIT_MILLISECONDS = 3000;
+    private static final int JOIN_LIMIT_MILLISECONDS = 10_000;
     /**
      * The time a leaving client's provider needs to send its leave, and the time the others need to process the departure.
      */
@@ -44,11 +45,13 @@ final class InMemoryLanScenario {
         private final @NotNull InetSocketAddress source;
         private final byte @NotNull [] packet;
         private final int due;
+        private final long order;
 
-        private Datagram(@NotNull InetSocketAddress source, byte @NotNull [] packet, int due) {
+        private Datagram(@NotNull InetSocketAddress source, byte @NotNull [] packet, int due, long order) {
             this.source = source;
             this.packet = packet;
             this.due    = due;
+            this.order  = order;
         }
     }
 
@@ -59,14 +62,27 @@ final class InMemoryLanScenario {
      * The packets each client sent, in order, a silenced client's too.
      */
     final @NotNull List<List<ProviderPacket>> sentPackets;
-    private final @NotNull Map<InetSocketAddress, ArrayDeque<Datagram>> queues;
+    private final @NotNull Map<InetSocketAddress, PriorityQueue<Datagram>> queues;
     private final boolean @NotNull [] silent;
+    private long sentDatagrams;
 
     int now;
     /**
      * The one-way delay of every datagram in milliseconds.
      */
     int latency;
+    /**
+     * The most milliseconds a datagram arrives later than {@link #latency}, at random: datagrams arrive in another order.
+     */
+    int jitter;
+    /**
+     * The percent of datagrams that are lost, at random.
+     */
+    int lossPercent;
+    /**
+     * The random source of the losses and the jitter.
+     */
+    @NotNull Random random;
     /**
      * The name of the game the host creates ({@link #host}).
      */
@@ -89,10 +105,13 @@ final class InMemoryLanScenario {
         this.queues      = new HashMap<>();
         this.silent      = new boolean[clients];
 
-        this.now       = CLOCK_BASE;
-        this.latency   = 0;
-        this.gameName  = DEFAULT_GAME_NAME;
-        this.afterStep = () -> {
+        this.now         = CLOCK_BASE;
+        this.latency     = 0;
+        this.jitter      = 0;
+        this.lossPercent = 0;
+        this.random      = new Random(0);
+        this.gameName    = DEFAULT_GAME_NAME;
+        this.afterStep   = () -> {
         };
 
         for (int index = 0; index < clients; index++) {
@@ -101,14 +120,17 @@ final class InMemoryLanScenario {
 
             this.addresses[index] = source;
             this.sentPackets.add(new ArrayList<>());
-            this.queues.put(source, new ArrayDeque<>());
+            this.queues.put(source, new PriorityQueue<>(Comparator.comparingInt((Datagram datagram) -> datagram.due - CLOCK_BASE)
+                                                                  .thenComparingLong(datagram -> datagram.order)));
             this.sessions[index] = new ProviderSession((address, packet) -> {
-                ArrayDeque<Datagram> queue = this.queues.get(address);
+                PriorityQueue<Datagram> queue = this.queues.get(address);
 
                 this.sentPackets.get(sender).add(packet);
 
-                if (queue != null && !this.silent[sender]) {
-                    queue.add(new Datagram(source, packet.getEncodedBytes(), this.now + this.latency));
+                if (queue != null && !this.silent[sender] && this.random.nextInt(PERCENT) >= this.lossPercent) {
+                    int delay = this.latency + (this.jitter == 0 ? 0 : this.random.nextInt(this.jitter + 1));
+
+                    queue.add(new Datagram(source, packet.getEncodedBytes(), this.now + delay, this.sentDatagrams++));
                 }
             }, () -> this.now);
         }
@@ -124,7 +146,7 @@ final class InMemoryLanScenario {
             delivered = false;
 
             for (int index = 0; index < this.addresses.length; index++) {
-                ArrayDeque<Datagram> queue = this.queues.get(this.addresses[index]);
+                PriorityQueue<Datagram> queue = this.queues.get(this.addresses[index]);
 
                 while (!queue.isEmpty() && queue.peek().due - this.now <= 0) {
                     Datagram datagram = queue.poll();

@@ -39,6 +39,10 @@ public final class TerrainRegions implements RegionGraph {
      */
     static final int GRID_WIDTH = GameMap.MAXIMUM_DIMENSION;
     /**
+     * The tiles of the fixed tile-region grid.
+     */
+    static final int TILE_COUNT = GRID_WIDTH * GRID_WIDTH;
+    /**
      * The mini-tiles of one tile row and column, the miniature grid cells of a tile.
      */
     static final int MINI_TILES_PER_ROW = 4;
@@ -349,7 +353,7 @@ public final class TerrainRegions implements RegionGraph {
 
     private TerrainRegions() {
         this.regionCount = 0;
-        this.tileRegions = new short[GRID_WIDTH * GRID_WIDTH];
+        this.tileRegions = new short[TILE_COUNT];
 
         this.terrainTypes = new short[REGION_COUNT];
         this.components   = new short[REGION_COUNT];
@@ -701,9 +705,10 @@ public final class TerrainRegions implements RegionGraph {
             this.neighboringComponentCounts[region] = data.get(entry + SAVED_COMPONENT_NEIGHBORS);
             this.zeroNeighborCounts[region]         = data.get(entry + SAVED_ZERO_NEIGHBORS);
 
+            int inlineNeighborStart = region * INLINE_NEIGHBOR_COUNT;
+
             for (int neighbor = 0; neighbor < INLINE_NEIGHBOR_COUNT; neighbor++) {
-                this.inlineNeighborRegions[region * INLINE_NEIGHBOR_COUNT + neighbor] =
-                        data.getShort(entry + SAVED_INLINE_NEIGHBORS + neighbor * Short.BYTES);
+                this.inlineNeighborRegions[inlineNeighborStart + neighbor] = data.getShort(entry + SAVED_INLINE_NEIGHBORS + neighbor * Short.BYTES);
             }
         }
 
@@ -806,15 +811,21 @@ public final class TerrainRegions implements RegionGraph {
     }
 
     /**
-     * Compares the connected components containing two pixel positions.
+     * Compares the connected components containing two pixel positions. A position whose tile index lies outside the tile grid
+     * ({@link TerrainRegionLookupUtils#isInTileGrid}) shares no component.
      *
      * @param sourceHorizontal      the source horizontal pixel coordinate
      * @param sourceVertical        the source vertical pixel coordinate
      * @param destinationHorizontal the destination horizontal DWORD
      * @param destinationVertical   the destination vertical DWORD
-     * @return {@code true} if both original region records have the same component WORD, {@code false} otherwise
+     * @return {@code true} if both positions lie in the tile grid and their region records have the same component WORD, {@code false} otherwise
      */
     public boolean sharesComponent(int sourceHorizontal, int sourceVertical, int destinationHorizontal, int destinationVertical) {
+        if (!TerrainRegionLookupUtils.isInTileGrid(sourceHorizontal, sourceVertical) ||
+            !TerrainRegionLookupUtils.isInTileGrid(destinationHorizontal, destinationVertical)) {
+            return false;
+        }
+
         int sourceRegion = TerrainRegionLookupUtils.lookup(this, sourceHorizontal, sourceVertical);
         int destinationRegion = TerrainRegionLookupUtils.lookup(this, destinationHorizontal, destinationVertical);
 

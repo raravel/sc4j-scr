@@ -353,7 +353,7 @@ abstract class BeaconLinkPopup extends GluePopup {
     }
 
     /**
-     * Called first for every press of the screen that no open popup or open combo box takes.
+     * Called first for every press of the screen that no open popup or open combo box takes, while the screen takes input.
      * <p>
      * Takes presses on the list's scroll bar, and selects the row under a press on the list.
      *

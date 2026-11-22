@@ -8,7 +8,8 @@ import org.jetbrains.annotations.NotNull;
  * Splits command bytes into commands by the command lengths of the game.
  * <p>
  * Two length rules exist. The stored length ({@link #getStoredLength}) is the length table the replay loader splits the
- * recorded command stream with: a fixed length per command type, and the handle count for the selections. The command
+ * recorded command stream with: a fixed length per command type, the handle count for the selections and the data length
+ * for the SC4J mod command ({@link ReplayModCommand}). The command
  * length ({@link #getCommandLength}) is what the command dispatcher consumes when it runs a buffer of commands: the
  * stored length, except Sync ({@value #SYNC_COMMAND_LENGTH} bytes) and Save Game or Load Game (the time DWORD and a
  * terminated file name without control characters), and none for a command type without a dispatcher case.
@@ -33,6 +34,10 @@ public final class ReplayCommandUtils {
     static final int HANDLE_WIDTH_121 = 4;
 
     private static final int BYTE_MASK = 0xFF;
+    /**
+     * The number of command type bytes.
+     */
+    private static final int TYPE_COUNT = 1 << Byte.SIZE;
     /**
      * The length result of a command type without a length.
      */
@@ -71,12 +76,12 @@ public final class ReplayCommandUtils {
             ReplayCommandIds.REPLAY_SPEED, ReplayCommandIds.LEAVE_GAME, ReplayCommandIds.MINIMAP_PING, ReplayCommandIds.MERGE_DARK_ARCHON,
             ReplayCommandIds.CHAT, ReplayCommandIds.REPLAY_SEEK, ReplayCommandIds.TURN_RATE, ReplayCommandIds.RIGHT_CLICK_121,
             ReplayCommandIds.TARGETED_ORDER_121, ReplayCommandIds.UNLOAD_121, ReplayCommandIds.SELECT_121, ReplayCommandIds.SELECT_ADD_121,
-            ReplayCommandIds.SELECT_REMOVE_121, ReplayCommandIds.DYNAMIC_TURN_RATE
+            ReplayCommandIds.SELECT_REMOVE_121, ReplayCommandIds.DYNAMIC_TURN_RATE, ReplayCommandIds.MOD_COMMAND
     };
     /**
      * Whether the dispatcher has a case for a command type, indexed by the type.
      */
-    private static final boolean @NotNull [] DISPATCHED = new boolean[STORED_LENGTHS.length];
+    private static final boolean @NotNull [] DISPATCHED = new boolean[TYPE_COUNT];
     /**
      * The command types the dispatcher runs from a received turn during replay playback.
      */
@@ -87,7 +92,7 @@ public final class ReplayCommandUtils {
     /**
      * Whether the dispatcher runs a command type from a received turn during replay playback, indexed by the type.
      */
-    private static final boolean @NotNull [] REPLAY_TURN = new boolean[STORED_LENGTHS.length];
+    private static final boolean @NotNull [] REPLAY_TURN = new boolean[TYPE_COUNT];
 
     /**
      * The bytes that give a selection's length: the type byte and the handle count.
@@ -139,14 +144,26 @@ public final class ReplayCommandUtils {
     }
 
     /**
-     * Returns the stored length of a command: the length the replay loader splits the recorded command stream with.
+     * Returns the stored length of a command: the length the replay loader splits the recorded command stream with. A type without a stored
+     * length, a selection whose handle count lies past the bytes and a mod command whose length byte lies past the bytes or names more than
+     * {@link ReplayModCommand#MAXIMUM_DATA_LENGTH} data bytes have none.
      *
      * @param data   the command bytes
      * @param offset the offset of the command's type byte
-     * @return the length, type byte included, or {@code -1} for a type without a stored length or a selection whose handle count lies past the bytes
+     * @return the length, type byte included, or {@code -1} for none
      */
     public static int getStoredLength(byte @NotNull [] data, int offset) {
         int typeIdentifier = data[offset] & BYTE_MASK;
+
+        if (typeIdentifier == ReplayCommandIds.MOD_COMMAND) {
+            if (offset + 1 >= data.length) {
+                return NO_LENGTH;
+            }
+
+            int dataLength = data[offset + 1] & BYTE_MASK;
+
+            return dataLength > ReplayModCommand.MAXIMUM_DATA_LENGTH ? NO_LENGTH : ReplayModCommand.HEADER_SIZE + dataLength;
+        }
 
         if (ReplaySelectionCommand.supports(typeIdentifier)) {
             if (offset + 1 >= data.length) {
@@ -193,11 +210,11 @@ public final class ReplayCommandUtils {
      * Returns the command length of a command type whose length does not depend on its bytes.
      *
      * @param typeIdentifier the command type byte
-     * @return the length, type byte included, or {@code -1} for a type without a dispatcher case, a selection, Save Game and Load Game
+     * @return the length, type byte included, or {@code -1} for an undispatched type, a selection, Save Game, Load Game and the mod command
      */
     public static int getFixedLength(int typeIdentifier) {
         if (!isDispatched(typeIdentifier) || typeIdentifier == ReplayCommandIds.SAVE_GAME || typeIdentifier == ReplayCommandIds.LOAD_GAME ||
-            ReplaySelectionCommand.supports(typeIdentifier)) {
+            typeIdentifier == ReplayCommandIds.MOD_COMMAND || ReplaySelectionCommand.supports(typeIdentifier)) {
             return NO_LENGTH;
         }
 

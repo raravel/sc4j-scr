@@ -78,6 +78,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.function.Consumer;
 import java.util.function.LongConsumer;
 
 /**
@@ -487,6 +488,7 @@ public final class ClientSession implements AutoCloseable {
         if (isMapArchive(mapPath)) {
             session.mapArchive       = mapPath.toAbsolutePath().normalize();
             session.mapCompatibility = setup.isMapCompatibility();
+            session.openedMapArchive = setup.getMapArchive();
         }
 
         return session;
@@ -742,6 +744,7 @@ public final class ClientSession implements AutoCloseable {
 
         session.mapArchive       = mapPath.toAbsolutePath().normalize();
         session.mapCompatibility = setup.isMapCompatibility();
+        session.openedMapArchive = setup.getMapArchive();
 
         return session;
     }
@@ -884,6 +887,10 @@ public final class ClientSession implements AutoCloseable {
     private int pausedMode;
     private boolean waitingForTurns;
     /**
+     * The pacing of the live game's frames and turn waits, which a network game reports once a second ({@link #reportLivePacing()}).
+     */
+    private final @NotNull LivePacingStatistics pacingStatistics;
+    /**
      * Test harness: called with the frame about to exchange its turn ({@link #setTurnListener}), or {@code null}.
      */
     private @Nullable LongConsumer turnListener;
@@ -909,7 +916,8 @@ public final class ClientSession implements AutoCloseable {
     private boolean mapCompatibility;
     private @Nullable String campaignDirectory;
     /**
-     * The opened map archive of {@link #mapArchive}, read once by the first map file read ({@link #readMapFile}), or {@code null} before it.
+     * The opened map archive of {@link #mapArchive}: the archive a live game's setup opened ({@link MeleeGameSetup#getMapArchive()}), else read
+     * once by the first map file read ({@link #readMapFile}), or {@code null} before it.
      */
     private @Nullable MpqArchive openedMapArchive;
     /**
@@ -943,6 +951,7 @@ public final class ClientSession implements AutoCloseable {
     private long lastSaveTick;
 
     private @Nullable LanClient networkClient;
+    private @Nullable GameCommunityChat communityChat;
     private int gameFlags;
     /**
      * The recipient slot, force or special chat target.
@@ -1009,6 +1018,7 @@ public final class ClientSession implements AutoCloseable {
         this.replayPaused       = false;
         this.pausedMode         = PLAYING_TIMING_MODE;
         this.waitingForTurns    = false;
+        this.pacingStatistics   = new LivePacingStatistics(System.nanoTime());
         this.turnListener       = null;
 
         this.locale              = GameLocaleUtils.FALLBACK;
@@ -1036,6 +1046,7 @@ public final class ClientSession implements AutoCloseable {
         this.lastSaveTick  = NO_SAVE_TICK;
 
         this.networkClient = null;
+        this.communityChat = null;
         this.gameFlags     = 0;
         this.chatRecipient = ChatPrompt.RECIPIENT_ALL;
         this.chatLabel     = "";
@@ -1215,7 +1226,9 @@ public final class ClientSession implements AutoCloseable {
     }
 
     /**
-     * Returns a map string of the game's scenario (its {@code STR } or {@code STRx} section), as trigger text and sound events reference it.
+     * Returns a map string of the game's scenario as trigger text and sound events reference it: through the live string section of the
+     * presentation's game ({@link MessageLines#getMapString}), which includes its registered strings, or else the scenario's {@code STR } or
+     * {@code STRx} section.
      *
      * @param index the one-based string index ({@code 0} is no string)
      * @return the decoded string, or an empty string for {@code 0} or an index outside the table
@@ -1223,6 +1236,12 @@ public final class ClientSession implements AutoCloseable {
     public @NotNull String getMapString(int index) {
         if (index <= 0) {
             return "";
+        }
+
+        String resolved = this.presentation.getInterfaceLink().getMessageLines().getMapString(index);
+
+        if (resolved != null) {
+            return resolved;
         }
 
         List<String> strings = this.mapFile.getStrings();
@@ -1679,10 +1698,38 @@ public final class ClientSession implements AutoCloseable {
     }
 
     /**
+     * @return {@code true} if this session runs a live game whose local player is an observer ({@link LiveGame#isLocalObserver()}),
+     * {@code false} otherwise
+     */
+    public boolean isLocalObserver() {
+        return this.liveGame != null && this.liveGame.isLocalObserver();
+    }
+
+    /**
      * @return {@code true} if the last step awaited a network player's turn without running a frame, {@code false} otherwise
      */
     public boolean isWaitingForTurns() {
         return this.waitingForTurns;
+    }
+
+    /**
+     * Records a frame the client presented, for the live pacing report ({@link #reportLivePacing()}).
+     */
+    void recordPresentedFrame() {
+        this.pacingStatistics.recordPresentedFrame();
+    }
+
+    /**
+     * Logs the pacing of a network game once a second at {@code INFO} ({@code LIVE PACING}): the frames simulated per second with their
+     * average and longest simulation time, the frames presented per second, and the milliseconds per second the game waited for players' turns
+     * with its longest single wait. The period of any other session is discarded without a log.
+     */
+    void reportLivePacing() {
+        String report = this.pacingStatistics.takeReport(System.nanoTime());
+
+        if (report != null && this.isNetworkGame()) {
+            LOGGER.info("LIVE PACING: " + report);
+        }
     }
 
     /**
@@ -1755,12 +1802,17 @@ public final class ClientSession implements AutoCloseable {
     }
 
     /**
-     * Sets the game flags of a network game (the host's, which its advertisement carries).
+     * Sets the game flags of a network game (the host's, which its advertisement carries), which its live game takes before its session
+     * starts ({@link LiveGame#setGameFlags}).
      *
      * @param gameFlags the flags
      */
     public void setGameFlags(int gameFlags) {
         this.gameFlags = gameFlags;
+
+        if (this.liveGame != null) {
+            this.liveGame.setGameFlags(gameFlags);
+        }
     }
 
     /**
@@ -2019,14 +2071,15 @@ public final class ClientSession implements AutoCloseable {
     }
 
     /**
-     * Checks whether a live game with a save folder and no extended SetDeaths mode may show Save Game. The local player must be first.
+     * Checks whether a live game with a save folder and no extended SetDeaths mode may show Save Game. The local player must be first, and the
+     * game's simulation plugins must allow a save ({@link Game#isSaveAllowed()}).
      *
      * @return {@code true} if Save Game is shown, {@code false} otherwise
      */
     public boolean isSaveGameShown() {
         LiveGame game = this.liveGame;
 
-        if (game == null || this.saveDirectory == null || !game.isLocalPlayerFirst()) {
+        if (game == null || this.saveDirectory == null || !game.isLocalPlayerFirst() || !this.state.isSaveAllowed()) {
             return false;
         }
 
@@ -2185,7 +2238,12 @@ public final class ClientSession implements AutoCloseable {
                                                       ? this.liveGame.getSetup().getMapPath()
                                                       : this.mapArchive;
 
-            if (sourcePath != null) {
+            MpqArchive setupArchive = this.liveGame == null ? null : this.liveGame.getSetup().getMapArchive();
+
+            // A live game's setup already holds the map file it opened; the source file shares its content.
+            if (setupArchive != null && sourcePath != null) {
+                this.runtime.setSourceFile(GameSourceFile.create(sourcePath, setupArchive.getArchiveData()));
+            } else if (sourcePath != null) {
                 this.runtime.setSourceFile(GameSourceFile.read(sourcePath));
             }
 
@@ -2252,8 +2310,9 @@ public final class ClientSession implements AutoCloseable {
     /**
      * Creates the engine game session of the started game through the engine {@link GameSessionFactory}: the session shows the game through this
      * session's {@link ScrGameView}, and the replay session's game loop applies its command source ({@link CommandPoint#MOD_LOOP}), which asks the
-     * recorded stream ({@link ReplaySession#getController()}) alone. Replay playback is a replay session; a live game is a local or network session
-     * of its own command path, the local player's commands queued into the outgoing turn ({@link LocalCommandSink}).
+     * recorded stream ({@link ReplaySession#getController()}) alone. Replay playback and an observer's game, which have no engine player of their
+     * own, are replay sessions; a player's live game is a local or network session of its own command path, the local player's commands queued
+     * into the outgoing turn ({@link LocalCommandSink}).
      *
      * @param replaySession the started replay session
      * @return the created {@link GameSession} instance
@@ -2265,7 +2324,7 @@ public final class ClientSession implements AutoCloseable {
         List<PlayerController> controllers = List.of(replaySession.getController());
         LiveGame live = this.liveGame;
 
-        if (live == null) {
+        if (live == null || live.isLocalObserver()) {
             return factory.createReplay(engineGame, controllers);
         }
 
@@ -2491,12 +2550,16 @@ public final class ClientSession implements AutoCloseable {
 
             if (this.liveGame != null && !this.liveGame.exchangeTurn(this.state.getCurrentFrame())) {
                 this.waitingForTurns = true;
+                this.pacingStatistics.beginTurnWait(System.nanoTime());
 
                 return false;
             }
 
             boolean completed;
             SimulationWatchdog frameWatchdog = this.watchdog;
+            long stepStart = System.nanoTime();
+
+            this.pacingStatistics.endTurnWait(stepStart);
 
             if (frameWatchdog != null) {
                 frameWatchdog.begin(this.state.getCurrentFrame());
@@ -2510,6 +2573,8 @@ public final class ClientSession implements AutoCloseable {
                 if (frameWatchdog != null) {
                     frameWatchdog.end();
                 }
+
+                this.pacingStatistics.recordFrame(System.nanoTime() - stepStart);
             }
 
             if (completed) {
@@ -2896,6 +2961,52 @@ public final class ClientSession implements AutoCloseable {
     }
 
     /**
+     * Attaches the Beacon.Link community to the network game's message area and chat box, under the LAN client's lock
+     * ({@link #attachNetworkChat} first).
+     *
+     * @param chat the community part of the game
+     * @throws IllegalStateException if this session has no network client
+     */
+    public void attachCommunityChat(@NotNull GameCommunityChat chat) {
+        LanClient client = this.networkClient;
+
+        if (client == null) {
+            throw Exceptions.newIllegalStateException("The community chat needs the network client.");
+        }
+
+        synchronized (client) {
+            chat.attach();
+        }
+
+        this.communityChat = chat;
+    }
+
+    /**
+     * @return {@code true} if the Beacon.Link community is attached to this session's game, {@code false} otherwise
+     */
+    public boolean hasCommunityChat() {
+        return this.communityChat != null;
+    }
+
+    /**
+     * Runs a typed community command ({@link GameCommunityChat#isCommand}) in the attached channel chat; without one it does nothing.
+     *
+     * @param line the typed line
+     */
+    public void submitCommunityCommand(@NotNull String line) {
+        LanClient client = this.networkClient;
+        GameCommunityChat chat = this.communityChat;
+
+        if (client == null || chat == null) {
+            return;
+        }
+
+        synchronized (client) {
+            chat.submit(line);
+        }
+    }
+
+    /**
      * Formats the chosen recipient's player or force name and copies the label into the local interface buffer.
      *
      * @param format the box's format
@@ -2997,29 +3108,38 @@ public final class ClientSession implements AutoCloseable {
     }
 
     /**
-     * Receives chat and whispers with a known sender and a terminated nonempty text within the receive limit.
+     * Receives chat and whispers with a known sender and a terminated nonempty text within the receive limit, then shows the attached
+     * community's whispers and command answers ({@link GameCommunityChat#takeWrites}).
      * Ordinary chat is recorded with bounded text; whispers are displayed without recording.
      */
     public void receiveNetworkChat() {
         LanClient client = this.networkClient;
         LiveGame game = this.liveGame;
+        GameCommunityChat community = this.communityChat;
 
         if (client == null || game == null) {
             return;
         }
 
         List<ProviderSession.Message> messages = new ArrayList<>();
+        List<Consumer<MessageLines>> communityWrites;
 
         synchronized (client) {
+            communityWrites = community == null ? List.of() : community.takeWrites();
+
             ProviderSession session = client.getSession();
 
-            if (session == null) {
-                return;
+            if (session != null) {
+                for (ProviderSession.Message message = session.receiveMessage(); message != null; message = session.receiveMessage()) {
+                    messages.add(message);
+                }
             }
+        }
 
-            for (ProviderSession.Message message = session.receiveMessage(); message != null; message = session.receiveMessage()) {
-                messages.add(message);
-            }
+        MessageLines lines = this.state.getInterfaceLink().getMessageLines();
+
+        for (Consumer<MessageLines> write : communityWrites) {
+            write.accept(lines);
         }
 
         for (ProviderSession.Message message : messages) {
@@ -3055,12 +3175,11 @@ public final class ClientSession implements AutoCloseable {
                         (data[0] == WHISPER_KIND ? "whisper" : "chat"));
 
             if (data[0] == WHISPER_KIND) {
-                MessageLines messageLines = this.state.getInterfaceLink().getMessageLines();
                 TextTables tables = this.textTables;
 
-                messageLines.writeWhisper(tables == null ? "" : tables.getNetwork().get(WHISPER_FROM_KEY), slot, text);
+                lines.writeWhisper(tables == null ? "" : tables.getNetwork().get(WHISPER_FROM_KEY), slot, text);
             } else {
-                this.state.getInterfaceLink().getMessageLines().writeChat(slot, text);
+                lines.writeChat(slot, text);
                 game.recordChat(slot, text, this.state.getCurrentFrame());
             }
         }
@@ -3194,6 +3313,27 @@ public final class ClientSession implements AutoCloseable {
         }
 
         this.state.getTriggerContext().completeTransmission();
+    }
+
+    /**
+     * Copies the current display palette of the game, color cycling applied.
+     *
+     * @param colors receives {@code 256} packed {@code 0x00BBGGRR} colors
+     * @return {@code true} if the colors were copied, {@code false} if the game has no display palette
+     * @throws IndexOutOfBoundsException if the array holds fewer than {@code 256} colors
+     */
+    public boolean copyDisplayPalette(int @NotNull [] colors) {
+        PaletteAnimation palette = this.runtime == null ? null : this.runtime.getDisplayPalette();
+
+        if (palette == null) {
+            return false;
+        }
+
+        for (int index = 0; index < PaletteAnimation.COLOR_COUNT; index++) {
+            colors[index] = palette.getColor(index);
+        }
+
+        return true;
     }
 
     /**
@@ -3484,6 +3624,17 @@ public final class ClientSession implements AutoCloseable {
 
             if (this.liveGame != null && this.liveGame.isNetworkGame()) {
                 this.liveGame.leaveNetwork();
+            }
+
+            LanClient client = this.networkClient;
+            GameCommunityChat community = this.communityChat;
+
+            if (client != null && community != null) {
+                synchronized (client) {
+                    community.detach();
+                }
+
+                this.communityChat = null;
             }
 
             this.selectedPlacement = null;

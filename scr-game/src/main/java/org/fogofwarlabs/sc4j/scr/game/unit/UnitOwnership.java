@@ -9,6 +9,7 @@ import org.fogofwarlabs.sc4j.scr.data.type.ScrOrderTypeView;
 import org.fogofwarlabs.sc4j.scr.data.type.ScrUnitTypeView;
 import org.fogofwarlabs.sc4j.scr.data.type.constant.UnitGroupFlags;
 import org.fogofwarlabs.sc4j.scr.data.type.constant.UnitTypeFlags;
+import org.fogofwarlabs.sc4j.scr.game.extension.ScrSimulationPlugins;
 import org.fogofwarlabs.sc4j.scr.game.order.ScrOrderSystem;
 import org.fogofwarlabs.sc4j.scr.game.order.UnitSelection;
 import org.fogofwarlabs.sc4j.scr.game.player.*;
@@ -122,6 +123,12 @@ public final class UnitOwnership {
     public void setOwner(@NotNull Unit unit, int owner, boolean incrementScore, int instructionLimit) {
         if (unit.getOwnerIndex() == owner) {
             return;
+        }
+
+        ScrSimulationPlugins simulation = this.game.getSimulationPlugins();
+
+        if (simulation != null) {
+            simulation.reportOwnerChanged(unit, owner);
         }
 
         this.game.getEngineGame().getUnitLifecycle().notifyRemoved(unit, false);

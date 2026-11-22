@@ -20,6 +20,7 @@ import org.fogofwarlabs.sc4j.scr.game.player.Player;
 import org.fogofwarlabs.sc4j.scr.game.player.PlayerTypes;
 import org.fogofwarlabs.sc4j.scr.game.player.ProductionStatistics;
 import org.fogofwarlabs.sc4j.scr.game.player.UnitAccounting;
+import org.fogofwarlabs.sc4j.scr.game.presentation.CommandErrorEvents;
 import org.fogofwarlabs.sc4j.scr.game.state.Game;
 import org.fogofwarlabs.sc4j.scr.game.state.GameData;
 import org.fogofwarlabs.sc4j.scr.game.state.GameRulesVersion;
@@ -42,8 +43,8 @@ import java.io.IOException;
 import java.util.Arrays;
 
 /**
- * Checks the Zerg building morph lifecycle, the Drone build of an emptied queue slot, the refund and the order capacity test of a canceled Egg, the
- * queue slot clear of a canceled Cocoon, and the exit test of a canceled Nydus Canal.
+ * Checks the Zerg building morph lifecycle, the Drone build of an emptied queue slot, the messages of a failed Drone build, the refund and the
+ * order capacity test of a canceled Egg, the queue slot clear of a canceled Cocoon, and the exit test of a canceled Nydus Canal.
  * <p>
  * The units.dat memory layout is the contract of the Drone build test, because replays reproduce the value it gives: the construction image of the
  * empty type {@code 228} is the Unit Direction bytes of types {@code 0..3}, an images.dat entry past the images.dat memory. The same holds for the
@@ -208,6 +209,14 @@ final class UnitZergConstructionTest {
     private static final int ZERG_BUILDING_MORPH_ORDER = 43;
     private static final int INCOMPLETE_MORPHING_ORDER = 45;
     /**
+     * The order that a failed Drone build queues.
+     */
+    private static final int RESET_COLLISION_ORDER = 150;
+    /**
+     * The {@code stat_txt} id of "You can't build there.".
+     */
+    private static final int CANNOT_BUILD_THERE_TEXT = 0x358;
+    /**
      * The failure text of a DAT read outside the DAT memory.
      */
     private static final @NotNull String DAT_MEMORY_FAILURE = "outside the DAT memory";
@@ -297,13 +306,14 @@ final class UnitZergConstructionTest {
     }
 
     /**
-     * Initializes the pool unit as a completed Drone on a creep site and has it build an incomplete Nydus Canal without an exit.
+     * Initializes the pool unit as a completed Drone at the Nydus Canal site that is about to build a Nydus Canal there.
      *
-     * @param game the game of {@link #createWorld}
-     * @return the pool unit, now the incomplete Nydus Canal
+     * @param game      the game of {@link #createWorld}
+     * @param creepSite whether the site has creep
+     * @return the pool unit, the Drone
      * @throws IOException if the terrain tileset cannot be read
      */
-    private static @NotNull Unit createIncompleteNydusCanal(@NotNull Game game) throws IOException {
+    private static @NotNull Unit createNydusCanalDrone(@NotNull Game game, boolean creepSite) throws IOException {
         CreepField creep = game.getCreepField();
         UnitPool pool = game.getUnitSystem().getUnitPool();
 
@@ -318,9 +328,12 @@ final class UnitZergConstructionTest {
                                                                                new int[ProductionStatistics.VALUE_COUNT],
                                                                                new float[ProductionStatistics.VALUE_COUNT]));
         game.setCreepRecession(new CreepRecession(0, CreepRecession.RECORD_COUNT, new int[CreepRecession.LIST_COUNT]));
-        // The player has seen the whole map, and the site has creep.
+        // The player has seen the whole map.
         game.getMap().clearVisibilityBits(MapTileFlags.NOT_VISIBLE_OR_EXPLORED);
-        creep.fillMoved(game, ScrUnitIds.ZERG_NYDUS_CANAL, NYDUS_X, NYDUS_Y);
+
+        if (creepSite) {
+            creep.fillMoved(game, ScrUnitIds.ZERG_NYDUS_CANAL, NYDUS_X, NYDUS_Y);
+        }
 
         Unit drone = pool.getUnit(UNIT_POOL_INDEX);
 
@@ -338,6 +351,20 @@ final class UnitZergConstructionTest {
         }
 
         setQueueSlot(drone, Unit.FIRST_QUEUE_SLOT, ScrUnitIds.ZERG_NYDUS_CANAL);
+
+        return drone;
+    }
+
+    /**
+     * Initializes the pool unit as a completed Drone on a creep site and has it build an incomplete Nydus Canal without an exit.
+     *
+     * @param game the game of {@link #createWorld}
+     * @return the pool unit, now the incomplete Nydus Canal
+     * @throws IOException if the terrain tileset cannot be read
+     */
+    private static @NotNull Unit createIncompleteNydusCanal(@NotNull Game game) throws IOException {
+        Unit drone = createNydusCanalDrone(game, true);
+
         game.getUnitConstruction().buildDrone(drone, INSTRUCTION_LIMIT);
 
         Assertions.assertEquals(NYDUS_CANAL_TYPE, drone.getUnitId());
@@ -729,5 +756,35 @@ final class UnitZergConstructionTest {
 
         Assertions.assertTrue(failure.getMessage().contains(DAT_MEMORY_FAILURE), failure.getMessage());
         Assertions.assertEquals(EMPTY_UNIT_TYPE, drone.getUnitId());
+    }
+
+    @Test
+    void build_drone_should_stop_without_a_message_when_the_drone_is_off_its_target() throws IOException {
+        Game game = createWorld();
+        Unit drone = createNydusCanalDrone(game, true);
+
+        drone.setOrderTargetX(NYDUS_X + TerrainTileset.TILE_SIZE);
+        game.getUnitConstruction().buildDrone(drone, INSTRUCTION_LIMIT);
+
+        Assertions.assertEquals(DRONE_TYPE, drone.getUnitId());
+        Assertions.assertEquals(RESET_COLLISION_ORDER, drone.getPrimaryOrder());
+        Assertions.assertEquals(0, game.getInterfaceLink().getCommandErrorEvents().getCount());
+    }
+
+    @Test
+    void build_drone_should_show_cannot_build_there_when_the_site_is_blocked() throws IOException {
+        Game game = createWorld();
+        Unit drone = createNydusCanalDrone(game, false);
+
+        game.getUnitConstruction().buildDrone(drone, INSTRUCTION_LIMIT);
+
+        CommandErrorEvents events = game.getInterfaceLink().getCommandErrorEvents();
+
+        Assertions.assertEquals(DRONE_TYPE, drone.getUnitId());
+        Assertions.assertEquals(RESET_COLLISION_ORDER, drone.getPrimaryOrder());
+        Assertions.assertEquals(1, events.getCount());
+        Assertions.assertEquals(CANNOT_BUILD_THERE_TEXT, events.get(0).getTextIdentifier());
+        Assertions.assertEquals(CommandErrorEvents.Sound.BLOCKED_BUILD_LOCATION, events.get(0).getSound());
+        Assertions.assertEquals(PLAYER, events.get(0).getPlayer());
     }
 }

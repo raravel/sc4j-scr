@@ -27,8 +27,8 @@ final class GameProxySocketTest {
     /**
      * The answer to {@link #RELAYED_PROBE}: fields {@code 3} and {@code 4} copied into the address information fields {@code 1} and {@code 2}.
      */
-    private static final @NotNull String RELAYED_PROBE_ANSWER =
-            "080118c0d1821020e02f48feb5a0b5e89597035a1308c0d1821010e02f280130c0d182c00538e02f6009";
+    private static final @NotNull String RELAYED_PROBE_ANSWER = "080118c0d1821020e02f" +
+                                                                "48feb5a0b5e89597035a1308c0d1821010e02f280130c0d182c00538e02f6009";
 
     /**
      * The address information of a probe sent over the loopback interface up to the destination port: field {@code 6} naming

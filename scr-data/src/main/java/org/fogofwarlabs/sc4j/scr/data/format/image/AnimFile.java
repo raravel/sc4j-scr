@@ -283,6 +283,78 @@ public final class AnimFile {
         return new AnimFile(scale, type, layerNames, entries);
     }
 
+    /**
+     * Finds the size of the anim at the start of some bytes: the end of its header, its first entry's records, its frame table or its layer
+     * textures, whichever is last. Bytes that end before the header or the entry's records give the length they must hold to find it.
+     *
+     * @param data   the bytes, from the anim's start
+     * @param length the number of valid bytes in {@code data}
+     * @return the anim's size; a value above {@code length} if more bytes are needed to find it; {@code -1} if the bytes hold no anim header or
+     * the entry's records are invalid
+     */
+    public static long findContentSize(byte @NotNull [] data, int length) {
+        if (length < Integer.BYTES) {
+            return HEADER_SIZE;
+        }
+
+        if (LittleEndianUtils.readInt32(data, 0) != MAGIC) {
+            return -1;
+        }
+
+        if (length < HEADER_SIZE + ENTRY_OFFSET_SIZE) {
+            return HEADER_SIZE + ENTRY_OFFSET_SIZE;
+        }
+
+        int layerCount = LittleEndianUtils.readUnsigned16(data, LAYER_COUNT_OFFSET);
+
+        if (layerCount > LAYER_NAME_COUNT || (data[SCALE_OFFSET] & BYTE_MASK) == 0) {
+            return -1;
+        }
+
+        long entry = (data[TYPE_OFFSET] & BYTE_MASK) == TYPE_ENTRY_TABLE ? LittleEndianUtils.readUnsigned32(data, HEADER_SIZE) : HEADER_SIZE;
+        long recordsEnd = entry + ENTRY_HEADER_SIZE + (long) layerCount * LAYER_RECORD_SIZE;
+
+        if (entry < HEADER_SIZE || recordsEnd > Integer.MAX_VALUE) {
+            return -1;
+        }
+
+        if (recordsEnd > length) {
+            return recordsEnd;
+        }
+
+        int offset = (int) entry;
+        int frameCount = LittleEndianUtils.readUnsigned16(data, offset);
+        long size = recordsEnd;
+
+        if (frameCount == 0) {
+            return size;
+        }
+
+        int frameTable = LittleEndianUtils.readInt32(data, offset + ENTRY_FRAME_TABLE_OFFSET);
+
+        if (frameTable < 0) {
+            return -1;
+        }
+
+        size = Math.max(size, frameTable + (long) frameCount * FRAME_SIZE);
+
+        for (int layer = 0; layer < layerCount; layer++) {
+            int record = offset + ENTRY_HEADER_SIZE + layer * LAYER_RECORD_SIZE;
+            int layerOffset = LittleEndianUtils.readInt32(data, record);
+            int layerSize = LittleEndianUtils.readInt32(data, record + LAYER_SIZE_OFFSET);
+
+            if (layerSize != 0) {
+                if (layerOffset < 0 || layerSize < 0) {
+                    return -1;
+                }
+
+                size = Math.max(size, (long) layerOffset + layerSize);
+            }
+        }
+
+        return size;
+    }
+
     private static @NotNull Entry parseEntry(byte @NotNull [] data, int offset, int layerCount) throws IOException {
         if (offset < HEADER_SIZE || offset + (long) ENTRY_HEADER_SIZE + layerCount * (long) LAYER_RECORD_SIZE > data.length) {
             throw Exceptions.newIOException("ANIM entry at {0} exceeds the content.", offset);

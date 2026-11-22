@@ -29,7 +29,6 @@ final class TriggerOutOfRangePlayerTest {
      */
     private static final int OUT_OF_RANGE_PLAYER = 131;
     private static final int DIAGONAL_LOCATION = 6;
-    private static final int STATUS_ALLY = 1;
     private static final int STATUS_ALLIED_VICTORY = 2;
     /**
      * The current player whose mission objectives DWORD is the left edge of location 0.
@@ -91,7 +90,7 @@ final class TriggerOutOfRangePlayerTest {
         byte[] table = context.requireRelations().getAllianceBytes();
 
         context.writeCurrentPlayerDword(OUT_OF_RANGE_PLAYER);
-        TriggerActionsUtils.setAllianceStatus(context, 9, STATUS_ALLY);
+        TriggerActionsUtils.setAllianceStatus(context, OUT_OF_RANGE_PLAYER, 9, PlayerRelations.ALLIED);
 
         // Column 9 is byte 1 of location 0; the diagonal (location 6) is 0.
         Assertions.assertEquals(0x0101, context.getLocation(0).getLeft());
@@ -104,7 +103,7 @@ final class TriggerOutOfRangePlayerTest {
         TriggerContext context = createContext(0x0203, 0x01000000, 0x00080100);
 
         context.writeCurrentPlayerDword(OUT_OF_RANGE_PLAYER);
-        TriggerActionsUtils.setAllianceStatus(context, 9, STATUS_ALLY);
+        TriggerActionsUtils.setAllianceStatus(context, OUT_OF_RANGE_PLAYER, 9, PlayerRelations.ALLIED);
 
         Assertions.assertEquals(0x0103, context.getLocation(0).getLeft());
         Assertions.assertEquals(0x00080100, readSwitchBytes24(context));
@@ -115,7 +114,7 @@ final class TriggerOutOfRangePlayerTest {
         TriggerContext context = createContext(0, 0, 0);
 
         context.writeCurrentPlayerDword(PlayerTable.NEUTRAL_PLAYER_ID);
-        TriggerActionsUtils.setAllianceStatus(context, PlayerTable.PLAYER_SLOTS, STATUS_ALLIED_VICTORY);
+        TriggerActionsUtils.setAllianceStatus(context, PlayerTable.NEUTRAL_PLAYER_ID, PlayerTable.PLAYER_SLOTS, PlayerRelations.ALLIED_VICTORY);
 
         Assertions.assertEquals(STATUS_ALLIED_VICTORY, context.getMissionObjectivesStringIndex(0), "Byte 0 of player 0's mission objectives.");
         Assertions.assertEquals(PlayerRelations.ALLIED_VICTORY, context.requireRelations().getAlliance(PlayerTable.NEUTRAL_PLAYER_ID, 0),

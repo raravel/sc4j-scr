@@ -8,7 +8,11 @@ import org.fogofwarlabs.sc4j.base.text.TerminatedStringUtils;
 import org.fogofwarlabs.sc4j.engine.controller.ControllerSource;
 import org.fogofwarlabs.sc4j.engine.lockstep.*;
 import org.fogofwarlabs.sc4j.scr.core.FileNameUtils;
+import org.fogofwarlabs.sc4j.scr.data.format.mpq.MpqArchive;
 import org.fogofwarlabs.sc4j.scr.data.format.replay.*;
+import org.fogofwarlabs.sc4j.scr.game.extension.ScrModCommandSubmitter;
+import org.fogofwarlabs.sc4j.scr.game.extension.ScrPauseRequester;
+import org.fogofwarlabs.sc4j.scr.game.extension.ScrSimulationPlugin;
 import org.fogofwarlabs.sc4j.scr.game.frame.GameSpeed;
 import org.fogofwarlabs.sc4j.scr.game.player.PlayerColorRows;
 import org.fogofwarlabs.sc4j.scr.game.player.PlayerTable;
@@ -32,10 +36,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HexFormat;
-import java.util.List;
+import java.util.*;
 import java.util.function.IntSupplier;
 
 /**
@@ -44,7 +45,7 @@ import java.util.function.IntSupplier;
  * Live play, the saved replay and playback use the common replay runtime and one command path. A single-player
  * command queued at the current frame executes and is recorded in the following frame.
  */
-public final class LiveGame {
+public final class LiveGame implements ScrModCommandSubmitter, ScrPauseRequester {
     /**
      * The frame count stored in the running header; the saved header receives the real count.
      */
@@ -74,6 +75,11 @@ public final class LiveGame {
      * The highest latency setting (extra high).
      */
     public static final int MAXIMUM_LATENCY = 2;
+
+    /**
+     * Game flags bit {@code 5}: the dynamic turn rate, which adjusts the turn rate and latency from the turn stalls.
+     */
+    public static final int DYNAMIC_TURN_RATE_FLAG = 0x20;
 
     /**
      * The maximum bytes in a single-player outgoing turn.
@@ -115,6 +121,11 @@ public final class LiveGame {
      * The Latency command's silent bit (the Network Health start's {@code 55 80}).
      */
     private static final int SILENT_LATENCY = 0x80;
+
+    /**
+     * The Dynamic Turn Rate command's bytes after the type byte: the sub-command, the turns per second and the latency.
+     */
+    private static final int DYNAMIC_TURN_RATE_PAYLOAD = 3;
 
     /**
      * The minimum provider turns in transit.
@@ -167,6 +178,46 @@ public final class LiveGame {
          * @param name the command's name bytes without terminator, as received: the file name without extension
          */
         void loadGame(int time, byte @NotNull [] name);
+    }
+
+    /**
+     * The view of this game that its turn rate rules adjust.
+     */
+    private final class TurnRateSession implements DynamicTurnRate.Session {
+        /**
+         * @return the game's turns per second
+         */
+        @Override
+        public int getTurnRate() {
+            return LiveGame.this.turnRate;
+        }
+
+        /**
+         * @return the game's latency setting, {@code 0} Low through {@code 2} Extra High
+         */
+        @Override
+        public int getLatency() {
+            return LiveGame.this.latency;
+        }
+
+        /**
+         * @return {@code true} if the local player is the present player of the lowest network id below {@code 8}, {@code false}
+         * otherwise
+         */
+        @Override
+        public boolean isLowestPresentPlayer() {
+            return LiveGame.this.lowestPresentPlayer;
+        }
+
+        /**
+         * Queues a command into the local outgoing turn.
+         *
+         * @param command the command bytes, type byte first
+         */
+        @Override
+        public void queueCommand(byte @NotNull [] command) {
+            LiveGame.this.outgoingTurn.queue(command);
+        }
     }
 
     /**
@@ -269,6 +320,22 @@ public final class LiveGame {
     private int turnsInTransit;
     private int baseTurnsInTransit;
     private int latency;
+    /**
+     * The network game's turns per second, which the Turn Rate and Dynamic Turn Rate commands change.
+     */
+    private int turnRate;
+    /**
+     * The game flags of the network game ({@link #DYNAMIC_TURN_RATE_FLAG}).
+     */
+    private int gameFlags;
+    /**
+     * The turn rate rules of the network game, from its session start; {@code null} before and outside a network game.
+     */
+    private @Nullable DynamicTurnRate dynamicTurnRate;
+    /**
+     * Whether the local player was the present player of the lowest network id below {@code 8} at the last completed turn step.
+     */
+    private boolean lowestPresentPlayer;
     private boolean networkStarted;
     /**
      * The number of commands the startup turn recorded, the first commands of the history.
@@ -305,7 +372,8 @@ public final class LiveGame {
      *
      * @param setup         the lobby
      * @param seed          the game seed
-     * @param localPlayerId the local player's network id in the resolved records
+     * @param localPlayerId the local player's network id in the resolved records, or an observer's network id in the lobby
+     *                      table's observer records ({@link MeleeGameSetup#getObserverSlot})
      * @throws IOException if the header cannot be decoded
      */
     public LiveGame(@NotNull MeleeGameSetup setup, int seed, int localPlayerId) throws IOException {
@@ -317,10 +385,11 @@ public final class LiveGame {
      *
      * @param setup         the lobby
      * @param seed          the game seed
-     * @param localPlayerId the local player's network id in the resolved (and restored) records
+     * @param localPlayerId the local player's network id in the resolved (and restored) records, or an observer's network id in
+     *                      the lobby table's observer records ({@link MeleeGameSetup#getObserverSlot})
      * @param players       the new game's players of the saved slots, or {@code null} to keep the resolved ids
      * @throws IOException           if the header cannot be decoded
-     * @throws IllegalStateException if no resolved record holds {@code localPlayerId}
+     * @throws IllegalStateException if neither a resolved record nor an observer record holds {@code localPlayerId}
      */
     public LiveGame(@NotNull MeleeGameSetup setup, int seed, int localPlayerId, @Nullable SavedGamePlayers players) throws IOException {
         this.setup   = setup;
@@ -346,14 +415,15 @@ public final class LiveGame {
         this.playerSlots.update(this.records, PlayerTable.PLAYABLE_PLAYER_SLOTS);
 
         int local = this.findSlot(localPlayerId);
+        int observer = local < 0 ? setup.getObserverSlot(localPlayerId) : PlayerSlots.NO_SLOT;
 
-        if (local < 0) {
+        if (local < 0 && observer < 0) {
             throw Exceptions.newIllegalStateException("The resolved lobby lost the human player.");
         }
 
         this.commandSlots  = setup.getResolvedCommandSlots();
-        this.localPlayer   = this.commandSlots[local];
-        this.localSlot     = local;
+        this.localPlayer   = local < 0 ? observer : this.commandSlots[local];
+        this.localSlot     = local < 0 ? observer : local;
         this.localPlayerId = localPlayerId;
 
         this.replayLock    = new Object();
@@ -361,9 +431,13 @@ public final class LiveGame {
         this.chatRecords   = new ArrayList<>();
         this.outgoingTurn  = new OutgoingTurnBuffer(MAXIMUM_TURN_BYTES);
         this.loopbackTurns = new LoopbackTurns(this.outgoingTurn);
-        this.replay        = ReplayFile.create(this.buildHeader(RUNNING_FRAMES, true), this.history, setup.getMapData(),
-                                               this.getLimits(), ReplayWriter.encodeVersionBlock(GameRulesVersion.CURRENT_BUILD, 0),
-                                               ReplayWriter.CURRENT_FIX_FLAGS);
+
+        if (this.isLocalObserver()) {
+            this.outgoingTurn.useObserverTurns();
+        }
+        this.replay = ReplayFile.create(this.buildHeader(RUNNING_FRAMES, true), this.history, setup.getMapData(),
+                                        this.getLimits(), ReplayWriter.encodeVersionBlock(GameRulesVersion.CURRENT_BUILD, 0),
+                                        ReplayWriter.CURRENT_FIX_FLAGS);
 
         if (setup.getSavedHeader() != null) {
             this.replay.markSavedGameStart();
@@ -373,6 +447,12 @@ public final class LiveGame {
         this.replay.setPlayerNames(this.readNameBytes());
         this.replay.setSpeedOverrideIndex(setup.getSpeedOverrideIndex());
         this.replay.setCustomColors(PlayerColorRows.encodeCustomColors(setup.getResolvedCustomColors()));
+
+        MpqArchive mapArchive = setup.getMapArchive();
+
+        if (mapArchive != null) {
+            this.replay.setMapArchive(mapArchive);
+        }
 
         this.localOutcome = 0;
 
@@ -388,6 +468,10 @@ public final class LiveGame {
         this.turnsInTransit          = 0;
         this.baseTurnsInTransit      = 0;
         this.latency                 = 0;
+        this.turnRate                = 0;
+        this.gameFlags               = 0;
+        this.dynamicTurnRate         = null;
+        this.lowestPresentPlayer     = false;
         this.networkStarted          = false;
         this.startupTurnCommandCount = 0;
         this.syncRing                = null;
@@ -431,17 +515,26 @@ public final class LiveGame {
     }
 
     /**
-     * @return the player index of the local human (its start slot)
+     * @return the player index of the local human (its start slot), or the observer slot of an observer
      */
     public int getLocalPlayer() {
         return this.localPlayer;
     }
 
     /**
-     * @return the local human's record and selection slot; the command slot may instead be its force leader
+     * @return the local human's record and selection slot, or the observer slot of an observer; a human's command slot may
+     * instead be its force leader
      */
     public int getLocalSlot() {
         return this.localSlot;
+    }
+
+    /**
+     * @return {@code true} if the local player is an observer, whose local slot is an observer slot ({@link PlayerTable#isObserverSlot}),
+     * {@code false} otherwise
+     */
+    public boolean isLocalObserver() {
+        return PlayerTable.isObserverSlot(this.localSlot);
     }
 
     /**
@@ -515,12 +608,37 @@ public final class LiveGame {
     }
 
     /**
-     * @return the network game's configured turns per second, {@code 0} outside a network game
+     * @return the network game's turns per second: the room's, then as the Turn Rate and Dynamic Turn Rate commands set it; {@code 0}
+     * outside a network game
      */
     public int getTurnRate() {
-        LockstepTransport network = this.transport;
+        return this.transport == null ? 0 : this.turnRate;
+    }
 
-        return network == null ? 0 : network.getTurnRate().getTurnsPerSecond();
+    /**
+     * @return the game flags of the network game
+     */
+    public int getGameFlags() {
+        return this.gameFlags;
+    }
+
+    /**
+     * Sets the game flags of the network game (the host's, which its advertisement carries) before its session starts; with
+     * {@link #DYNAMIC_TURN_RATE_FLAG} the session adjusts the turn rate and latency.
+     *
+     * @param gameFlags the flags
+     */
+    public void setGameFlags(int gameFlags) {
+        this.gameFlags = gameFlags;
+    }
+
+    /**
+     * @return {@code true} if the dynamic turn rate's scan runs, {@code false} otherwise
+     */
+    public boolean isTurnRateScanning() {
+        DynamicTurnRate rules = this.dynamicTurnRate;
+
+        return rules != null && rules.isScanning();
     }
 
     /**
@@ -763,8 +881,29 @@ public final class LiveGame {
     }
 
     /**
+     * Queues a mod command of the local player into the outgoing turn ({@link ReplayCommandIds#MOD_COMMAND}): when it runs, the game's
+     * simulation plugins receive the data ({@link ScrSimulationPlugin#onModCommand}). The turn holds a limited number of bytes, so a command is
+     * refused while the commands queued for the turn leave no room for it; it can be submitted again for a later turn.
+     *
+     * @param data the command data, at most {@link ReplayModCommand#MAXIMUM_DATA_LENGTH} bytes; the submitter keeps a copy
+     * @return {@code true} if queued, {@code false} if the outgoing turn has no room for it
+     * @throws IllegalArgumentException if the data is longer than {@link ReplayModCommand#MAXIMUM_DATA_LENGTH} bytes
+     */
+    @Override
+    public boolean submitModCommand(byte @NotNull [] data) {
+        byte[] payload = ReplayCommandCodecs.encode(ReplayCommandCodecs.MOD_COMMAND, new ReplayModCommand(data.clone()));
+
+        if (!this.outgoingTurn.hasRoom(1 + payload.length)) {
+            return false;
+        }
+
+        return this.submit(ReplayCommandIds.MOD_COMMAND, payload);
+    }
+
+    /**
      * Supplies the game's player slots that resolve the issuers of its commands, outgoing turn buffer, provider turn limits,
-     * timing, lobby state and initial pause counts; a single-player game also starts its Sync records from this game.
+     * timing, lobby state and initial pause counts, this game as the game's mod command submitter unless the local player observes, and this
+     * game as the game's pause requester; a single-player game also starts its Sync records from this game.
      *
      * @param game   the game's state
      * @param timing the game's speed configuration, whose turn-wait budget schedules the turn exchanges
@@ -785,6 +924,8 @@ public final class LiveGame {
         game.setPlayerSlots(this.playerSlots);
         game.getInterfaceLink().setOutgoingTurn(this.outgoingTurn);
         game.getInterfaceLink().setSessionTurnLimits(latencyTurns, MAXIMUM_TURN_BYTES);
+        game.getInterfaceLink().setModCommandSubmitter(this.isLocalObserver() ? null : this);
+        game.getInterfaceLink().setPauseRequester(this);
         game.getGameContext().setContextLobbyColors(this.setup.getResolvedLobbyColors());
 
         int[] lobbyTypes = this.setup.getLobbyTypes();
@@ -815,6 +956,15 @@ public final class LiveGame {
         Arrays.fill(this.pausesLeft, (byte) INITIAL_PAUSES);
 
         timing.startSession(network == null ? 0 : 1, turnRate.getTurnsPerSecond(), turnRate.getNetworkTurnsPerSecond());
+
+        if (network != null) {
+            DynamicTurnRate rules = new DynamicTurnRate(new TurnRateSession(), System::nanoTime, (this.gameFlags & DYNAMIC_TURN_RATE_FLAG) != 0,
+                                                        latencyTurns);
+
+            this.dynamicTurnRate = rules;
+
+            rules.start();
+        }
     }
 
     /**
@@ -869,8 +1019,75 @@ public final class LiveGame {
     }
 
     /**
-     * Queues a Pause command while the game is running; the command executes in the turn and is not recorded.
+     * Executes a received Turn Rate command ({@link #changeTurnRate}).
+     *
+     * @param payload the command bytes after the type byte: the turns per second
      */
+    private void executeTurnRate(byte @NotNull [] payload) {
+        if (payload.length > 0) {
+            this.changeTurnRate(Byte.toUnsignedInt(payload[0]));
+        }
+    }
+
+    /**
+     * Executes a received Dynamic Turn Rate command: a scan start ({@link DynamicTurnRate#onScanStart}), or a scan result, which ends the
+     * scan, sets the turn rate ({@link #changeTurnRate}) and sets the latency silently.
+     *
+     * @param payload  the command bytes after the type byte: the sub-command ({@code 0} scan start), the turns per second and the latency
+     * @param playerId the sender's network id
+     */
+    private void executeDynamicTurnRate(byte @NotNull [] payload, int playerId) {
+        DynamicTurnRate rules = this.dynamicTurnRate;
+
+        if (payload.length < DYNAMIC_TURN_RATE_PAYLOAD) {
+            return;
+        }
+
+        if (payload[0] == 0) {
+            if (rules != null) {
+                rules.onScanStart();
+            }
+
+            return;
+        }
+
+        if (rules != null) {
+            rules.onScanResult();
+        }
+
+        this.changeTurnRate(Byte.toUnsignedInt(payload[1]));
+        this.executeLatency(new byte[]{(byte) (payload[2] | SILENT_LATENCY)}, playerId);
+    }
+
+    /**
+     * Sets the network game's turns per second when they differ, noting the change to the turn rate rules, and refills the timing's
+     * timeouts from them.
+     *
+     * @param turnRate the turns per second
+     */
+    private void changeTurnRate(int turnRate) {
+        DynamicTurnRate rules = this.dynamicTurnRate;
+        GameSpeed timing = this.timing;
+
+        if (turnRate != this.turnRate) {
+            this.turnRate = turnRate;
+
+            if (rules != null) {
+                rules.onTurnRateChanged();
+            }
+        }
+
+        if (timing != null) {
+            timing.setTurnRate(this.turnRate);
+        }
+    }
+
+    /**
+     * Queues a Pause command while the game is running.
+     * <p>
+     * The command executes in the turn and is not recorded.
+     */
+    @Override
     public void requestPause() {
         if (!this.isPaused()) {
             this.outgoingTurn.queue(new byte[]{(byte) ReplayCommandIds.PAUSE});
@@ -880,6 +1097,7 @@ public final class LiveGame {
     /**
      * Queues a Resume command while the game is paused.
      */
+    @Override
     public void requestResume() {
         if (this.isPaused()) {
             this.outgoingTurn.queue(new byte[]{(byte) ReplayCommandIds.RESUME});
@@ -888,13 +1106,15 @@ public final class LiveGame {
 
     /**
      * Queues a Save Game command for the first player, retaining the time and the name bytes cut to the command's name
-     * buffer.
+     * buffer. Nothing is queued while the started game cannot be saved ({@link Game#isSaveAllowed()}).
      *
      * @param time the issuing machine's time DWORD
      * @param name the name bytes without terminator: the file name without extension
      */
     public void requestSaveGame(int time, byte @NotNull [] name) {
-        if (this.isLocalPlayerFirst()) {
+        Game running = this.game;
+
+        if (this.isLocalPlayerFirst() && (running == null || running.isSaveAllowed())) {
             this.outgoingTurn.queue(encodeSavedGameCommand(ReplayCommandIds.SAVE_GAME, time, name));
         }
     }
@@ -1050,6 +1270,7 @@ public final class LiveGame {
         this.turnExchange       = new TurnExchange(transport, this.outgoingTurn::send);
         this.baseTurnsInTransit = turnsInTransit;
         this.turnsInTransit     = turnsInTransit + this.latency;
+        this.turnRate           = transport.getTurnRate().getTurnsPerSecond();
 
         if (keepAlive) {
             this.outgoingTurn.useKeepAlive();
@@ -1147,8 +1368,12 @@ public final class LiveGame {
         List<PeerTurn> turns = exchange.exchange(this.turnsInTransit);
 
         if (turns == null) {
+            this.onTurnMissing();
+
             return false;
         }
+
+        this.onTurnsReceived(turns);
 
         // The frame's record is made after its commands executed (onCommandsExecuted); its drawing values are those of the
         // first drawing after the previous turn step (updateSyncDrawing).
@@ -1185,8 +1410,12 @@ public final class LiveGame {
         List<PeerTurn> turns = exchange.exchange(this.turnsInTransit);
 
         if (turns == null) {
+            this.onTurnMissing();
+
             return false;
         }
+
+        this.onTurnsReceived(turns);
 
         for (PeerTurn turn : turns) {
             this.syncMonitor.check(turn, (int) currentFrame);
@@ -1204,18 +1433,54 @@ public final class LiveGame {
     }
 
     /**
+     * Tells the turn rate rules that a turn step misses a turn.
+     */
+    private void onTurnMissing() {
+        DynamicTurnRate rules = this.dynamicTurnRate;
+
+        if (rules != null) {
+            rules.onTurnMissing();
+        }
+    }
+
+    /**
+     * Notes whether the local player is the present player of the lowest network id below {@code 8} among the senders of a completed turn
+     * step, and tells the turn rate rules, before the step's commands run.
+     *
+     * @param turns the step's turns
+     */
+    private void onTurnsReceived(@NotNull List<PeerTurn> turns) {
+        DynamicTurnRate rules = this.dynamicTurnRate;
+        int lowest = PlayerTable.PLAYABLE_PLAYER_SLOTS;
+
+        for (PeerTurn turn : turns) {
+            int playerId = turn.getPeer().getNumber();
+
+            if (playerId >= 0 && playerId < lowest) {
+                lowest = playerId;
+            }
+        }
+
+        this.lowestPresentPlayer = lowest == this.localPlayerId;
+
+        if (rules != null) {
+            rules.onTurnReceived();
+        }
+    }
+
+    /**
      * Checks a player's Sync command against the local record it names: the sync check of {@link #syncMonitor}, which
      * reports a mismatch ({@link #logSyncMismatch}) without dropping the sender.
      *
      * @param received the player's received turn, the peer its network id
      * @return the description of the mismatch, or {@code null} if the turn matches, starts with no Sync command, or its
-     * sender holds no record
+     * sender holds no record, and always for an observer, whose records take its own slot masks ({@link SyncChecksumUtils#calculateSlotMasks})
      */
     private @Nullable String checkSyncTurn(@NotNull PeerTurn received) {
         SyncRing ring = this.syncRing;
         byte[] turn = received.getTurn();
 
-        if (ring == null || ring.getUpdates() == 0 || turn.length < OutgoingTurnBuffer.SYNC_COMMAND_LENGTH ||
+        if (ring == null || ring.getUpdates() == 0 || this.isLocalObserver() || turn.length < OutgoingTurnBuffer.SYNC_COMMAND_LENGTH ||
             turn[0] != OutgoingTurnBuffer.SYNC_COMMAND) {
             return null;
         }
@@ -1281,13 +1546,13 @@ public final class LiveGame {
         }
 
         DesyncDump dump = ring.createDump(turn, state);
-        MeleeGameSetup.PlayerRecord local = this.records[this.localSlot];
+        String localName = this.isLocalObserver() ? this.setup.getObserverName(this.localSlot) : this.records[this.localSlot].getName();
         StringBuilder header = new StringBuilder();
 
         SyncState.appendLine(header, "SC4J desync dump");
         SyncState.appendLine(header, "build %s", this.desyncBuild);
         SyncState.appendLine(header, "map %s", this.desyncMapName);
-        SyncState.appendLine(header, "local player id %d slot %d \"%s\"", this.localPlayerId, this.localPlayer, local.getName());
+        SyncState.appendLine(header, "local player id %d slot %d \"%s\"", this.localPlayerId, this.localPlayer, localName);
 
         for (int lobbySlot = 0; lobbySlot < PlayerTable.PLAYABLE_PLAYER_SLOTS; lobbySlot++) {
             MeleeGameSetup.PlayerRecord record = this.records[lobbySlot];
@@ -1303,7 +1568,7 @@ public final class LiveGame {
                              HexFormat.of().formatHex(turn, 0, OutgoingTurnBuffer.SYNC_COMMAND_LENGTH), failure);
 
         String fileName = DESYNC_FILE_TIME.format(LocalDateTime.now()) + '_' + toFileNamePart(stripExtension(this.desyncMapName)) + '_' +
-                          toFileNamePart(local.getName()) + DESYNC_FILE_EXTENSION;
+                          toFileNamePart(localName) + DESYNC_FILE_EXTENSION;
         Path file = folder.resolve(fileName);
         String text = header.toString();
 
@@ -1407,6 +1672,10 @@ public final class LiveGame {
             this.executeSavedGameCommand(typeId, payload, playerId);
         } else if (typeId == ReplayCommandIds.LATENCY) {
             this.executeLatency(payload, playerId);
+        } else if (typeId == ReplayCommandIds.TURN_RATE) {
+            this.executeTurnRate(payload);
+        } else if (typeId == ReplayCommandIds.DYNAMIC_TURN_RATE) {
+            this.executeDynamicTurnRate(payload, playerId);
         } else if (typeId != OutgoingTurnBuffer.SYNC_COMMAND && typeId != ReplayCommandIds.KEEP_ALIVE) {
             throw Exceptions.newUnsupportedOperationException(
                     "The received turn executes command 0x{0}, which this session handles outside the command stream.",
@@ -1435,11 +1704,13 @@ public final class LiveGame {
     /**
      * Writes the played game as a SC:R replay with chat records merged in frame order. The commands and chat lines are copied
      * under the lock their appends take, so the replay can be written from another thread while the game runs. A game with a speed override
-     * ({@link MeleeGameSetup#getSpeedOverrideIndex}) keeps it in the replay's {@code XSPD} section, which its playback takes.
+     * ({@link MeleeGameSetup#getSpeedOverrideIndex}) keeps it in the replay's {@code XSPD} section, which its playback takes. The replay sections
+     * of the started game ({@link Game#setReplaySection}) follow as mod sections ({@link ReplayWriter#addModSection}).
      *
      * @param frames      the number of completed frames
      * @param unixSeconds the save time for the {@code GCFG} block
      * @return the replay file bytes
+     * @throws IllegalStateException if the sections may take more than a replay file holds
      */
     public byte @NotNull [] writeReplay(long frames, long unixSeconds) {
         byte[][] names = this.readNameBytes();
@@ -1461,11 +1732,21 @@ public final class LiveGame {
             recorded.addAll(this.chatRecords.subList(chat, this.chatRecords.size()));
         }
 
-        return new ReplayWriter(this.buildHeader(frames, false), ReplayWriter.encodeCommands(recorded), this.setup.getMapData(),
-                                ReplayWriter.encodeNames(names), new byte[ReplayWriter.SKIN_SIZE], this.getLimits(), ReplayWriter.CURRENT_FIX_FLAGS,
-                                PlayerColorRows.encodeCustomColors(this.setup.getResolvedCustomColors()),
-                                ReplayWriter.encodeVersionBlock(GameRulesVersion.CURRENT_BUILD, unixSeconds),
-                                this.setup.getSpeedOverrideIndex()).write();
+        ReplayWriter writer = new ReplayWriter(this.buildHeader(frames, false), ReplayWriter.encodeCommands(recorded), this.setup.getMapData(),
+                                               ReplayWriter.encodeNames(names), new byte[ReplayWriter.SKIN_SIZE], this.getLimits(),
+                                               ReplayWriter.CURRENT_FIX_FLAGS,
+                                               PlayerColorRows.encodeCustomColors(this.setup.getResolvedCustomColors()),
+                                               ReplayWriter.encodeVersionBlock(GameRulesVersion.CURRENT_BUILD, unixSeconds),
+                                               this.setup.getSpeedOverrideIndex());
+        Game running = this.game;
+
+        if (running != null) {
+            for (Map.Entry<String, byte[]> section : running.getReplaySections().entrySet()) {
+                writer.addModSection(section.getKey(), section.getValue());
+            }
+        }
+
+        return writer.write();
     }
 
     /**

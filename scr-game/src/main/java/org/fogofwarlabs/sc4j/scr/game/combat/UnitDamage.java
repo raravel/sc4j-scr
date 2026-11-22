@@ -19,6 +19,8 @@ import org.fogofwarlabs.sc4j.scr.game.ai.ComputerMilitary;
 import org.fogofwarlabs.sc4j.scr.game.ai.ComputerPlayerPhase;
 import org.fogofwarlabs.sc4j.scr.game.ai.ComputerUnitRecord;
 import org.fogofwarlabs.sc4j.scr.game.ai.UnitStrengthTable;
+import org.fogofwarlabs.sc4j.scr.game.extension.ScrSimulationPlugins;
+import org.fogofwarlabs.sc4j.scr.game.extension.simulation.WeaponDamageDecision;
 import org.fogofwarlabs.sc4j.scr.game.frame.UnitPhase;
 import org.fogofwarlabs.sc4j.scr.game.movement.FlingyMotionUtils;
 import org.fogofwarlabs.sc4j.scr.game.player.PlayerTable;
@@ -338,6 +340,18 @@ public final class UnitDamage {
             return;
         }
 
+        ScrSimulationPlugins simulation = this.game.getSimulationPlugins();
+
+        if (simulation != null) {
+            WeaponDamageDecision decision = simulation.decideWeaponDamage(weapon, source, sourceOwner, target, damage);
+
+            if (decision.isCancelled()) {
+                return;
+            }
+
+            damage = decision.getDamage();
+        }
+
         ScrUnitTypeView unitTypes = this.game.requireGameData().getUnitTypes();
         ScrWeaponTypeView weapons = this.game.requireGameData().getWeaponTypes();
 
@@ -398,7 +412,7 @@ public final class UnitDamage {
             damage = MINIMUM_DAMAGE;
         }
 
-        this.dealUnitDamage(target, damage, source, sourceOwner, weapon != ScrWeaponIds.IRRADIATE, instructionLimit);
+        this.dealUnitDamage(target, damage, source, sourceOwner, weapon, weapon != ScrWeaponIds.IRRADIATE, instructionLimit);
 
         if (shieldDamage != 0) {
             this.shieldLayer.setPoints(target, target.getShieldPoints() - shieldDamage);
@@ -466,6 +480,29 @@ public final class UnitDamage {
      * @throws NullPointerException if the world was built without game data
      */
     public void dealUnitDamage(@NotNull Unit target, int damage, @Nullable Unit source, int sourceOwner, boolean revealSource, int instructionLimit) {
+        this.dealUnitDamage(target, damage, source, sourceOwner, -1, revealSource, instructionLimit);
+    }
+
+    /**
+     * Applies damage of a weapon or without one, killing the unit when it reaches its hit points; a killed unit and the units it carries are
+     * credited to {@code sourceOwner} through {@link UnitLifecycle#recordDeath}. The simulation plugins hear the damage and a death it causes
+     * with the weapon.
+     *
+     * @param target           the damaged unit
+     * @param damage           the damage with eight fractional bits
+     * @param source           the attacking unit, or {@code null}
+     * @param sourceOwner      the attacking player, or {@code -1} for none
+     * @param weapon           the weapons.dat entry of the damage, or {@code -1} for damage without a weapon
+     * @param revealSource     whether the source position is revealed to the target owner
+     * @param instructionLimit the image and order instruction budget
+     * @throws NullPointerException if the world was built without game data
+     */
+    private void dealUnitDamage(@NotNull Unit target,
+                                int damage,
+                                @Nullable Unit source, int sourceOwner,
+                                int weapon,
+                                boolean revealSource,
+                                int instructionLimit) {
         if (target.getHitPoints() == 0) {
             return;
         }
@@ -474,6 +511,12 @@ public final class UnitDamage {
 
         if (this.game.getGameCheats().suppressesDamage(sourceOwner, true)) {
             damage = 0;
+        }
+
+        ScrSimulationPlugins simulation = this.game.getSimulationPlugins();
+
+        if (simulation != null) {
+            simulation.reportUnitDamaged(target, source, sourceOwner, weapon, damage);
         }
 
         if (damage < target.getHitPoints()) {
@@ -503,7 +546,7 @@ public final class UnitDamage {
             }
 
             target.setHitPoints(0);
-            this.game.getUnitLifecycle().kill(target, instructionLimit);
+            this.game.getUnitLifecycle().kill(target, source, sourceOwner, weapon, instructionLimit);
             this.game.getUnitLifecycle().recordDeath(target, sourceOwner);
 
             // An attacking unit whose owner is not allied with the killed unit's owner gains the kill.
@@ -693,7 +736,8 @@ public final class UnitDamage {
 
                 if (candidate == target && distance <= inner) {
                     candidates[0] = candidate;
-                                    count = 1;
+
+                    count = 1;
 
                     break;
                 }

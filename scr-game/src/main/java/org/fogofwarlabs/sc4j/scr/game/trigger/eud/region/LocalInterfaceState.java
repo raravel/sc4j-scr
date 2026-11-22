@@ -120,6 +120,10 @@ public final class LocalInterfaceState {
      */
     private static final int INTERFACE_TICK_MILLISECONDS = 10;
     /**
+     * The milliseconds of one interface tick on a millisecond clock: the first stamp more than {@link #INTERFACE_TICK_MILLISECONDS} later.
+     */
+    private static final int INTERFACE_TICK_PERIOD_MILLISECONDS = INTERFACE_TICK_MILLISECONDS + 1;
+    /**
      * The initial scroll step bytes, one row of steps per scroll speed.
      */
     private static final byte @NotNull [] INITIAL_SCROLL_STEPS = {
@@ -272,6 +276,13 @@ public final class LocalInterfaceState {
         return this.chatMode;
     }
 
+    /**
+     * @return {@code true} if the chat mode BYTE is known and nonzero, as it is while the chat box is open, {@code false} otherwise
+     */
+    public boolean isChatOpen() {
+        return this.chatModeKnown && this.chatMode != 0;
+    }
+
     void writeChatMode(int value) {
         this.getChatMode();
 
@@ -408,7 +419,8 @@ public final class LocalInterfaceState {
         this.getInterfaceSelectedPoolIndex(slot);
 
         this.interfaceSelection[slot] = poolIndex;
-                                        this.written = true;
+
+        this.written = true;
     }
 
     /**
@@ -583,21 +595,30 @@ public final class LocalInterfaceState {
     }
 
     /**
-     * Runs the clock test of the interface loop.
+     * Runs the clock test of the interface loop for every interface tick due at the host clock: a tick is due when more than
+     * {@link #INTERFACE_TICK_MILLISECONDS} passed since the stamp, and each tick advances the stamp by {@link #INTERFACE_TICK_PERIOD_MILLISECONDS}.
+     * When more ticks are due than the limit, the limit runs and the stamp is renewed to the host clock.
      *
      * @param hostMilliseconds the host clock in milliseconds
-     * @return {@code true} if more than 10 ms passed since the last tick: the stamp was renewed and the scroll tick runs,
-     * {@code false} otherwise
+     * @param maximumTicks     the most ticks to run
+     * @return the number of ticks that run, from {@code 0} to {@code maximumTicks}
      * @throws UnsupportedOperationException if the tick was not started
      */
-    public boolean advanceInterfaceTick(int hostMilliseconds) {
-        if (Integer.compareUnsigned(this.getInterfaceTick() + hostMilliseconds, INTERFACE_TICK_MILLISECONDS) <= 0) {
-            return false;
+    public int advanceInterfaceTicks(int hostMilliseconds, int maximumTicks) {
+        int ticks = 0;
+
+        while (Integer.compareUnsigned(this.getInterfaceTick() + hostMilliseconds, INTERFACE_TICK_MILLISECONDS) > 0) {
+            if (ticks >= maximumTicks) {
+                this.interfaceTick = -hostMilliseconds;
+
+                break;
+            }
+
+            this.interfaceTick -= INTERFACE_TICK_PERIOD_MILLISECONDS;
+            ticks++;
         }
 
-        this.interfaceTick = -hostMilliseconds;
-
-        return true;
+        return ticks;
     }
 
     /**

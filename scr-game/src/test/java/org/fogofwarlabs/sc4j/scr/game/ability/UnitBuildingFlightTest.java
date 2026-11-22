@@ -24,7 +24,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Checks that an Infested Command Center lifts off when the creep recession records are exhausted.
+ * Checks that an Infested Command Center lifts off when the creep recession records are exhausted, and that a non-building unit that finishes
+ * lifting off gets its modified top speed back.
  */
 @RequiresInstallation
 final class UnitBuildingFlightTest {
@@ -33,7 +34,13 @@ final class UnitBuildingFlightTest {
     private static final int TILE_X_INDEX = 0;
     private static final int TILE_Y_INDEX = 1;
 
+    private static final int UNIT_X = 2800;
+    private static final int UNIT_Y = 1400;
+
     private static final int LIFTING_OFF_ORDER = 74;
+    private static final int LIFTING_OFF_STATE_RISING = 3;
+    private static final int LIFT_SPEED = 256;
+    private static final int ENSNARE_TIMER = 1;
 
     private static @Nullable GameData gameData;
     private static @Nullable ReplayRuntime runtime;
@@ -100,6 +107,38 @@ final class UnitBuildingFlightTest {
 
             Assertions.assertEquals(LIFTING_OFF_ORDER, building.getPrimaryOrder(), "Liftoff goes on without a free creep recession record.");
             Assertions.assertNotEquals(0, building.getStatus() & UnitStatusFlags.FLYING);
+        });
+    }
+
+    @Test
+    void update_lifting_off_should_restore_modified_top_speed_of_non_building() {
+        RunningGameScenario.runInCommandDispatch(runtime, () -> {
+            Assertions.assertNotNull(runtime);
+            Assertions.assertNotNull(gameData);
+
+            Game game = runtime.getGame();
+            Unit unit = RunningGameScenario.createUnit(game, ScrUnitIds.ZERG_DEVOURER, UNIT_X, UNIT_Y, RunningGameScenario.COMPUTER);
+            Sprite sprite = unit.getSpriteOrNull();
+
+            Assertions.assertNotNull(sprite);
+
+            unit.setPrimaryOrder(LIFTING_OFF_ORDER);
+            unit.setPrimaryOrderState(LIFTING_OFF_STATE_RISING);
+            unit.setOrderSignal(unit.getOrderSignal() | Unit.ORDER_SIGNAL_LIFT_DONE);
+            unit.setMovementDestinationX(sprite.getX());
+            unit.setMovementDestinationY(sprite.getY());
+            unit.setTopSpeed(LIFT_SPEED);
+            unit.setSpeedDecreaseByte(ENSNARE_TIMER);
+
+            game.getUnitBuildingFlight().updateLiftingOff(unit, RunningGameScenario.INSTRUCTION_LIMIT);
+
+            int flingyType = gameData.getUnitTypes().getFlingyType(ScrUnitIds.ZERG_DEVOURER);
+
+            Assertions.assertEquals(gameData.getFlingyTypes().getTopSpeed(flingyType) >>> 1,
+                                    unit.getTopSpeed(),
+                                    "A slowed non-building keeps half of its flingy top speed.");
+            Assertions.assertEquals(0, unit.getOrderSignal() & Unit.ORDER_SIGNAL_LIFT_DONE);
+            Assertions.assertNotEquals(LIFTING_OFF_ORDER, unit.getPrimaryOrder());
         });
     }
 }

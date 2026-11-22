@@ -453,6 +453,17 @@ public final class GameSpeed {
     }
 
     /**
+     * Sets the game's turns per second, as the Turn Rate and Dynamic Turn Rate commands do, and refills the timeouts.
+     *
+     * @param turnRate the game's turns per second
+     */
+    public void setTurnRate(int turnRate) {
+        this.turnRate = turnRate;
+
+        this.fillTimeouts();
+    }
+
+    /**
      * Fills the per-speed timeouts: outside a multiplayer session every timeout is {@code 1000}; in one, the turns per second are the game's turn
      * rate when it is {@code 1} through {@code 24}, else the provider's default when it is below {@code 24} ({@code 24} when that is {@code 0}), else
      * {@code 24}, and the timeout of speed {@code s} is {@code 1000 / (duration(s) * turns per second) * 1000 + 0.5} truncated (doubles over the

@@ -244,11 +244,11 @@ public final class MapUnitLoader {
                     : owner == creation.getLocalPlayer()) {
                     int horizontalMargin = (viewportWidth + (TerrainTileset.TILE_SIZE - 1)) / (VIEWPORT_CENTER_DIVISOR * TerrainTileset.TILE_SIZE);
                     int verticalMargin = (viewportHeight + (TerrainTileset.TILE_SIZE - 1)) / (VIEWPORT_CENTER_DIVISOR * TerrainTileset.TILE_SIZE);
+                    int tileX = (record.getX() & WORD_MASK) >>> TerrainTileset.TILE_SHIFT;
+                    int tileY = (record.getY() & WORD_MASK) >>> TerrainTileset.TILE_SHIFT;
 
-                    cameraPosition[HORIZONTAL_POSITION_INDEX] =
-                            Math.max(0, ((record.getX() & WORD_MASK) >>> TerrainTileset.TILE_SHIFT) - horizontalMargin) & WORD_MASK;
-                    cameraPosition[VERTICAL_POSITION_INDEX]   =
-                            Math.max(0, ((record.getY() & WORD_MASK) >>> TerrainTileset.TILE_SHIFT) - verticalMargin) & WORD_MASK;
+                    cameraPosition[HORIZONTAL_POSITION_INDEX] = Math.max(0, tileX - horizontalMargin) & WORD_MASK;
+                    cameraPosition[VERTICAL_POSITION_INDEX]   = Math.max(0, tileY - verticalMargin) & WORD_MASK;
                 }
 
                 continue;

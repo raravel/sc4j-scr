@@ -224,6 +224,15 @@ public final class LobbyResolution {
          * The packed {@code 0xRRGGBB} map color of each slot whose {@code CRGB} section fixes its own color, {@code -1} for the others.
          */
         public final int @NotNull [] mapColor;
+        /**
+         * The observer records' player ids ({@code -1} none), the record of observer slot {@link PlayerTable#FIRST_OBSERVER_SLOT} first.
+         * The observers take no part in the resolution.
+         */
+        public final int @NotNull [] observerId;
+        /**
+         * The observer records' names.
+         */
+        public final @NotNull String @NotNull [] observerName;
 
         /**
          * The custom color flag sent by the host, set by the map custom colors section.
@@ -253,6 +262,8 @@ public final class LobbyResolution {
             this.colorLock      = new boolean[PlayerTable.PLAYABLE_PLAYER_SLOTS];
             this.colorKept      = new boolean[PlayerTable.PLAYABLE_PLAYER_SLOTS];
             this.mapColor       = new int[PlayerTable.PLAYABLE_PLAYER_SLOTS];
+            this.observerId     = new int[PlayerTable.OBSERVER_SLOTS];
+            this.observerName   = new String[PlayerTable.OBSERVER_SLOTS];
 
             this.customColorFlag = false;
             this.tileset         = 0;
@@ -261,6 +272,8 @@ public final class LobbyResolution {
             Arrays.fill(this.name, "");
             Arrays.fill(this.lobbyColor, COLOR_NONE);
             Arrays.fill(this.mapColor, -1);
+            Arrays.fill(this.observerId, -1);
+            Arrays.fill(this.observerName, "");
         }
     }
 

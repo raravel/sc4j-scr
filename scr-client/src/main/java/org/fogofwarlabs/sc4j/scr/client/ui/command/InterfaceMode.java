@@ -4,13 +4,15 @@ import org.fogofwarlabs.sc4j.engine.client.command.CommandAction;
 import org.fogofwarlabs.sc4j.engine.client.command.CommandTarget;
 import org.fogofwarlabs.sc4j.engine.client.command.CommandTranslator;
 import org.fogofwarlabs.sc4j.engine.client.command.TargetingMode;
+import org.fogofwarlabs.sc4j.scr.game.extension.ScrButtonInput;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 /**
  * Holds the local cursor mode of the in-game interface: normal, targeting an order, or placing a building.
  * <p>
- * Targeting stores separate unit-target, ground-target and alternate orders; the alternate order is kept as supplied.
+ * Targeting stores separate unit-target, ground-target and alternate orders; the alternate order is kept as supplied. The targeting of a
+ * script target button ({@link ButtonAction#SCRIPT_TARGET}) stores the press instead of orders: its target goes to the game plugins.
  * Placement stores the pressed button's building type. These modes change only local interface state.
  * <p>
  * A targeting or placement mode is the SC:R action waiting in the engine {@link TargetingMode} ({@link #getTargeting}): the map input's
@@ -90,6 +92,7 @@ public final class InterfaceMode {
     private int alternateOrder;
     private int placementType;
     private @NotNull ButtonAction placementAction;
+    private @Nullable ScrButtonInput scriptButton;
 
     /**
      * Creates an {@link InterfaceMode} instance in normal mode.
@@ -104,6 +107,7 @@ public final class InterfaceMode {
         this.alternateOrder    = NONE;
         this.placementType     = NONE;
         this.placementAction   = ButtonAction.TERRAN_BUILD;
+        this.scriptButton      = null;
     }
 
     /**
@@ -144,6 +148,20 @@ public final class InterfaceMode {
     }
 
     /**
+     * @return {@code true} while a targeting mode waits for a target, of an order or of a script target button, {@code false} otherwise
+     */
+    public boolean isTargeting() {
+        return this.isWaiting() && this.placementType < 0;
+    }
+
+    /**
+     * @return the press of the script target button whose targeting mode waits, or {@code null} outside such a mode
+     */
+    public @Nullable ScrButtonInput getScriptButton() {
+        return this.isWaiting() ? this.scriptButton : null;
+    }
+
+    /**
      * @return the building type being placed, or {@code -1} outside placement
      */
     public int getPlacementType() {
@@ -171,6 +189,7 @@ public final class InterfaceMode {
      */
     public void startTargeting(int unitTargetOrder, int groundTargetOrder, int alternateOrder) {
         this.placementType     = NONE;
+        this.scriptButton      = null;
         this.unitTargetOrder   = unitTargetOrder;
         this.groundTargetOrder = groundTargetOrder;
         this.alternateOrder    = alternateOrder;
@@ -180,6 +199,21 @@ public final class InterfaceMode {
         } else {
             this.clear();
         }
+    }
+
+    /**
+     * Enters the targeting mode of a script target button, whose target goes to the game plugins.
+     *
+     * @param press the press of the button
+     */
+    public void startScriptTargeting(@NotNull ScrButtonInput press) {
+        this.placementType     = NONE;
+        this.unitTargetOrder   = NONE;
+        this.groundTargetOrder = NONE;
+        this.alternateOrder    = NONE;
+        this.scriptButton      = press;
+
+        this.targeting.start(this.action);
     }
 
     /**
@@ -195,6 +229,7 @@ public final class InterfaceMode {
 
         this.placementAction = action;
         this.placementType   = unitType;
+        this.scriptButton    = null;
 
         if (unitType >= 0) {
             this.targeting.start(this.action);

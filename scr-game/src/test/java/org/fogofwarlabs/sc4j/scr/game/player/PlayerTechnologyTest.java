@@ -135,8 +135,9 @@ final class PlayerTechnologyTest {
 
         for (int player = 0; player < PlayerTable.PLAYER_SLOTS; player++) {
             for (int technologyIndex = 0; technologyIndex < PlayerTechnology.CLASSIC_TECHNOLOGY_COUNT; technologyIndex++) {
-                section[player * PlayerTechnology.CLASSIC_TECHNOLOGY_COUNT + technologyIndex] =
-                        (byte) (player == UNAVAILABLE_PLAYER && technologyIndex == UNAVAILABLE_TECHNOLOGY ? UNAVAILABLE : AVAILABLE);
+                int sectionIndex = player * PlayerTechnology.CLASSIC_TECHNOLOGY_COUNT + technologyIndex;
+
+                section[sectionIndex] = (byte) (player == UNAVAILABLE_PLAYER && technologyIndex == UNAVAILABLE_TECHNOLOGY ? UNAVAILABLE : AVAILABLE);
             }
         }
 
@@ -192,6 +193,28 @@ final class PlayerTechnologyTest {
         Assertions.assertEquals(SECTION_SET, classic.readContextByte(PlayerTechnology.LEGACY_RESEARCHING_OFFSET));
         Assertions.assertEquals(0, classic.readContextByte(PlayerTechnology.RESEARCHING_OFFSET),
                                 "the expansion gate keeps an expansion technology of classic storage");
+    }
+
+    @Test
+    void set_available_should_store_the_availability_byte_without_the_expansion_gate() {
+        PlayerTechnology classic = PlayerProgressTestUtils.createPlayerTechnology(false);
+
+        classic.setAvailable(SECOND_PLAYER, FIRST_EXPANSION_TECHNOLOGY, false);
+        classic.setAvailable(SECOND_PLAYER, FIRST_TECHNOLOGY, false);
+
+        Assertions.assertFalse(classic.isAvailable(SECOND_PLAYER, FIRST_EXPANSION_TECHNOLOGY), "an expansion technology of classic storage");
+        Assertions.assertFalse(classic.isAvailable(SECOND_PLAYER, FIRST_TECHNOLOGY));
+        Assertions.assertEquals(UNAVAILABLE, classic.readContextByte(PlayerTechnology.CLASSIC_AVAILABLE_OFFSET +
+                                                                     SECOND_PLAYER * PlayerTechnology.CLASSIC_TECHNOLOGY_COUNT));
+
+        classic.setAvailable(SECOND_PLAYER, FIRST_TECHNOLOGY, true);
+
+        Assertions.assertEquals(AVAILABLE, classic.readContextByte(PlayerTechnology.CLASSIC_AVAILABLE_OFFSET +
+                                                                   SECOND_PLAYER * PlayerTechnology.CLASSIC_TECHNOLOGY_COUNT));
+
+        classic.setAvailable(PAST_PLAYER, FIRST_TECHNOLOGY, true);
+
+        Assertions.assertTrue(classic.isResearched(FIRST_PLAYER, FIRST_TECHNOLOGY), "the classic researched byte of player 0");
     }
 
     @Test

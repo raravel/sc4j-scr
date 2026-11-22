@@ -194,6 +194,14 @@ public final class ReplayCommandExecutor implements ReplayCommandHandler {
             return payloadLength == 0 && game.getTriggerContext() != null;
         }
 
+        if (typeId == ReplayCommandIds.MOD_COMMAND) {
+            int dataLength = payloadLength - Byte.BYTES;
+
+            return dataLength >= 0 && dataLength <= ReplayModCommand.MAXIMUM_DATA_LENGTH &&
+                   Byte.toUnsignedInt(command.getPayload()[0]) == dataLength &&
+                   commandPlayer >= 0 && commandPlayer < PlayerTable.PLAYER_SLOTS;
+        }
+
         UnitSelection selection = game.getSelection();
 
         if (!game.hasInitializedWorldState() || selection == null) {

@@ -67,36 +67,22 @@ public final class ClientContext implements AutoCloseable {
     private static final @NotNull Logger LOGGER = Logger.of(ClientContext.class);
 
     /**
-     * Creates a {@link ClientContext} instance with the acquired client resources. The context closes the provider and the audio when it is
-     * closed or when the creation fails.
-     *
-     * @param installLayout the selected client directories
-     * @param resources     the resource provider of the StarCraft: Remastered installation
-     * @param locale        the text locale, for example {@code koKR}
-     * @param audio         the client audio, or {@code null} to play no sound
-     * @return the created {@link ClientContext} instance
-     * @throws IOException if the storage, the renderer or the fonts cannot be loaded
-     */
-    public static @NotNull ClientContext open(@NotNull InstallLayout installLayout, @NotNull ScrResourceProvider resources,
-                                              @NotNull String locale, @Nullable ClientAudio audio) throws IOException {
-        return open(installLayout, resources, locale, audio, BeaconLinkAccess.NONE);
-    }
-
-    /**
-     * Creates a {@link ClientContext} instance with the acquired client resources and the run's Beacon.Link. The context closes the provider and
-     * the audio when it is closed or when the creation fails.
+     * Creates a {@link ClientContext} instance with the acquired client resources, the run's Beacon.Link and its release status. The context
+     * closes the provider and the audio when it is closed or when the creation fails.
      *
      * @param installLayout the selected client directories
      * @param resources     the resource provider of the StarCraft: Remastered installation
      * @param locale        the text locale, for example {@code koKR}
      * @param audio         the client audio, or {@code null} to play no sound
      * @param beaconLink    the Beacon.Link sessions of the multiplayer screens
+     * @param releaseStatus the running SC4J version and how it stands against the latest SC4J release
      * @return the created {@link ClientContext} instance
      * @throws IOException if the storage, the renderer or the fonts cannot be loaded
      */
     public static @NotNull ClientContext open(@NotNull InstallLayout installLayout, @NotNull ScrResourceProvider resources,
                                               @NotNull String locale, @Nullable ClientAudio audio,
-                                              @NotNull BeaconLinkAccess beaconLink) throws IOException {
+                                              @NotNull BeaconLinkAccess beaconLink,
+                                              @NotNull ReleaseStatus releaseStatus) throws IOException {
         CascStorage storage;
 
         try {
@@ -123,7 +109,7 @@ public final class ClientContext implements AutoCloseable {
             renderer.setTextFonts(gameFonts);
 
             return new ClientContext(installLayout, resources, storage, renderer, gameFonts, glueFonts, new GameCursor(storage, renderer), audio,
-                                     beaconLink);
+                                     beaconLink, releaseStatus);
         } catch (IOException | RuntimeException exception) {
             if (glueFonts != null) {
                 glueFonts.close();
@@ -165,7 +151,11 @@ public final class ClientContext implements AutoCloseable {
 
     private final @Nullable ClientAudio audio;
     private final @NotNull BeaconLinkAccess beaconLink;
-    private final @NotNull ClientPlayer player;
+    private final @NotNull ReleaseStatus releaseStatus;
+    /**
+     * The player of the run: the run's account, else the local ID chosen on the ID screen or a guest before one is chosen.
+     */
+    private @NotNull ClientPlayer player;
     private final @NotNull Music music;
     /**
      * The game music rotation of this client process, which every non-campaign game start advances.
@@ -229,6 +219,7 @@ public final class ClientContext implements AutoCloseable {
      * @param cursor            the drawn cursor
      * @param audio             the client audio, or {@code null} without sound
      * @param beaconLink        the Beacon.Link sessions of the multiplayer screens
+     * @param releaseStatus     the running SC4J version and how it stands against the latest SC4J release
      */
     private ClientContext(@NotNull InstallLayout installLayout,
                           @NotNull ScrResourceProvider resources, @NotNull CascStorage storage,
@@ -236,7 +227,8 @@ public final class ClientContext implements AutoCloseable {
                           @NotNull InterfaceFonts gameFonts, @NotNull InterfaceFonts glueFonts,
                           @NotNull GameCursor cursor,
                           @Nullable ClientAudio audio,
-                          @NotNull BeaconLinkAccess beaconLink) {
+                          @NotNull BeaconLinkAccess beaconLink,
+                          @NotNull ReleaseStatus releaseStatus) {
         this.installLayout = installLayout;
 
         this.tilesetAssets = new HashMap<>();
@@ -255,6 +247,7 @@ public final class ClientContext implements AutoCloseable {
 
         this.audio         = audio;
         this.beaconLink    = beaconLink;
+        this.releaseStatus = releaseStatus;
         this.player        = ClientPlayer.of(beaconLink.getAccount());
         this.music         = new Music(storage, audio);
         this.musicRotation = new MusicRotation();
@@ -284,10 +277,32 @@ public final class ClientContext implements AutoCloseable {
     }
 
     /**
-     * @return the player of the run: the run's account, or a guest
+     * @return the running SC4J version and how it stands against the latest SC4J release
+     */
+    public @NotNull ReleaseStatus getReleaseStatus() {
+        return this.releaseStatus;
+    }
+
+    /**
+     * @return the player of the run: the run's account, else the chosen local ID or a guest
      */
     public @NotNull ClientPlayer getPlayer() {
         return this.player;
+    }
+
+    /**
+     * Makes a local ID the player of a run without an account.
+     *
+     * @param name     the ID's name
+     * @param fileName the file name of the ID's character file, which names its saved-game folder
+     * @throws IllegalStateException if the run has an account
+     */
+    public void chooseLocalId(@NotNull String name, @NotNull String fileName) {
+        if (this.beaconLink.getAccount() != null) {
+            throw Exceptions.newIllegalStateException("A run with an account plays as its account.");
+        }
+
+        this.player = ClientPlayer.ofLocalId(name, fileName);
     }
 
     /**

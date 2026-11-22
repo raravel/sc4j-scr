@@ -16,6 +16,7 @@ import org.fogofwarlabs.sc4j.scr.game.ai.ComputerPlayerPhase;
 import org.fogofwarlabs.sc4j.scr.game.ai.ComputerTargets;
 import org.fogofwarlabs.sc4j.scr.game.ai.ComputerUnits;
 import org.fogofwarlabs.sc4j.scr.game.combat.UnitDamage;
+import org.fogofwarlabs.sc4j.scr.game.extension.ScrSimulationPlugins;
 import org.fogofwarlabs.sc4j.scr.game.movement.FlingyMotionUtils;
 import org.fogofwarlabs.sc4j.scr.game.order.OrderPool;
 import org.fogofwarlabs.sc4j.scr.game.order.ScrOrderSystem;
@@ -740,6 +741,8 @@ public final class UnitSpells {
                     this.game.getUnitEnergy().spend(unit, this.getEnergyCost(technology));
                 }
 
+                this.reportSpellCast(unit, technology, target, unit.getOrderTargetX(), unit.getOrderTargetY());
+
                 int cooldown = this.game.getUnitAttack().getModifiedCooldown(unit, weapon) +
                                (this.game.getRandom().next(SPELL_COOLDOWN_RANDOM_SOURCE) & SPELL_COOLDOWN_RANDOM_MASK) - 1;
 
@@ -914,6 +917,7 @@ public final class UnitSpells {
 
         if (scan != null) {
             this.game.getUnitEnergy().spend(unit, cost);
+            this.reportSpellCast(unit, ScrTechIds.SCANNER_SWEEP, null, creationX, creationY);
             this.playSound(SoundIds.COMSAT_SCANNER_SWEEP, unit);
         }
     }
@@ -1123,6 +1127,8 @@ public final class UnitSpells {
 
         Unit target = unit.requireOrderTargetUnit();
 
+        this.reportSpellCast(unit, ScrTechIds.DEFENSIVE_MATRIX, target, unit.getOrderTargetX(), unit.getOrderTargetY());
+
         target.setDefensiveMatrixHealth(DEFENSIVE_MATRIX_HEALTH << FIXED_POINT_FRACTION_BITS);
         target.setDefensiveMatrixTimer(DEFENSIVE_MATRIX_DURATION);
         this.createDefensiveMatrixImage(target, instructionLimit);
@@ -1172,6 +1178,7 @@ public final class UnitSpells {
                 unit.setOrderTargetY(targetSprite.getY());
             }
 
+            this.reportSpellCast(unit, ScrTechIds.RECALL, orderTarget, unit.getOrderTargetX(), unit.getOrderTargetY());
             this.createEffect(SpriteIds.RECALL_FIELD,
                               (short) unit.getOrderTargetX(), (short) unit.getOrderTargetY(),
                               unit.requireSprite().getElevationLevel() + 1,
@@ -1328,6 +1335,8 @@ public final class UnitSpells {
         Unit target = unit.requireOrderTargetUnit();
         UnitCreationContext context = this.game.getUnitSystem().requireUnitCreationContext();
 
+        this.reportSpellCast(unit, ScrTechIds.HALLUCINATION, target, unit.getOrderTargetX(), unit.getOrderTargetY());
+
         for (int copy = 0; copy < HALLUCINATION_COPIES; copy++) {
             Unit hallucination = this.createHallucination(target, unit.getOwnerIndex(), instructionLimit);
 
@@ -1458,6 +1467,8 @@ public final class UnitSpells {
             return;
         }
 
+        this.reportSpellCast(unit, ScrTechIds.MIND_CONTROL, target, unit.getOrderTargetX(), unit.getOrderTargetY());
+
         if ((target.getStatus() & UnitStatusFlags.HALLUCINATION) != 0) {
             this.game.getUnitLifecycle().kill(target, instructionLimit);
         } else {
@@ -1503,6 +1514,7 @@ public final class UnitSpells {
         }
 
         if (target.getEnergy() != 0) {
+            this.reportSpellCast(unit, ScrTechIds.FEEDBACK, target, unit.getOrderTargetX(), unit.getOrderTargetY());
             this.game.getUnitDamage().dealWeaponDamage(ScrWeaponIds.FEEDBACK,
                                                        target.getEnergy(),
                                                        FULL_DAMAGE_DIVISOR,
@@ -1916,7 +1928,13 @@ public final class UnitSpells {
         }
     }
 
-    private void updateAcidSporeImage(@NotNull Unit unit, int instructionLimit) {
+    /**
+     * Shows the Acid Spores overlay of the unit's spore count, replacing the overlay of another count.
+     *
+     * @param unit             the unit with spores
+     * @param instructionLimit the image budget
+     */
+    public void updateAcidSporeImage(@NotNull Unit unit, int instructionLimit) {
         int image = ImageIds.ACID_SPORES_1_OVERLAY_SMALL + ACID_SPORE_STAGES * this.getSpriteSize(unit) +
                     Math.min(unit.getAcidSporeCount() / ACID_SPORES_PER_STAGE, ACID_SPORE_STAGES - 1);
 
@@ -1937,7 +1955,7 @@ public final class UnitSpells {
      * @param unit             the target
      * @param instructionLimit the image, order and script budget
      */
-    void applyLockdown(@NotNull Unit unit, int instructionLimit) {
+    public void applyLockdown(@NotNull Unit unit, int instructionLimit) {
         if (unit.getLockdownTimer() == 0) {
             this.createTopImage(unit, ImageIds.LOCKDOWN_FIELD_SMALL + this.getSpriteSize(unit), instructionLimit);
         }
@@ -1955,7 +1973,7 @@ public final class UnitSpells {
      * @param unit             the target
      * @param instructionLimit the image, order and script budget
      */
-    void applyStasis(@NotNull Unit unit, int instructionLimit) {
+    public void applyStasis(@NotNull Unit unit, int instructionLimit) {
         if (unit.getStasisTimer() == 0) {
             this.createTopImage(unit, ImageIds.STASIS_FIELD_SMALL + this.getSpriteSize(unit), instructionLimit);
             unit.setStatus(unit.getStatus() | UnitStatusFlags.INVINCIBLE);
@@ -1974,7 +1992,7 @@ public final class UnitSpells {
      * @param unit             the target
      * @param instructionLimit the image, order and script budget
      */
-    void applyMaelstrom(@NotNull Unit unit, int instructionLimit) {
+    public void applyMaelstrom(@NotNull Unit unit, int instructionLimit) {
         if (unit.getMaelstromTimer() == 0) {
             this.createTopImage(unit, ImageIds.MAELSTROM_OVERLAY_SMALL + this.getSpriteSize(unit), instructionLimit);
         }
@@ -1995,7 +2013,7 @@ public final class UnitSpells {
      * @param instructionLimit the image budget
      * @throws NullPointerException if the world was built without game data
      */
-    void applyIrradiation(@Nullable Unit source, int owner, @NotNull Unit unit, int instructionLimit) {
+    public void applyIrradiation(@Nullable Unit source, int owner, @NotNull Unit unit, int instructionLimit) {
         if (unit.getIrradiateTimer() == 0 && (unit.getStatus() & UnitStatusFlags.BURROWED) == 0) {
             this.createTopImage(unit, ImageIds.IRRADIATE_SMALL + this.getSpriteSize(unit), instructionLimit);
         }
@@ -2011,7 +2029,7 @@ public final class UnitSpells {
      * @param unit             the target
      * @param instructionLimit the image and speed budget
      */
-    void applyEnsnare(@NotNull Unit unit, int instructionLimit) {
+    public void applyEnsnare(@NotNull Unit unit, int instructionLimit) {
         if (unit.getSpeedDecreaseByte() == 0 && (unit.getStatus() & UnitStatusFlags.BURROWED) == 0) {
             this.createTopImage(unit, ImageIds.ENSNARE_OVERLAY_SMALL + this.getSpriteSize(unit), instructionLimit);
         }
@@ -2026,7 +2044,7 @@ public final class UnitSpells {
      * @param unit             the target
      * @param instructionLimit the image budget
      */
-    void applyPlague(@NotNull Unit unit, int instructionLimit) {
+    public void applyPlague(@NotNull Unit unit, int instructionLimit) {
         if (unit.getPlagueTimer() == 0 && (unit.getStatus() & UnitStatusFlags.BURROWED) == 0) {
             this.createTopImage(unit, ImageIds.PLAGUE_OVERLAY_SMALL + this.getSpriteSize(unit), instructionLimit);
         }
@@ -2040,7 +2058,7 @@ public final class UnitSpells {
      * @param unit             the protected unit
      * @param instructionLimit the image budget
      */
-    void createDefensiveMatrixImage(@NotNull Unit unit, int instructionLimit) {
+    public void createDefensiveMatrixImage(@NotNull Unit unit, int instructionLimit) {
         if (unit.getDefensiveMatrixTimer() == 0 || (unit.getStatus() & UnitStatusFlags.BURROWED) != 0) {
             return;
         }
@@ -2144,30 +2162,58 @@ public final class UnitSpells {
         unit.setPrimaryOrderCountdown(DISABLE_END_ORDER_TIMER);
     }
 
-    private void removeEnsnare(@NotNull Unit unit, int instructionLimit) {
+    /**
+     * Ends Ensnare: clears the speed decrease, destroys the overlay and refreshes movement speed.
+     *
+     * @param unit             the ensnared unit
+     * @param instructionLimit the speed budget
+     */
+    public void removeEnsnare(@NotNull Unit unit, int instructionLimit) {
         unit.setSpeedDecreaseByte(0);
         this.destroyOverlay(unit, ImageIds.ENSNARE_OVERLAY_SMALL, ImageIds.ENSNARE_OVERLAY_SMALL + LARGE_OVERLAY);
         this.game.getEngineGame().getMovement().recalculateSpeed(unit, instructionLimit);
     }
 
-    private void removeLockdown(@NotNull Unit unit, int instructionLimit) {
+    /**
+     * Ends Lockdown: clears the timer, restores the button set once no disabling effect remains and ends the disabling effect.
+     *
+     * @param unit             the locked-down unit
+     * @param instructionLimit the order budget
+     */
+    public void removeLockdown(@NotNull Unit unit, int instructionLimit) {
         unit.setLockdownTimer(0);
         this.restoreButtonSet(unit);
         this.endDisableEffect(unit, ImageIds.LOCKDOWN_FIELD_SMALL, ImageIds.LOCKDOWN_FIELD_SMALL + LARGE_OVERLAY, instructionLimit);
     }
 
-    private void removePlague(@NotNull Unit unit) {
+    /**
+     * Ends Plague: clears the timer and destroys the overlay.
+     *
+     * @param unit the plagued unit
+     */
+    public void removePlague(@NotNull Unit unit) {
         unit.setPlagueTimer(0);
         this.destroyOverlay(unit, ImageIds.PLAGUE_OVERLAY_SMALL, ImageIds.PLAGUE_OVERLAY_SMALL + LARGE_OVERLAY);
     }
 
-    private void removeMaelstrom(@NotNull Unit unit, int instructionLimit) {
+    /**
+     * Ends Maelstrom: clears the timer, restores the button set once no disabling effect remains and ends the disabling effect.
+     *
+     * @param unit             the unit under Maelstrom
+     * @param instructionLimit the order budget
+     */
+    public void removeMaelstrom(@NotNull Unit unit, int instructionLimit) {
         unit.setMaelstromTimer(0);
         this.restoreButtonSet(unit);
         this.endDisableEffect(unit, ImageIds.MAELSTROM_OVERLAY_SMALL, ImageIds.MAELSTROM_OVERLAY_SMALL + LARGE_OVERLAY, instructionLimit);
     }
 
-    private void removeAcidSpores(@NotNull Unit unit) {
+    /**
+     * Ends Acid Spores: clears the count and the spore timers and destroys the overlay.
+     *
+     * @param unit the unit with spores
+     */
+    public void removeAcidSpores(@NotNull Unit unit) {
         unit.setAcidSporeCount(0);
 
         for (int index = 0; index < Unit.ACID_SPORE_SLOTS; index++) {
@@ -2177,7 +2223,14 @@ public final class UnitSpells {
         this.destroyOverlay(unit, ImageIds.ACID_SPORES_1_OVERLAY_SMALL, ImageIds.ACID_SPORES_1_OVERLAY_SMALL + ACID_SPORE_LAST_IMAGE_OFFSET);
     }
 
-    private void removeStasis(@NotNull Unit unit, int instructionLimit) {
+    /**
+     * Ends Stasis Field: clears the timer, restores the button set once no disabling effect remains, restores the invincibility of the unit
+     * type and ends the disabling effect.
+     *
+     * @param unit             the unit in stasis
+     * @param instructionLimit the order budget
+     */
+    public void removeStasis(@NotNull Unit unit, int instructionLimit) {
         unit.setStasisTimer(0);
         this.restoreButtonSet(unit);
 
@@ -2187,7 +2240,12 @@ public final class UnitSpells {
         this.endDisableEffect(unit, ImageIds.STASIS_FIELD_SMALL, ImageIds.STASIS_FIELD_SMALL + LARGE_OVERLAY, instructionLimit);
     }
 
-    private void removeIrradiate(@NotNull Unit unit) {
+    /**
+     * Ends Irradiate: clears the timer, the source and the owner and destroys the overlay.
+     *
+     * @param unit the irradiated unit
+     */
+    public void removeIrradiate(@NotNull Unit unit) {
         unit.setIrradiateTimer(0);
         unit.setIrradiatedBy(null);
         unit.setIrradiateOwner(NO_IRRADIATE_OWNER);
@@ -2540,5 +2598,22 @@ public final class UnitSpells {
         this.game.getInterfaceLink().getSoundEvents().add(sound,
                                                           sprite == null ? 0 : sprite.getX(), sprite == null ? 0 : sprite.getY(),
                                                           unit.getUnitId());
+    }
+
+    /**
+     * Reports a cast technology to the simulation plugins ({@link ScrSimulationPlugins#reportSpellCast}) when the game has them.
+     *
+     * @param caster     the casting unit
+     * @param technology the techdata.dat entry
+     * @param target     the target unit, or {@code null} for none
+     * @param positionX  the target X coordinate
+     * @param positionY  the target Y coordinate
+     */
+    private void reportSpellCast(@NotNull Unit caster, int technology, @Nullable Unit target, int positionX, int positionY) {
+        ScrSimulationPlugins simulation = this.game.getSimulationPlugins();
+
+        if (simulation != null) {
+            simulation.reportSpellCast(caster, technology, target, positionX, positionY);
+        }
     }
 }

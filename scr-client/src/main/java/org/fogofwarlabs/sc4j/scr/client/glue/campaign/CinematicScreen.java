@@ -438,7 +438,7 @@ public final class CinematicScreen extends GlueScreen {
     }
 
     /**
-     * Called first for every press of the screen that no open popup or open combo box takes.
+     * Called first for every press of the screen that no open popup or open combo box takes, while the screen takes input.
      * <p>
      * Every press advances to the next clip and is consumed.
      *

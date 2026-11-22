@@ -481,7 +481,7 @@ public final class EstablishingShotScreen extends GlueScreen {
     }
 
     /**
-     * Called first for every press of the screen that no open popup or open combo box takes.
+     * Called first for every press of the screen that no open popup or open combo box takes, while the screen takes input.
      * <p>
      * A press advances an active shot by a page; every press is consumed.
      *

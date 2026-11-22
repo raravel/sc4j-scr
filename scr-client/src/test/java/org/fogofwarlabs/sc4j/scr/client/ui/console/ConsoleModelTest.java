@@ -360,7 +360,8 @@ final class ConsoleModelTest {
 
                 if (pool.isAllocated(index) && (unit.getUnitId() == SCV || unit.getUnitId() == ScrUnitIds.TERRAN_MARINE)) {
                     written[slot] = index;
-                                    slot = slot == FIRST_SLOT ? THIRD_SLOT : slot + 1;
+
+                    slot = slot == FIRST_SLOT ? THIRD_SLOT : slot + 1;
                 }
             }
 

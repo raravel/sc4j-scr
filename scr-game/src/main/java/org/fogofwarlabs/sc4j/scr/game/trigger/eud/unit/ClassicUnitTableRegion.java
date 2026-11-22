@@ -488,11 +488,13 @@ public final class ClassicUnitTableRegion implements ClassicRegion {
         }
 
         for (int index = 0; index < Integer.BYTES; index++) {
-            if (findPaddingIndex(NATIVE_BYTE[field + index]) >= 0) {
-                this.paddingBytes[offset / ENTRY_SIZE * NATIVE_PADDING.length + findPaddingIndex(NATIVE_BYTE[field + index])] =
-                        (byte) (value >>> (index * Byte.SIZE));
+            int nativeOffset = NATIVE_BYTE[field + index];
+            int paddingIndex = findPaddingIndex(nativeOffset);
+
+            if (paddingIndex >= 0) {
+                this.paddingBytes[offset / ENTRY_SIZE * NATIVE_PADDING.length + paddingIndex] = (byte) (value >>> (index * Byte.SIZE));
             } else {
-                NativeUnitFields.writeByte(unit, NATIVE_BYTE[field + index], value >>> (index * Byte.SIZE));
+                NativeUnitFields.writeByte(unit, nativeOffset, value >>> (index * Byte.SIZE));
             }
         }
     }

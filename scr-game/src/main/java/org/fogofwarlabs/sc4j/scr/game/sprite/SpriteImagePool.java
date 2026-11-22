@@ -17,6 +17,9 @@ import java.util.Arrays;
  * the game's iscript interpreter binds the pool to its program ({@link #bindIscript}), the state keeps native offsets as positions; binding
  * converts them through the offset map, and from then on {@link #getOffset} and {@link #getPosition} convert.
  * <p>
+ * Every allocation stamps its slot with a generation ({@link #getGeneration(int)}), a serial that tells images apart that reuse a slot. The
+ * generations are presentation data: no simulation rule reads them, the state hash and saved games leave them out.
+ * <p>
  * Capacity must be supplied from established runtime state. This pool does not initialize the original graphics tables, viewport, sprite pool or
  * world schedule.
  */
@@ -37,9 +40,11 @@ public final class SpriteImagePool {
     private @NotNull SpriteImage @NotNull [] images;
     private int @NotNull [] nextFreeIndices;
     private boolean @NotNull [] allocated;
+    private long @NotNull [] generations;
 
     private int firstFreeIndex;
     private int allocatedCount;
+    private long generation;
 
     /**
      * Creates a {@link SpriteImagePool} instance with zeroed image storage.
@@ -61,9 +66,11 @@ public final class SpriteImagePool {
         this.images          = new SpriteImage[capacity];
         this.nextFreeIndices = new int[capacity];
         this.allocated       = new boolean[capacity];
+        this.generations     = new long[capacity];
 
         this.firstFreeIndex = 0;
         this.allocatedCount = 0;
+        this.generation     = 0;
 
         for (int poolIndex = 0; poolIndex < capacity; poolIndex++) {
             this.images[poolIndex]          = new SpriteImage(this, poolIndex);
@@ -159,6 +166,21 @@ public final class SpriteImagePool {
 
     /**
      * @param poolIndex the zero-based storage index
+     * @return the generation of the slot's last allocation, {@code 0} if the slot was never allocated or holds a saved game's image
+     */
+    public long getGeneration(int poolIndex) {
+        return this.generations[poolIndex];
+    }
+
+    /**
+     * @return the generation of the latest allocation, {@code 0} before the first; every allocation takes the next one
+     */
+    public long getGeneration() {
+        return this.generation;
+    }
+
+    /**
+     * @param poolIndex the zero-based storage index
      * @return the following free index, or {@code -1} at the end
      */
     public int getNextFreeIndex(int poolIndex) {
@@ -184,6 +206,7 @@ public final class SpriteImagePool {
         this.images          = Arrays.copyOf(this.images, capacity);
         this.nextFreeIndices = Arrays.copyOf(this.nextFreeIndices, capacity);
         this.allocated       = Arrays.copyOf(this.allocated, capacity);
+        this.generations     = Arrays.copyOf(this.generations, capacity);
 
         for (int poolIndex = first; poolIndex < capacity; poolIndex++) {
             this.images[poolIndex] = new SpriteImage(this, poolIndex);
@@ -240,6 +263,7 @@ public final class SpriteImagePool {
 
         Arrays.fill(this.nextFreeIndices, -1);
         Arrays.fill(this.allocated, false);
+        Arrays.fill(this.generations, 0);
 
         this.firstFreeIndex = -1;
         this.allocatedCount = 0;
@@ -297,6 +321,7 @@ public final class SpriteImagePool {
         this.firstFreeIndex             = this.nextFreeIndices[poolIndex];
         this.nextFreeIndices[poolIndex] = -1;
         this.allocated[poolIndex]       = true;
+        this.generations[poolIndex]     = ++this.generation;
         this.allocatedCount++;
 
         return this.images[poolIndex];

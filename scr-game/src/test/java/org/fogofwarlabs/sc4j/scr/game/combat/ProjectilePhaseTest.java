@@ -55,6 +55,15 @@ final class ProjectilePhaseTest {
      * The state hash seed of the list update test.
      */
     private static final int STATE_HASH_SEED = 1;
+    /**
+     * A target X outside the signed WORD the target field keeps, and a negative target Y.
+     */
+    private static final int WRAPPED_TARGET_X = 70000;
+    private static final int NEGATIVE_TARGET_Y = -5;
+    /**
+     * A remaining time outside the BYTE the field keeps.
+     */
+    private static final int WRAPPED_REMAINING_TIME = 300;
 
     /**
      * The native miss chance, out of {@code 256}, against a target on higher ground.
@@ -213,6 +222,46 @@ final class ProjectilePhaseTest {
 
             Assertions.assertEquals(BRAKED_SPEED, bullet.getCurrentSpeed(),
                                     "The wrapped halt distance is compared with the waypoint distance unsigned.");
+        }
+    }
+
+    @RequiresInstallation
+    @Test
+    void a_created_bullet_takes_the_next_generation_and_its_field_writes_keep_the_native_widths() throws IOException {
+        try (GameData gameData = GameData.loadFrom(ExternalInput.INSTALLATION.getPath())) {
+            Game game = CombatGameScenario.createDuelGame(gameData, ScrUnitIds.TERRAN_WRAITH, ScrUnitIds.TERRAN_MARINE);
+            GameFrame frame = game.getFrame();
+            UnitPool pool = game.getUnitSystem().getUnitPool();
+
+            Assertions.assertNotNull(frame);
+            Assertions.assertNotNull(pool);
+
+            ProjectilePhase.Context context = frame.getProjectiles();
+            Unit source = pool.getUnit(CombatGameScenario.FIRST_UNIT_INDEX);
+            ProjectilePhase.Bullet first = game.getProjectilePhase().create(source, ScrWeaponIds.GEMINI_MISSILES,
+                                                                            CombatGameScenario.FIRST_UNIT_X, CombatGameScenario.FIRST_UNIT_Y,
+                                                                            CombatGameScenario.INSTRUCTION_LIMIT);
+            ProjectilePhase.Bullet second = game.getProjectilePhase().create(source, ScrWeaponIds.GEMINI_MISSILES,
+                                                                             CombatGameScenario.FIRST_UNIT_X, CombatGameScenario.FIRST_UNIT_Y,
+                                                                             CombatGameScenario.INSTRUCTION_LIMIT);
+
+            Assertions.assertNotNull(first);
+            Assertions.assertNotNull(second);
+            Assertions.assertTrue(first.isActive());
+            Assertions.assertSame(first, context.getBullet(first.getPoolIndex()));
+            Assertions.assertEquals(first.getGeneration() + 1, second.getGeneration());
+            Assertions.assertEquals(ScrWeaponIds.GEMINI_MISSILES, first.getWeapon());
+            Assertions.assertSame(source, first.getSourceUnit());
+
+            long hash = game.computeStateHash();
+
+            first.setTargetPosition(WRAPPED_TARGET_X, NEGATIVE_TARGET_Y);
+            first.setRemainingTime(WRAPPED_REMAINING_TIME);
+
+            Assertions.assertEquals((short) WRAPPED_TARGET_X, first.getTargetX());
+            Assertions.assertEquals(NEGATIVE_TARGET_Y, first.getTargetY());
+            Assertions.assertEquals(Byte.toUnsignedInt((byte) WRAPPED_REMAINING_TIME), first.getRemainingTime());
+            Assertions.assertNotEquals(hash, game.computeStateHash(), "the writes are game state");
         }
     }
 }

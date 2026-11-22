@@ -50,6 +50,10 @@ public final class StatusOverlay {
      */
     private static final @NotNull List<String> LATENCY_KEYS = List.of("bnet_latency_low", "bnet_latency_high", "bnet_latency_extraHigh");
     /**
+     * The localized scan text key of the dynamic turn rate.
+     */
+    private static final @NotNull String SCAN_KEY = "bnet_dtr_scanInProgress";
+    /**
      * The age beyond which a present no longer counts for the frame rate: one second.
      */
     private static final long FRAME_RATE_WINDOW_NANOSECONDS = 1_000_000_000L;
@@ -74,16 +78,30 @@ public final class StatusOverlay {
     }
 
     /**
-     * Creates the turn rate text, shown when {@code ShowTurnRate} is on and a network game runs.
+     * Creates the turn rate text, shown when {@code ShowTurnRate} is on and a network game runs: the turns per second and the latency name,
+     * or the scan text instead while the dynamic turn rate scans.
      *
      * @param settings    the interface settings with the display switches
      * @param networkGame whether a network game runs
      * @param turnRate    the game's turns per second
      * @param latency     the localized name of the game's latency
+     * @param scan        the localized scan text while the dynamic turn rate scans, else empty
      * @return the turn rate text, or {@code null} when it is not shown
      */
-    static @Nullable String createTurnRateText(@NotNull InterfaceSettings settings, boolean networkGame, int turnRate, @NotNull String latency) {
-        return settings.isTurnRateShown() && networkGame ? Exceptions.format(TURN_RATE_FORMAT, turnRate, latency) : null;
+    static @Nullable String createTurnRateText(@NotNull InterfaceSettings settings, boolean networkGame, int turnRate, @NotNull String latency,
+                                               @NotNull String scan) {
+        if (!settings.isTurnRateShown() || !networkGame) {
+            return null;
+        }
+
+        return scan.isEmpty() ? Exceptions.format(TURN_RATE_FORMAT, turnRate, latency) : scan;
+    }
+
+    /**
+     * @return the text key of the dynamic turn rate's scan text, which replaces the turn rate text while the scan runs
+     */
+    public static @NotNull String getScanKey() {
+        return SCAN_KEY;
     }
 
     /**
@@ -210,10 +228,11 @@ public final class StatusOverlay {
      * @param networkGame whether a network game runs
      * @param turnRate    the game's turns per second
      * @param latency     the localized name of the game's latency
+     * @param scan        the localized scan text while the dynamic turn rate scans, else empty
      */
-    public void update(@NotNull InterfaceSettings settings, boolean networkGame, int turnRate, @NotNull String latency) {
+    public void update(@NotNull InterfaceSettings settings, boolean networkGame, int turnRate, @NotNull String latency, @NotNull String scan) {
         this.frameRateText = createFrameRateText(settings, this.presentCount);
-        this.turnRateText  = createTurnRateText(settings, networkGame, turnRate, latency);
+        this.turnRateText  = createTurnRateText(settings, networkGame, turnRate, latency, scan);
     }
 
     /**

@@ -149,7 +149,6 @@ public final class OptionsPopup extends GluePopup {
     private static final @NotNull String NON_DIGITS = createNonDigits();
 
     private static final int DIM_COLOR = 0x000000D0;
-    private static final int RULE_COLOR = 0x8C0000FF;
     private static final int PANEL_BACKING_COLOR = 0x000000FF;
     /**
      * The frame of a framed button on the popup art ({@link #POPUP_PANEL_IMAGE}: the frame around its Ok button), a sample of its inside and
@@ -1124,8 +1123,8 @@ public final class OptionsPopup extends GluePopup {
             canvas.drawPopupPanel(panel, left + PANEL_LEFT, top + PANEL_TOP, PANEL_WIDTH, PANEL_HEIGHT);
         }
 
-        canvas.fillRectangle(left + PANEL_LEFT + MARGIN, top + RULE_TOP, PANEL_WIDTH - BOX_SIDES * MARGIN, RULE_THICKNESS, RULE_COLOR);
-        canvas.fillRectangle(left + DIVIDER_LEFT, top + BODY_TOP, RULE_THICKNESS, BODY_BOTTOM - BODY_TOP, RULE_COLOR);
+        canvas.fillRectangle(left + PANEL_LEFT + MARGIN, top + RULE_TOP, PANEL_WIDTH - BOX_SIDES * MARGIN, RULE_THICKNESS, PANEL_RULE_COLOR);
+        canvas.fillRectangle(left + DIVIDER_LEFT, top + BODY_TOP, RULE_THICKNESS, BODY_BOTTOM - BODY_TOP, PANEL_RULE_COLOR);
         super.drawControls(canvas);
     }
 
@@ -1286,7 +1285,7 @@ public final class OptionsPopup extends GluePopup {
     }
 
     /**
-     * Called first for every press of the screen that no open popup or open combo box takes.
+     * Called first for every press of the screen that no open popup or open combo box takes, while the screen takes input.
      * <p>
      * The number box (the APM threshold) takes the keyboard when it is pressed while enabled; a press elsewhere gives the keys back to the
      * controls' hotkeys. The press is never consumed, so the normal control press continues after the keyboard focus changed.

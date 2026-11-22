@@ -67,6 +67,13 @@ final class UnitSelectionTest {
      */
     private static final int FIRST_POOL_INDEX = 1;
     private static final int SECOND_POOL_INDEX = 2;
+    private static final int THIRD_POOL_INDEX = 3;
+    private static final int FOURTH_POOL_INDEX = 4;
+    private static final int OTHER_PLAYER = 1;
+    /**
+     * The selection-history records of a player.
+     */
+    private static final int HISTORY_RECORDS = 8;
 
     /**
      * Creates a {@link ScrUnitTypeView} instance whose flags mark the Supply Depot as the only building of the {@code units.dat} types and read the
@@ -194,6 +201,50 @@ final class UnitSelectionTest {
         Assertions.assertEquals(FIRST_POOL_INDEX, selection.getSelectedPoolIndex(PLAYER, 0));
         Assertions.assertEquals(SECOND_POOL_INDEX, selection.getSelectedPoolIndex(PLAYER, 1));
         Assertions.assertEquals(0, selection.getSelectedPoolIndex(PLAYER, 2));
+    }
+
+    @RequiresInstallation
+    @Test
+    void select_should_replace_the_selection_by_the_command_rules_without_scope_accounting(@NotNull InstallationTestResources resources) throws IOException {
+        Game game = createGame(resources.getGameData(), ScrUnitIds.TERRAN_MARINE, ScrUnitIds.TERRAN_SUPPLY_DEPOT, ScrUnitIds.TERRAN_MARINE,
+                               ScrUnitIds.TERRAN_MARINE);
+        UnitPool pool = game.getUnitSystem().getUnitPool();
+
+        Assertions.assertNotNull(pool);
+
+        Unit[] units = {pool.getUnit(FIRST_POOL_INDEX), pool.getUnit(SECOND_POOL_INDEX), pool.getUnit(THIRD_POOL_INDEX),
+                        pool.getUnit(FOURTH_POOL_INDEX)};
+        UnitSelection selection = new UnitSelection(pool, true, 0, PLAYER);
+
+        units[3].setOwnerIndex(OTHER_PLAYER);
+        selection.setSelectedPoolIndexRaw(PLAYER, 0, FOURTH_POOL_INDEX);
+        selection.setSelectedPoolIndexRaw(PLAYER, 1, SECOND_POOL_INDEX);
+        selection.select(game, PLAYER, units);
+
+        // The building and the other player's unit cannot join a selection of more than one unit.
+        Assertions.assertEquals(FIRST_POOL_INDEX, selection.getSelectedPoolIndex(PLAYER, 0));
+        Assertions.assertEquals(THIRD_POOL_INDEX, selection.getSelectedPoolIndex(PLAYER, 1));
+        Assertions.assertEquals(0, selection.getSelectedPoolIndex(PLAYER, 2));
+        Assertions.assertEquals(0, selection.getScopeTotal(PLAYER), "no command ran");
+
+        boolean recorded = false;
+
+        for (int historyIndex = 0; historyIndex < HISTORY_RECORDS; historyIndex++) {
+            recorded |= selection.getHistoryHandle(PLAYER, historyIndex, 0) == pool.getHandle(FIRST_POOL_INDEX);
+        }
+
+        Assertions.assertTrue(recorded, "a selection of more than one unit is stored as a history record");
+
+        selection.select(game, PLAYER, new Unit[]{units[1]});
+
+        Assertions.assertEquals(SECOND_POOL_INDEX, selection.getSelectedPoolIndex(PLAYER, 0), "a building alone is selected");
+        Assertions.assertEquals(0, selection.getSelectedPoolIndex(PLAYER, 1));
+
+        Unit[] tooMany = new Unit[UnitSelection.MAXIMUM_SELECTED + 1];
+
+        Arrays.fill(tooMany, units[0]);
+
+        Assertions.assertThrows(IllegalArgumentException.class, () -> selection.select(game, PLAYER, tooMany));
     }
 
     @RequiresInstallation

@@ -75,7 +75,7 @@ jobs:
           cache-provider: basic
 
       - name: Test
-        run: ./gradlew test -Psc4j.render.smoke=false
+        run: ./gradlew test
 
       - name: Build the mod jar
         # The checksum file has the sha256sum format: the hash, two spaces and the file name.

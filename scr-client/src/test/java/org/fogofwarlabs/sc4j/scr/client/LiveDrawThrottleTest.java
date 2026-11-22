@@ -28,10 +28,11 @@ import java.util.List;
 
 /**
  * Checks the live game loop pacing of the speed overrides on two clients of a network game, each running the client's passes on a simulated host
- * clock: a pass runs the live frame due ({@link ReplayPlayback#takeLiveDueFrame}) after the turn exchange, then draws if the draw throttle lets it
- * ({@link PresentThrottle} with {@link GameSpeed#THROTTLED_DRAW_INTERVAL}), and a drawn pass costs more host time than a pass without drawing. At
- * {@code #x4} and {@code #x5} several frames run per drawn frame and the drawn frames keep the draw interval; without an override and at
- * {@code #x2} every pass draws and runs at most one frame; both clients stay in step whatever their drawing costs. A user's frame rate limit
+ * clock: a pass runs the live frames due ({@link ReplayPlayback#takeLiveDueFrames}) after their turn exchanges, giving the time of frames whose
+ * turn is missing back ({@link ReplayPlayback#refundLiveFrames}), then draws if the draw throttle lets it ({@link PresentThrottle} with
+ * {@link GameSpeed#THROTTLED_DRAW_INTERVAL}), and a drawn pass costs more host time than a pass without drawing. At {@code #x4} and {@code #x5}
+ * several frames run per drawn frame and the drawn frames keep the draw interval; without an override and at {@code #x2} every pass draws and
+ * the clients run no more frames than they draw; both clients stay in step whatever their drawing costs. A user's frame rate limit
  * below the draw interval's rate ({@link PresentThrottle#setFrameRateLimit}) spaces the drawn frames of {@code #x3} to {@code #x5} to the limit's
  * period and leaves the frame schedule as it is: the clients run no fewer frames than without it.
  */
@@ -171,30 +172,33 @@ final class LiveDrawThrottleTest {
         }
 
         /**
-         * Runs one pass at the host time: the due frame after its turn exchange, then the drawing if the throttle lets it.
+         * Runs one pass at the host time: the due frames after their turn exchanges, then the drawing if the throttle lets it.
          *
          * @param now the host time in milliseconds
          */
         private void runPass(int now) {
             int frameDuration = this.runtime.getFrameTiming().getDuration(GameSpeed.FASTEST);
             double elapsedSeconds = (now - this.lastPass) / MILLISECONDS_PER_SECOND;
+            int dueFrames = this.playback.takeLiveDueFrames(elapsedSeconds, frameDuration, GameSpeed.getLagLimit(GameSpeed.FASTEST));
 
             this.lastPass = now;
 
-            if (this.playback.takeLiveDueFrame(elapsedSeconds, frameDuration, GameSpeed.getLagLimit(GameSpeed.FASTEST)) == 1) {
+            for (int index = 0; index < dueFrames; index++) {
                 long frame = this.runtime.getGame().getCurrentFrame();
 
-                if (this.game.exchangeTurn(frame)) {
-                    this.runtime.step(frameDuration, now);
+                if (!this.game.exchangeTurn(frame)) {
+                    // A frame waiting for a player's turn ran nothing; its time and the time of the later due frames stay owed.
+                    this.playback.refundLiveFrames(dueFrames - index);
 
-                    Assertions.assertNull(this.runtime.getFailure(), () -> "frame " + frame + ": " + this.runtime.getFailure());
-                    Assertions.assertEquals(frame + 1, this.runtime.getGame().getCurrentFrame());
-
-                    this.frameHashes.add(SyncChecksumUtils.calculateUnitHash(this.runtime.getGame()) ^ this.runtime.getGame().getRandom().getState());
-                } else {
-                    // A frame waiting for a player's turn ran nothing; the client restarts its schedule.
-                    this.playback.resetClock();
+                    break;
                 }
+
+                this.runtime.step(frameDuration, now);
+
+                Assertions.assertNull(this.runtime.getFailure(), () -> "frame " + frame + ": " + this.runtime.getFailure());
+                Assertions.assertEquals(frame + 1, this.runtime.getGame().getCurrentFrame());
+
+                this.frameHashes.add(SyncChecksumUtils.calculateUnitHash(this.runtime.getGame()) ^ this.runtime.getGame().getRandom().getState());
             }
 
             if (!this.throttle.takePresentDue(now)) {
@@ -223,7 +227,7 @@ final class LiveDrawThrottleTest {
         for (Client[] clients : List.of(plain, second)) {
             for (Client client : clients) {
                 Assertions.assertFalse(client.throttle.isActive());
-                Assertions.assertTrue(client.frameHashes.size() <= client.drawnFrames, "at most one frame per drawn frame");
+                Assertions.assertTrue(client.frameHashes.size() <= client.drawnFrames, "no more frames than drawn frames");
                 Assertions.assertEquals(client.drawMilliseconds, client.shortestDrawGap, "every pass draws");
             }
         }

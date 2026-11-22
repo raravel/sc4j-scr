@@ -338,10 +338,12 @@ public final class TargetValidation {
                 } else if (view.getUnitQueries().getRightClickClass(unit) == ACTION_ATTACK_ONLY) {
                     if (view.getUnitTargeting().isOutOfMaximumRange(unit, target)) {
                         error[ERROR_RESULT_INDEX] = OUT_OF_RANGE;
-                                                    unitAccepted = false;
+
+                        unitAccepted = false;
                     } else if (isTooClose(view, unit, target)) {
                         error[ERROR_RESULT_INDEX] = TOO_CLOSE;
-                                                    unitAccepted = false;
+
+                        unitAccepted = false;
                     } else {
                         unitAccepted = view.getUnitTargeting().canAttackTarget(unit, target);
                     }

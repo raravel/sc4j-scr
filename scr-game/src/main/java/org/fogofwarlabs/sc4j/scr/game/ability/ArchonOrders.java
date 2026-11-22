@@ -184,8 +184,9 @@ public final class ArchonOrders {
 
                 if (distance < nearestDistance) {
                     units[other] = nearest;
-                                   nearestDistance = distance;
-                                   nearest = candidate;
+
+                    nearestDistance = distance;
+                    nearest         = candidate;
                 }
             }
 

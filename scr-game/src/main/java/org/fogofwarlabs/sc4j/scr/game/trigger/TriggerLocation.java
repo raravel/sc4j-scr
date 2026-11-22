@@ -108,12 +108,27 @@ public final class TriggerLocation {
         return this.elevationFlags;
     }
 
-    void setElevationFlags(int elevationFlags) {
-        this.elevationFlags = elevationFlags;
+    /**
+     * Sets the elevation flag WORD, as an EUD write of the location table does: a set bit leaves the units at its elevation out of the
+     * location (bits {@code 0..2} the low, middle and high ground, bits {@code 3..5} the air above them).
+     *
+     * @param elevationFlags the flags, truncated to a WORD
+     */
+    public void setElevationFlags(int elevationFlags) {
+        this.elevationFlags = elevationFlags & WORD_MASK;
     }
 
 
-    void setBounds(int left, int top, int right, int bottom) {
+    /**
+     * Sets the four bound DWORDs as given, without masking or clamping. Loading the {@code MRGN} section and Move Location
+     * ({@link TriggerLocations#moveLocation}) write the bounds here.
+     *
+     * @param left   the left bound DWORD
+     * @param top    the top bound DWORD
+     * @param right  the right bound DWORD
+     * @param bottom the bottom bound DWORD
+     */
+    public void setBounds(int left, int top, int right, int bottom) {
         this.left   = left;
         this.top    = top;
         this.right  = right;

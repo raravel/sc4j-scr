@@ -13,8 +13,6 @@ tasks.withType(Test).configureEach {
 
 dependencies {
     implementation "org.fogofwarlabs.sc4j:sc4j-base:$sc4jVersion"
-    // The mod API of the entry org.fogofwarlabs.sc4j.scr.ScrMod; at run time the runtime provides it, scr.jar does not hold it.
-    implementation "org.fogofwarlabs.sc4j:sc4j-engine:$sc4jVersion"
     implementation project(':scr-data')
     implementation project(':scr-game')
     implementation project(':scr-render')
@@ -28,7 +26,7 @@ dependencies {
     testRuntimeOnly files('../scr-game/src/test/resources')
     // The engine's Beacon.Link session and community part played by hand (RecordingBeaconLink, RecordingCommunitySession) of the
     // community screen tests.
-    testImplementation testFixtures("org.fogofwarlabs.sc4j:sc4j-engine:$sc4jVersion")
+    testImplementation testFixtures("org.fogofwarlabs.sc4j:sc4j-engine-net:$sc4jVersion")
 
     implementation platform("org.lwjgl:lwjgl-bom:$LWJGL_VERSION")
     implementation 'org.lwjgl:lwjgl'

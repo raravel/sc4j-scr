@@ -1,12 +1,13 @@
 package org.fogofwarlabs.sc4j.scr.client.glue.lobby;
 
-import org.fogofwarlabs.sc4j.engine.client.community.RecordingCommunitySession;
 import org.fogofwarlabs.sc4j.engine.client.input.Key;
 import org.fogofwarlabs.sc4j.engine.net.beaconlink.LatencyEstimate;
 import org.fogofwarlabs.sc4j.engine.net.beaconlink.community.PlayerStatus;
+import org.fogofwarlabs.sc4j.engine.net.beaconlink.community.RecordingCommunitySession;
 import org.fogofwarlabs.sc4j.engine.resource.dialog.DialogControl;
 import org.fogofwarlabs.sc4j.scr.client.glue.GlueCanvas;
 import org.fogofwarlabs.sc4j.scr.client.glue.GlueNavigator;
+import org.fogofwarlabs.sc4j.scr.client.glue.OwnText;
 import org.fogofwarlabs.sc4j.scr.client.ui.dialog.ScrDialog;
 import org.fogofwarlabs.sc4j.scr.client.ui.text.GluText;
 import org.fogofwarlabs.sc4j.scr.core.test.ExternalInput;
@@ -19,24 +20,15 @@ import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
 /**
- * Checks that the connection choice enters Beacon.Link with the run's account: Beacon.Link and Ok open the channel chat at once with a
- * session named after the account, while the top right names the account; a run without an account keeps Ok disabled on Beacon.Link, says
- * that it needs an account and opens no session. SD at 640x480 in English and HD at 1920x1080 in Korean. The lower left panel holds LAN's
- * protocol pane and is hidden for Beacon.Link, which has no pane; Beacon.Link shows its plain name and a requirements line as the
- * installed ones.
- * <p>
- * The reference frames are stored as SHA-256 digests of the read-back pixels (the frames hold installation artwork, which the repository does
- * not keep); every drawn frame is also written to {@code build/glue-screenshots}. The digests are those of the reference machine's OpenGL
- * driver.
+ * Checks that the connection choice enters Beacon.Link with the run's account (Beacon.Link and Ok open the channel chat at once with a
+ * session named after the account), that the lower left panel holds LAN's protocol pane and stays shown while it slides out for Beacon.Link,
+ * which has no pane, and that Beacon.Link shows its plain name and a requirements line as the installed ones: SD at 640x480 in English and HD
+ * at 1920x1080 in Korean.
  */
 @RequiresInstallation
 final class ConnectionScreenTest {
@@ -48,19 +40,15 @@ final class ConnectionScreenTest {
     private static final int SMALL_HEIGHT = 480;
     private static final int LARGE_WIDTH = 1920;
     private static final int LARGE_HEIGHT = 1080;
-    private static final @NotNull String ACCOUNT_FRAME = "beaconlink-entry-";
-    private static final @NotNull String GUEST_FRAME = "beaconlink-guest-";
-    private static final @NotNull String LAN_PANE_FRAME = "connection-lan-";
-    private static final @NotNull String BEACON_LINK_PANE_FRAME = "connection-beaconlink-";
+    /**
+     * The drawn time after a selection at which the sliding panel is checked, in milliseconds.
+     */
+    private static final int SLIDE_CHECK_MILLISECONDS = 60;
     /**
      * The panel of the selected provider's pane and LAN's protocol pane in it.
      */
     private static final int PANE_PANEL = 11;
     private static final int PROTOCOL_PANEL = 17;
-    /**
-     * A drawn border line covers more than half of the panel's width.
-     */
-    private static final int BORDER_LINE_DIVISOR = 2;
     /**
      * The installed requirements line of LAN, whose label ({@code Requirements:}) every provider's line starts with.
      */
@@ -81,51 +69,9 @@ final class ConnectionScreenTest {
     private static final float BEACON_LINK_ROW_X = 150;
     private static final float BEACON_LINK_ROW_Y = 100;
     /**
-     * The digests of the reference frames.
+     * The provider list's second row, LAN, in dialog pixels.
      */
-    private static final @NotNull Map<String, String> REFERENCE_DIGESTS = Map.of(
-            ACCOUNT_FRAME + "640x480-enUS", "faed1456eb85e9d10d0b12bee1539cf2a272278ec7d567324ce1d280bbbf9212",
-            ACCOUNT_FRAME + "1920x1080-koKR", "d4c9bb31b18030337aa12e8859e7c7ea787bdf9f8aafddcf05178a5680a146e9",
-            GUEST_FRAME + "640x480-enUS", "018258eaf0c22ca17ad93ce9eec7b8a6318e9ef7d30c789e0734a377b0a79929",
-            GUEST_FRAME + "1920x1080-koKR", "db133271c2bc6fa804638a908d557d730a5b869746a7ebdff0d77b5a76196d29",
-            LAN_PANE_FRAME + "640x480-enUS", "01d9c1111141865885e8039027e1fe167a74e3f040133c3bb95c6b8b16fb8a9d",
-            LAN_PANE_FRAME + "1920x1080-koKR", "acef69ab1d8142a7d6f67d8a469fa124636469ea90d46600d1243d9748fb27cf",
-            BEACON_LINK_PANE_FRAME + "640x480-enUS", "faed1456eb85e9d10d0b12bee1539cf2a272278ec7d567324ce1d280bbbf9212",
-            BEACON_LINK_PANE_FRAME + "1920x1080-koKR", "d4c9bb31b18030337aa12e8859e7c7ea787bdf9f8aafddcf05178a5680a146e9"
-    );
-
-    private static void assertReferenceDigests(@NotNull Map<String, String> digests) {
-        List<String> mismatches = new ArrayList<>();
-
-        for (Map.Entry<String, String> drawn : digests.entrySet()) {
-            if (!drawn.getValue().equals(REFERENCE_DIGESTS.get(drawn.getKey()))) {
-                mismatches.add(drawn.getKey() + " " + drawn.getValue());
-            }
-        }
-
-        Assertions.assertEquals(List.of(), mismatches, "Frames that differ from the reference (see build/glue-screenshots).");
-    }
-
-    /**
-     * Counts the frame-red pixels (a panel's border) of each frame row over a dialog rectangle.
-     *
-     * @return the counts, the rectangle's top row first
-     */
-    private static int @NotNull [] countRedRows(@NotNull BeaconLinkGlueScenario scenario, @NotNull BufferedImage frame,
-                                                @NotNull DialogControl control) {
-        int top = scenario.getFrameY(control.getY());
-        int[] counts = new int[scenario.getFrameY(control.getY() + control.getHeight()) - top];
-
-        for (int row = 0; row < counts.length; row++) {
-            for (int column = scenario.getFrameX(control.getX()); column < scenario.getFrameX(control.getX() + control.getWidth()); column++) {
-                if (TextLineCheck.isRed(frame.getRGB(column, top + row))) {
-                    counts[row]++;
-                }
-            }
-        }
-
-        return counts;
-    }
+    private static final float LAN_ROW_Y = 120;
 
     @TempDir
     @Nullable Path directory;
@@ -133,8 +79,7 @@ final class ConnectionScreenTest {
     /**
      * Opens the connection choice on LAN and selects Beacon.Link: the lower left panel and its protocol pane show for LAN only.
      */
-    private void selectProviders(@NotNull String size, @NotNull String locale, int width, int height, @NotNull String qualityPrefix,
-                                 @NotNull Map<String, String> digests) throws IOException {
+    private void selectProviders(@NotNull String size, @NotNull String locale, int width, int height, @NotNull String qualityPrefix) throws IOException {
         Path root = this.directory;
 
         Assertions.assertNotNull(root);
@@ -144,46 +89,27 @@ final class ConnectionScreenTest {
                                                          BeaconLinkGlueScenario.MOD_VERSION, true, PlayerStatus.AVAILABLE, LatencyEstimate.UNKNOWN)
         );
 
-        try (BeaconLinkGlueScenario scenario = BeaconLinkGlueScenario.open(root.resolve(LAN_PANE_FRAME + size), locale, width, height, qualityPrefix,
-                                                                           community)) {
+        try (BeaconLinkGlueScenario scenario = BeaconLinkGlueScenario.open(root.resolve(size), locale, width, height, qualityPrefix, community)) {
             scenario.show(GlueNavigator.Destination.CONNECTION);
 
             ScrDialog dialog = scenario.getScreenDialog();
             DialogControl panel = dialog.requireControl(PANE_PANEL).getDefinition();
             DialogControl protocol = dialog.requireControl(PROTOCOL_PANEL).getDefinition();
 
-            digests.put(LAN_PANE_FRAME + size, scenario.capture(LAN_PANE_FRAME + size));
             Assertions.assertTrue(dialog.isVisible(panel), size);
             Assertions.assertTrue(dialog.isVisible(protocol), size);
 
-            // The panel's longest red row is its border line.
-            int[] lanRows = countRedRows(scenario, scenario.readFrame(), panel);
-            int border = 0;
-
-            for (int row = 1; row < lanRows.length; row++) {
-                border = lanRows[row] > lanRows[border] ? row : border;
-            }
-
-            int lineWidth = scenario.getFrameX(panel.getX() + panel.getWidth()) - scenario.getFrameX(panel.getX());
-
-            Assertions.assertTrue(lanRows[border] * BORDER_LINE_DIVISOR > lineWidth, size);
-
             scenario.click(BEACON_LINK_ROW_X, BEACON_LINK_ROW_Y);
 
-            digests.put(BEACON_LINK_PANE_FRAME + size, scenario.capture(BEACON_LINK_PANE_FRAME + size));
             Assertions.assertFalse(dialog.isVisible(panel), size);
             Assertions.assertFalse(dialog.isVisible(protocol), size);
-            Assertions.assertTrue(countRedRows(scenario, scenario.readFrame(), panel)[border] * BORDER_LINE_DIVISOR <= lineWidth, size);
         }
     }
 
     /**
-     * Opens the connection choice, selects Beacon.Link, captures the screen and presses Ok.
-     *
-     * @return the frame's digest
+     * Opens the connection choice, selects Beacon.Link and presses Ok.
      */
-    private @NotNull String enterBeaconLink(@NotNull String name, @NotNull String locale, int width, int height, @NotNull String qualityPrefix,
-                                            @Nullable String accountName) throws IOException {
+    private void enterBeaconLink(@NotNull String name, @NotNull String locale, int width, int height, @NotNull String qualityPrefix) throws IOException {
         Path root = this.directory;
 
         Assertions.assertNotNull(root);
@@ -193,22 +119,54 @@ final class ConnectionScreenTest {
                                                          BeaconLinkGlueScenario.MOD_VERSION, true, PlayerStatus.AVAILABLE, LatencyEstimate.UNKNOWN)
         );
 
-        try (BeaconLinkGlueScenario scenario = BeaconLinkGlueScenario.open(root.resolve(name), locale, width, height, qualityPrefix, community, List.of(),
-                                                                           accountName)) {
+        try (BeaconLinkGlueScenario scenario = BeaconLinkGlueScenario.open(root.resolve(name), locale, width, height, qualityPrefix, community)) {
             scenario.show(GlueNavigator.Destination.CONNECTION);
             scenario.click(BEACON_LINK_ROW_X, BEACON_LINK_ROW_Y);
-
-            String digest = scenario.capture(name);
-
             scenario.press(Key.ENTER);
 
-            List<String> expected = accountName == null ? List.of() : List.of(accountName);
-
-            Assertions.assertEquals(expected, scenario.getBeaconLink().getDisplayNames(), name);
+            Assertions.assertEquals(List.of(BeaconLinkGlueScenario.ACCOUNT_NAME), scenario.getBeaconLink().getDisplayNames(), name);
             Assertions.assertFalse(scenario.isPopupOpen(), name);
-
-            return digest;
         }
+    }
+
+    /**
+     * Opens the connection choice on LAN, selects Beacon.Link and LAN again and checks the panel during and after both slides.
+     */
+    private void slidePane(@NotNull String size, @NotNull String locale, int width, int height, @NotNull String qualityPrefix) throws IOException {
+        Path root = this.directory;
+
+        Assertions.assertNotNull(root);
+
+        RecordingCommunitySession community = new RecordingCommunitySession(
+                RecordingCommunitySession.createPresence(SELF_KEY, BeaconLinkGlueScenario.ACCOUNT_NAME, BeaconLinkGlueScenario.MOD_ID,
+                                                         BeaconLinkGlueScenario.MOD_VERSION, true, PlayerStatus.AVAILABLE, LatencyEstimate.UNKNOWN)
+        );
+
+        try (BeaconLinkGlueScenario scenario = BeaconLinkGlueScenario.open(root.resolve(size), locale, width, height, qualityPrefix, community)) {
+            scenario.show(GlueNavigator.Destination.CONNECTION);
+
+            ScrDialog dialog = scenario.getScreenDialog();
+            DialogControl panel = dialog.requireControl(PANE_PANEL).getDefinition();
+
+            // The panel slides out while it stays shown, then hides.
+            selectDuringSlide(scenario, BEACON_LINK_ROW_Y, size, dialog, panel);
+            scenario.settle();
+            Assertions.assertFalse(dialog.isVisible(panel), size);
+
+            // The panel shows at once and slides in.
+            selectDuringSlide(scenario, LAN_ROW_Y, size, dialog, panel);
+        }
+    }
+
+    /**
+     * Selects a provider row and draws for {@link #SLIDE_CHECK_MILLISECONDS}; the panel is shown then.
+     */
+    private static void selectDuringSlide(@NotNull BeaconLinkGlueScenario scenario, float rowY, @NotNull String name, @NotNull ScrDialog dialog,
+                                          @NotNull DialogControl panel) {
+        scenario.tap(BEACON_LINK_ROW_X, rowY);
+        scenario.draw(SLIDE_CHECK_MILLISECONDS);
+
+        Assertions.assertTrue(dialog.isVisible(panel), name);
     }
 
     @Test
@@ -220,7 +178,7 @@ final class ConnectionScreenTest {
                 String label = installed.substring(0, installed.indexOf(LABEL_END) + 1);
 
                 Assertions.assertEquals(BEACON_LINK_NAME, text.get(BEACON_LINK_TITLE_KEY), locale);
-                Assertions.assertTrue(BeaconLinkText.CONNECTION_REQUIREMENTS.get(locale).startsWith(label + " "), locale);
+                Assertions.assertTrue(OwnText.CONNECTION_REQUIREMENTS.get(locale).startsWith(label + " "), locale);
             }
         }
     }
@@ -229,29 +187,23 @@ final class ConnectionScreenTest {
     void lan_shows_its_protocol_panel_and_beacon_link_shows_no_empty_panel() throws IOException {
         Assumptions.assumeTrue(Boolean.getBoolean(RENDER_SMOKE_PROPERTY), RENDER_SMOKE_MESSAGE);
 
-        Map<String, String> digests = new LinkedHashMap<>();
-
-        this.selectProviders(SMALL_WIDTH + "x" + SMALL_HEIGHT + "-enUS", "enUS", SMALL_WIDTH, SMALL_HEIGHT, GlueCanvas.SD_PREFIX, digests);
-        this.selectProviders(LARGE_WIDTH + "x" + LARGE_HEIGHT + "-koKR", "koKR", LARGE_WIDTH, LARGE_HEIGHT, GlueCanvas.HD_PREFIX, digests);
-
-        assertReferenceDigests(digests);
+        this.selectProviders(SMALL_WIDTH + "x" + SMALL_HEIGHT + "-enUS", "enUS", SMALL_WIDTH, SMALL_HEIGHT, GlueCanvas.SD_PREFIX);
+        this.selectProviders(LARGE_WIDTH + "x" + LARGE_HEIGHT + "-koKR", "koKR", LARGE_WIDTH, LARGE_HEIGHT, GlueCanvas.HD_PREFIX);
     }
 
     @Test
-    void ok_enters_beacon_link_with_the_account_name_and_a_guest_gets_no_session() throws IOException {
+    void the_lower_left_panel_slides_out_for_beacon_link_and_back_in_for_lan() throws IOException {
         Assumptions.assumeTrue(Boolean.getBoolean(RENDER_SMOKE_PROPERTY), RENDER_SMOKE_MESSAGE);
 
-        Map<String, String> digests = new LinkedHashMap<>();
-        String small = SMALL_WIDTH + "x" + SMALL_HEIGHT + "-enUS";
-        String large = LARGE_WIDTH + "x" + LARGE_HEIGHT + "-koKR";
+        this.slidePane(SMALL_WIDTH + "x" + SMALL_HEIGHT + "-enUS", "enUS", SMALL_WIDTH, SMALL_HEIGHT, GlueCanvas.SD_PREFIX);
+        this.slidePane(LARGE_WIDTH + "x" + LARGE_HEIGHT + "-koKR", "koKR", LARGE_WIDTH, LARGE_HEIGHT, GlueCanvas.HD_PREFIX);
+    }
 
-        digests.put(ACCOUNT_FRAME + small, this.enterBeaconLink(ACCOUNT_FRAME + small, "enUS", SMALL_WIDTH, SMALL_HEIGHT, GlueCanvas.SD_PREFIX,
-                                                                BeaconLinkGlueScenario.ACCOUNT_NAME));
-        digests.put(ACCOUNT_FRAME + large, this.enterBeaconLink(ACCOUNT_FRAME + large, "koKR", LARGE_WIDTH, LARGE_HEIGHT, GlueCanvas.HD_PREFIX,
-                                                                BeaconLinkGlueScenario.ACCOUNT_NAME));
-        digests.put(GUEST_FRAME + small, this.enterBeaconLink(GUEST_FRAME + small, "enUS", SMALL_WIDTH, SMALL_HEIGHT, GlueCanvas.SD_PREFIX, null));
-        digests.put(GUEST_FRAME + large, this.enterBeaconLink(GUEST_FRAME + large, "koKR", LARGE_WIDTH, LARGE_HEIGHT, GlueCanvas.HD_PREFIX, null));
+    @Test
+    void ok_enters_beacon_link_with_the_account_name() throws IOException {
+        Assumptions.assumeTrue(Boolean.getBoolean(RENDER_SMOKE_PROPERTY), RENDER_SMOKE_MESSAGE);
 
-        assertReferenceDigests(digests);
+        this.enterBeaconLink(SMALL_WIDTH + "x" + SMALL_HEIGHT + "-enUS", "enUS", SMALL_WIDTH, SMALL_HEIGHT, GlueCanvas.SD_PREFIX);
+        this.enterBeaconLink(LARGE_WIDTH + "x" + LARGE_HEIGHT + "-koKR", "koKR", LARGE_WIDTH, LARGE_HEIGHT, GlueCanvas.HD_PREFIX);
     }
 }

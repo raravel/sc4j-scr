@@ -36,6 +36,11 @@ public final class ReplayPlayback {
     private static final long NO_PENDING_SEEK_TARGET = -1;
 
     /**
+     * The most live frames one pass runs: the due frame and the three owed frames that the lag limit lets a game without a speed override owe.
+     */
+    private static final int MAXIMUM_LIVE_FRAMES_PER_PASS = 4;
+
+    /**
      * @return the normal speed index, one game frame per recorded frame duration
      */
     public static int getNormalSpeedIndex() {
@@ -69,6 +74,10 @@ public final class ReplayPlayback {
 
     private int speedIndex;
     private double accumulatedSeconds;
+    /**
+     * The frame duration in seconds of the last live frames taken, which {@link #refundLiveFrames(int)} gives back.
+     */
+    private double liveFrameSeconds;
 
     private long seekTarget;
     private boolean seekRestartPending;
@@ -81,6 +90,7 @@ public final class ReplayPlayback {
     ReplayPlayback(int speedIndex) {
         this.speedIndex         = Math.clamp(speedIndex, 0, MULTIPLIERS.length - 1);
         this.accumulatedSeconds = 0;
+        this.liveFrameSeconds   = 0;
 
         this.seekTarget         = NO_PENDING_SEEK_TARGET;
         this.seekRestartPending = false;
@@ -150,29 +160,48 @@ public final class ReplayPlayback {
     }
 
     /**
-     * Runs at most one live frame per pass, carrying owed time until the lag exceeds the lag limit; then the schedule restarts with one frame due.
+     * Converts elapsed wall time into the live frames due in this pass and takes their time from the owed time. The owed time is carried across
+     * passes until the lag exceeds the lag limit; then the schedule restarts with one frame due. A pass takes at most
+     * {@value #MAXIMUM_LIVE_FRAMES_PER_PASS} frames, and the time of further owed frames stays for the next passes. A frame without duration is
+     * due once per pass.
+     * <p>
+     * Taken frames that do not run, for example because a player's turn is missing, give their time back through {@link #refundLiveFrames(int)},
+     * so a turn wait delays the schedule without discarding the owed time.
      *
      * @param elapsedSeconds            the wall time since the previous pass
      * @param frameDurationMilliseconds the game frame duration
      * @param lagLimitMilliseconds      the lag above which the schedule restarts
-     * @return {@code 1} if a frame is due, {@code 0} otherwise
+     * @return the number of frames due, {@code 0} through {@value #MAXIMUM_LIVE_FRAMES_PER_PASS}
      */
-    int takeLiveDueFrame(double elapsedSeconds, int frameDurationMilliseconds, int lagLimitMilliseconds) {
+    int takeLiveDueFrames(double elapsedSeconds, int frameDurationMilliseconds, int lagLimitMilliseconds) {
         double frameSeconds = frameDurationMilliseconds / (double) MILLISECONDS_PER_SECOND;
 
         this.accumulatedSeconds += elapsedSeconds;
+        this.liveFrameSeconds = frameSeconds;
 
         if (this.accumulatedSeconds - frameSeconds > lagLimitMilliseconds / (double) MILLISECONDS_PER_SECOND) {
             this.accumulatedSeconds = frameSeconds;
         }
 
-        if (this.accumulatedSeconds < frameSeconds) {
-            return 0;
+        if (frameSeconds <= 0) {
+            return 1;
         }
 
-        this.accumulatedSeconds -= frameSeconds;
+        int dueFrames = (int) Math.min(Math.floor(this.accumulatedSeconds / frameSeconds), MAXIMUM_LIVE_FRAMES_PER_PASS);
 
-        return 1;
+        this.accumulatedSeconds -= dueFrames * frameSeconds;
+
+        return dueFrames;
+    }
+
+    /**
+     * Gives the time of live frames taken by the last {@link #takeLiveDueFrames} and not run back to the owed time, so that they are due again in
+     * the next pass.
+     *
+     * @param frames the taken frames that did not run
+     */
+    void refundLiveFrames(int frames) {
+        this.accumulatedSeconds += frames * this.liveFrameSeconds;
     }
 
     /**

@@ -48,9 +48,19 @@ public final class ProviderPeer {
     private int roundTripTime;
 
     private int turnAcknowledgement;
+    private int firstTurn;
     private int departureReason;
     private int departureTurn;
     private int stallTime;
+
+    /**
+     * The resend requests sent for this player's turns since the last {@link #takeTurnResendRequestsSent()}.
+     */
+    private int turnResendRequestsSent;
+    /**
+     * The turn resend requests received from this peer since the last {@link #takeTurnResendRequestsReceived()}.
+     */
+    private int turnResendRequestsReceived;
 
     /**
      * Creates a {@link ProviderPeer} instance with an unknown identifier and all sequences at {@code 0}.
@@ -83,9 +93,13 @@ public final class ProviderPeer {
         this.roundTripTime  = 0;
 
         this.turnAcknowledgement = 0;
+        this.firstTurn           = 0;
         this.departureReason     = 0;
         this.departureTurn       = 0;
         this.stallTime           = 0;
+
+        this.turnResendRequestsSent     = 0;
+        this.turnResendRequestsReceived = 0;
     }
 
     /**
@@ -226,6 +240,22 @@ public final class ProviderPeer {
     }
 
     /**
+     * @return the first turn the player takes part in, as its join or its player information named it
+     */
+    public int getFirstTurn() {
+        return this.firstTurn;
+    }
+
+    /**
+     * Sets the first turn the player takes part in.
+     *
+     * @param firstTurn the unsigned 16-bit turn
+     */
+    void setFirstTurn(int firstTurn) {
+        this.firstTurn = firstTurn;
+    }
+
+    /**
      * @return the departure reason of subtype {@code 11} or {@code 12}
      */
     public int getDepartureReason() {
@@ -271,6 +301,47 @@ public final class ProviderPeer {
         return this.pingTime != 0 && this.pongIdentifier != 0;
     }
 
+
+    /**
+     * Takes the number of resend requests sent for this player's turns since the previous call: the requests for an overdue turn and for a
+     * turn missing ahead of a received one.
+     *
+     * @return the number of requests
+     */
+    public int takeTurnResendRequestsSent() {
+        int requests = this.turnResendRequestsSent;
+
+        this.turnResendRequestsSent = 0;
+
+        return requests;
+    }
+
+    /**
+     * Takes the number of turn resend requests received from this peer since the previous call.
+     *
+     * @return the number of requests
+     */
+    public int takeTurnResendRequestsReceived() {
+        int requests = this.turnResendRequestsReceived;
+
+        this.turnResendRequestsReceived = 0;
+
+        return requests;
+    }
+
+    /**
+     * Counts a resend request sent for this player's turns.
+     */
+    void countTurnResendRequestSent() {
+        this.turnResendRequestsSent++;
+    }
+
+    /**
+     * Counts a turn resend request received from this peer.
+     */
+    void countTurnResendRequestReceived() {
+        this.turnResendRequestsReceived++;
+    }
 
     /**
      * Starts the next keep-alive ping.

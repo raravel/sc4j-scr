@@ -14,6 +14,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Random;
 import java.util.zip.DataFormatException;
 import java.util.zip.Inflater;
 
@@ -38,6 +39,15 @@ final class ReplayWriterTest {
      */
     private static final int SPEED_OVERRIDE_INDEX = 3;
     private static final int SPLIT_NAME_SLOT = 2;
+    /**
+     * The size of the large mod section: many chunks, the last one partly filled, half of them random and half compressible.
+     */
+    private static final int LARGE_MOD_SECTION_SIZE = 8 * 1024 * 1024 + 123;
+    private static final long MOD_SECTION_SEED = 0x5EC7L;
+    private static final @NotNull String LARGE_MOD_SECTION_TAG = "Ab1_";
+    private static final @NotNull String EMPTY_MOD_SECTION_TAG = "zz  ";
+    private static final @NotNull String SMALL_MOD_SECTION_TAG = "SCES";
+    private static final @NotNull String ABSENT_MOD_SECTION_TAG = "NONE";
 
     private static final int BYTE_MASK = 0xFF;
     private static final int EXTENSION_OFFSET_FIELD = 16;
@@ -255,6 +265,48 @@ final class ReplayWriterTest {
     }
 
     @Test
+    void write_should_keep_mod_commands_up_to_the_largest_data_length() throws IOException {
+        byte[] largest = new byte[ReplayModCommand.HEADER_SIZE - 1 + ReplayModCommand.MAXIMUM_DATA_LENGTH];
+        byte[] small = {2, 0x11, 0x22};
+        List<ReplayCommand> commands = new ArrayList<>();
+
+        largest[0]                  = (byte) ReplayModCommand.MAXIMUM_DATA_LENGTH;
+        largest[largest.length - 1] = 0x33;
+
+        commands.add(new ReplayCommand(FIRST_COMMAND_FRAME, 0, ReplayCommandIds.MOD_COMMAND, small));
+        commands.add(new ReplayCommand(FIRST_COMMAND_FRAME, 1, ReplayCommandIds.MOD_COMMAND, largest));
+        commands.add(new ReplayCommand(SECOND_COMMAND_FRAME, 0, ReplayCommandIds.STOP, new byte[]{0}));
+
+        Assertions.assertTrue(ReplayWriter.isRecorded(ReplayCommandIds.MOD_COMMAND, largest.length));
+
+        byte[] header = new ReplayHeaderBuilder().setEngine(SYNTHETIC_ENGINE)
+                                                 .setFrames(SYNTHETIC_FRAME_COUNT)
+                                                 .setSeed(SYNTHETIC_RANDOM_SEED)
+                                                 .setMapSize(SYNTHETIC_MAP_SIZE, SYNTHETIC_MAP_SIZE)
+                                                 .setGameType(SYNTHETIC_GAME_TYPE, SYNTHETIC_GAME_SUBTYPE)
+                                                 .build();
+        byte[] file = new ReplayWriter(header,
+                                       ReplayWriter.encodeCommands(commands),
+                                       new byte[]{1, 2, 3},
+                                       ReplayWriter.encodeNames(new byte[NAME_COUNT][0]),
+                                       new byte[ReplayWriter.SKIN_SIZE],
+                                       ReplayWriter.CURRENT_LIMITS,
+                                       ReplayWriter.CURRENT_FIX_FLAGS,
+                                       new byte[ReplayWriter.CUSTOM_COLORS_SIZE],
+                                       ReplayWriter.encodeVersionBlock(SYNTHETIC_BUILD_NUMBER, 0)).write();
+        List<ReplayCommand> parsed = ReplayFile.parse(file).getCommands();
+
+        Assertions.assertEquals(commands.size(), parsed.size());
+
+        for (int index = 0; index < commands.size(); index++) {
+            Assertions.assertEquals(commands.get(index).getFrame(), parsed.get(index).getFrame());
+            Assertions.assertEquals(commands.get(index).getPlayerId(), parsed.get(index).getPlayerId());
+            Assertions.assertEquals(commands.get(index).getTypeId(), parsed.get(index).getTypeId());
+            Assertions.assertArrayEquals(commands.get(index).getPayload(), parsed.get(index).getPayload());
+        }
+    }
+
+    @Test
     void encode_names_should_put_each_name_cut_to_its_record() {
         byte[][] names = new byte[NAME_COUNT][0];
         byte[] longName = new byte[NAME_RECORD_SIZE + 1];
@@ -314,5 +366,93 @@ final class ReplayWriterTest {
         Assertions.assertEquals(SPEED_OVERRIDE_INDEX, parsed.getSpeedOverrideIndex());
         Assertions.assertEquals(ReplayFile.parse(plain).getGameVersion().getBuild(), parsed.getGameVersion().getBuild());
         Assertions.assertArrayEquals(Arrays.copyOf(withOverride, plain.length), plain, "the section follows the native sections");
+    }
+
+    private static byte @NotNull [] createLargeModSection() {
+        byte[] data = new byte[LARGE_MOD_SECTION_SIZE];
+        Random random = new Random(MOD_SECTION_SEED);
+        byte[] noise = new byte[LARGE_MOD_SECTION_SIZE / 2];
+
+        random.nextBytes(noise);
+        System.arraycopy(noise, 0, data, 0, noise.length);
+
+        for (int index = noise.length; index < data.length; index++) {
+            data[index] = (byte) (index % Byte.SIZE);
+        }
+
+        return data;
+    }
+
+    private static @NotNull ReplayWriter createSyntheticWriter() throws IOException {
+        byte[] header = new ReplayHeaderBuilder().setEngine(SYNTHETIC_ENGINE)
+                                                 .setMapSize(SYNTHETIC_MAP_SIZE, SYNTHETIC_MAP_SIZE)
+                                                 .setGameType(SYNTHETIC_GAME_TYPE, SYNTHETIC_GAME_SUBTYPE)
+                                                 .build();
+
+        return new ReplayWriter(header, new byte[0], new byte[]{1}, ReplayWriter.encodeNames(new byte[NAME_COUNT][0]),
+                                new byte[ReplayWriter.SKIN_SIZE], ReplayWriter.CURRENT_LIMITS, ReplayWriter.CURRENT_FIX_FLAGS,
+                                new byte[ReplayWriter.CUSTOM_COLORS_SIZE], ReplayWriter.encodeVersionBlock(SYNTHETIC_BUILD_NUMBER, 0), SPEED_OVERRIDE_INDEX);
+    }
+
+    @Test
+    void add_mod_section_should_write_sections_that_read_back_after_the_native_sections() throws IOException {
+        byte[] large = createLargeModSection();
+        byte[] small = "main.js".getBytes(StandardCharsets.US_ASCII);
+        byte[] plain = createSyntheticWriter().write();
+        ReplayWriter writer = createSyntheticWriter();
+
+        writer.addModSection(LARGE_MOD_SECTION_TAG, large);
+        writer.addModSection(EMPTY_MOD_SECTION_TAG, new byte[0]);
+        writer.addModSection(SMALL_MOD_SECTION_TAG, small);
+
+        byte[] file = writer.write();
+        ReplayFile parsed = ReplayFile.parse(file);
+        ReplayFile parsedPlain = ReplayFile.parse(plain);
+
+        Assertions.assertArrayEquals(Arrays.copyOf(file, plain.length), plain, "the mod sections follow the native sections");
+        Assertions.assertArrayEquals(large, parsed.readModSection(LARGE_MOD_SECTION_TAG));
+        Assertions.assertArrayEquals(new byte[0], parsed.readModSection(EMPTY_MOD_SECTION_TAG));
+        Assertions.assertArrayEquals(small, parsed.readModSection(SMALL_MOD_SECTION_TAG));
+        Assertions.assertNull(parsed.readModSection(ABSENT_MOD_SECTION_TAG));
+        Assertions.assertNull(parsedPlain.readModSection(LARGE_MOD_SECTION_TAG));
+        Assertions.assertEquals(SPEED_OVERRIDE_INDEX, parsed.getSpeedOverrideIndex());
+        Assertions.assertEquals(parsedPlain.getLimits().getEffectiveValues()[0], parsed.getLimits().getEffectiveValues()[0]);
+        Assertions.assertEquals(parsedPlain.getGameVersion().getBuild(), parsed.getGameVersion().getBuild());
+        Assertions.assertArrayEquals(parsedPlain.getCustomColors(), parsed.getCustomColors());
+        Assertions.assertArrayEquals(parsedPlain.getMapData(), parsed.getMapData());
+    }
+
+    @Test
+    void add_mod_section_should_reject_native_malformed_and_repeated_tags() throws IOException {
+        ReplayWriter writer = createSyntheticWriter();
+
+        writer.addModSection(SMALL_MOD_SECTION_TAG, new byte[0]);
+
+        Assertions.assertThrows(IllegalArgumentException.class, () -> writer.addModSection(SKIN_TAG, new byte[0]));
+        Assertions.assertThrows(IllegalArgumentException.class, () -> writer.addModSection("XSPD", new byte[0]));
+        Assertions.assertThrows(IllegalArgumentException.class, () -> writer.addModSection("ABC", new byte[0]));
+        Assertions.assertThrows(IllegalArgumentException.class, () -> writer.addModSection("ABéD", new byte[0]));
+        Assertions.assertThrows(IllegalArgumentException.class, () -> writer.addModSection(SMALL_MOD_SECTION_TAG, new byte[1]));
+        Assertions.assertTrue(ReplayFile.isModSectionTag(EMPTY_MOD_SECTION_TAG));
+        Assertions.assertFalse(ReplayFile.isModSectionTag(CUSTOM_COLORS_TAG));
+        Assertions.assertFalse(ReplayFile.isModSectionTag("A	BC"));
+    }
+
+    @Test
+    void read_mod_section_should_reject_a_damaged_section_that_parse_skips() throws IOException {
+        byte[] data = new byte[3 * CHUNK_SIZE];
+        ReplayWriter writer = createSyntheticWriter();
+
+        new Random(MOD_SECTION_SEED).nextBytes(data);
+        writer.addModSection(SMALL_MOD_SECTION_TAG, data);
+
+        byte[] file = writer.write();
+
+        file[file.length - 1] ^= 1;
+
+        ReplayFile parsed = ReplayFile.parse(file);
+
+        Assertions.assertEquals(SPEED_OVERRIDE_INDEX, parsed.getSpeedOverrideIndex());
+        Assertions.assertThrows(IOException.class, () -> parsed.readModSection(SMALL_MOD_SECTION_TAG));
     }
 }

@@ -7,7 +7,7 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 /**
- * Checks accelerator table sizes, typing keys, popup mappings, exact modifiers and repeat flags.
+ * Checks accelerator table sizes, typing keys, popup mappings, exact modifiers, repeat flags and which accelerators act on the game.
  */
 final class GameAcceleratorsTest {
     private static final int PLAY_TABLE_SIZE = 72;
@@ -122,5 +122,24 @@ final class GameAcceleratorsTest {
         Assertions.assertNotNull(GameAccelerators.find(GameAccelerators.Mode.PLAY, Key.F2, 0, true), "F2 repeats");
         Assertions.assertNull(GameAccelerators.find(GameAccelerators.Mode.PLAY, Key.DIGIT_1, GameAccelerators.CONTROL, true), "Ctrl digits do not repeat");
         Assertions.assertNull(GameAccelerators.find(GameAccelerators.Mode.PLAY, Key.EQUAL, 0, true), "speed keys do not repeat");
+    }
+
+    @Test
+    void is_game_action_should_separate_game_keys_from_interface_keys() {
+        Assertions.assertTrue(GameAccelerators.isGameAction(find(GameAccelerators.Mode.PLAY, Key.DIGIT_1, 0)));
+        Assertions.assertTrue(GameAccelerators.isGameAction(find(GameAccelerators.Mode.PLAY, Key.DIGIT_0, GameAccelerators.ALT)));
+        Assertions.assertTrue(GameAccelerators.isGameAction(GROUP_ADD));
+        Assertions.assertTrue(GameAccelerators.isGameAction(GROUP_ASSIGN));
+        Assertions.assertTrue(GameAccelerators.isGameAction(GROUP_CENTER));
+        Assertions.assertTrue(GameAccelerators.isGameAction(VIEW_RECALL));
+        Assertions.assertTrue(GameAccelerators.isGameAction(CENTER_ON_UNIT));
+        Assertions.assertTrue(GameAccelerators.isGameAction(DECREASE_SPEED));
+        Assertions.assertFalse(GameAccelerators.isGameAction(find(GameAccelerators.Mode.PLAY, Key.O, GameAccelerators.ALT)));
+        Assertions.assertFalse(GameAccelerators.isGameAction(LEADERBOARD_PLAYERS));
+        Assertions.assertFalse(GameAccelerators.isGameAction(WINDOW_MODE));
+        Assertions.assertFalse(GameAccelerators.isGameAction(RESET_ZOOM));
+        Assertions.assertFalse(GameAccelerators.isGameAction(MOUSE_CONFINE));
+        Assertions.assertFalse(GameAccelerators.isGameAction(SHOW_TURN_RATE));
+        Assertions.assertFalse(GameAccelerators.isGameAction(INCREASE_SPEED_OR_CHAT_HISTORY), "resolved by the session first");
     }
 }

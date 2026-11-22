@@ -13,6 +13,7 @@ import org.fogofwarlabs.sc4j.scr.data.type.ScrFlingyTypeView;
 import org.fogofwarlabs.sc4j.scr.data.type.ScrWeaponTypeView;
 import org.fogofwarlabs.sc4j.scr.data.type.constant.UnitTypeFlags;
 import org.fogofwarlabs.sc4j.scr.data.type.constant.WeaponBehaviors;
+import org.fogofwarlabs.sc4j.scr.game.extension.ScrSimulationPlugins;
 import org.fogofwarlabs.sc4j.scr.game.movement.FlingyMotionUtils;
 import org.fogofwarlabs.sc4j.scr.game.save.SaveReferences;
 import org.fogofwarlabs.sc4j.scr.game.sprite.Sprite;
@@ -247,6 +248,10 @@ public final class ProjectilePhase {
         private int firstFree;
         private int firstActive;
         private int activeCount;
+        /**
+         * The generation of the latest bullet that joined the active list, {@code 0} before the first.
+         */
+        private long generation;
 
         /**
          * The source of the previous spinning launch, whose next launch spins the other way.
@@ -295,6 +300,7 @@ public final class ProjectilePhase {
             this.firstFree             = 0;
             this.firstActive           = NO_BULLET;
             this.activeCount           = 0;
+            this.generation            = 0;
 
             this.previousSource    = null;
             this.previousClockwise = false;
@@ -314,6 +320,21 @@ public final class ProjectilePhase {
          */
         public int getNext(int index) {
             return this.bullets[index].next;
+        }
+
+        /**
+         * @return the index of the first active bullet, or {@code -1} when none is active
+         */
+        public int getFirstActive() {
+            return this.firstActive;
+        }
+
+        /**
+         * @param index the bullet index, from {@code 0} to {@link #getCapacity()} minus one
+         * @return the bullet entry at that index, active or free
+         */
+        public @NotNull Bullet getBullet(int index) {
+            return this.bullets[index];
         }
 
         /**
@@ -572,6 +593,7 @@ public final class ProjectilePhase {
 
                 bullet.previous = last;
                 bullet.next     = NO_BULLET;
+                bullet.active   = active;
 
                 if (last >= 0) {
                     this.bullets[last].next = bullet.index;
@@ -649,11 +671,17 @@ public final class ProjectilePhase {
     /**
      * Holds the state of one bullet: its list links, owner and weapon, order state, target and native flingy type WORD; its position and motion
      * are the inherited engine projectile fields at their native widths, moved by the flingy motion ({@link FlingyMotionUtils}).
+     * <p>
+     * A bullet that joins the active list takes the next generation of its context ({@link #getGeneration()}), a serial that tells bullets
+     * apart that reuse an entry. The generations are bookkeeping of the bullet table: no simulation rule reads them, the state hash and saved
+     * games leave them out.
      */
-    static final class Bullet extends Projectile {
+    public static final class Bullet extends Projectile {
         final int index;
         int next;
         int previous;
+        boolean active;
+        long generation;
 
         @Nullable Sprite sprite;
         @Nullable Unit ownerUnit;
@@ -678,9 +706,11 @@ public final class ProjectilePhase {
         Bullet(int index) {
             super(index + 1);
 
-            this.index    = index;
-            this.next     = NO_BULLET;
-            this.previous = NO_BULLET;
+            this.index      = index;
+            this.next       = NO_BULLET;
+            this.previous   = NO_BULLET;
+            this.active     = false;
+            this.generation = 0;
 
             this.sprite    = null;
             this.ownerUnit = null;
@@ -701,6 +731,137 @@ public final class ProjectilePhase {
             this.nearTargetIndex      = 0;
 
             this.flingyType = 0;
+        }
+
+        /**
+         * @return the index of the entry in the bullet table, from {@code 0}
+         */
+        public int getPoolIndex() {
+            return this.index;
+        }
+
+        /**
+         * @return {@code true} while the bullet is in the active list, from its creation until it is released after dying, {@code false} otherwise
+         */
+        public boolean isActive() {
+            return this.active;
+        }
+
+        /**
+         * @return the generation the bullet took when it joined the active list, {@code 0} for a bullet of a saved game or an entry never used
+         */
+        public long getGeneration() {
+            return this.generation;
+        }
+
+        /**
+         * @return the sprite, or {@code null} once the last image of the bullet ended
+         */
+        public @Nullable Sprite getSprite() {
+            return this.sprite;
+        }
+
+        /**
+         * @return the unit that fired the bullet (the parent of a subunit or of a Scarab), or {@code null} once it is gone
+         */
+        public @Nullable Unit getSourceUnit() {
+            return this.ownerUnit;
+        }
+
+        /**
+         * @return the owning player slot
+         */
+        public int getOwner() {
+            return this.owner;
+        }
+
+        /**
+         * @return the {@code weapons.dat} entry
+         */
+        public int getWeapon() {
+            return this.weapon;
+        }
+
+        /**
+         * @return the {@code flingy.dat} entry
+         */
+        public int getFlingyType() {
+            return this.flingyType;
+        }
+
+        /**
+         * Returns the order state: {@code 0} init, {@code 1} move, {@code 2} follow, {@code 3} bounce, {@code 4} damage over time, {@code 5} dying,
+         * {@code 6} hit near the target.
+         *
+         * @return the order state
+         */
+        public int getState() {
+            return this.orderState;
+        }
+
+        /**
+         * @return the remaining time BYTE: the frames until a moving bullet dies, or until a bullet that persists on its target position ends
+         */
+        public int getRemainingTime() {
+            return this.remainingTime;
+        }
+
+        /**
+         * Sets the remaining time BYTE, as a write of the field does: the move and damage-over-time states count it down from the next frame.
+         *
+         * @param remainingTime the frames, truncated to eight bits
+         */
+        public void setRemainingTime(int remainingTime) {
+            this.remainingTime = remainingTime & BYTE_MASK;
+        }
+
+        /**
+         * @return the targets a bouncing bullet still hits
+         */
+        public int getRemainingBounces() {
+            return this.remainingBounces;
+        }
+
+        /**
+         * @return the target unit, or {@code null} for a position target or once the target is gone
+         */
+        public @Nullable Unit getTargetUnit() {
+            return this.targetUnit;
+        }
+
+        /**
+         * Sets the target unit, as a write of the field does: the follow, bounce and hit-near-target states move toward it from the next frame,
+         * and the hit damages it; the move state keeps its move target.
+         *
+         * @param targetUnit the target unit, or {@code null} for none
+         */
+        public void setTargetUnit(@Nullable Unit targetUnit) {
+            this.targetUnit = targetUnit;
+        }
+
+        /**
+         * @return the target X coordinate, the center of the hit
+         */
+        public int getTargetX() {
+            return this.targetX;
+        }
+
+        /**
+         * @return the target Y coordinate, the center of the hit
+         */
+        public int getTargetY() {
+            return this.targetY;
+        }
+
+        /**
+         * Sets the target position WORDs, as a write of the fields does: the hit is centered there; the move target of the bullet does not change.
+         *
+         * @param targetX the X coordinate, truncated to a signed WORD
+         * @param targetY the Y coordinate, truncated to a signed WORD
+         */
+        public void setTargetPosition(int targetX, int targetY) {
+            this.targetX = (short) targetX;
+            this.targetY = (short) targetY;
         }
 
         /**
@@ -889,6 +1050,23 @@ public final class ProjectilePhase {
         return position < 0 ? 0 : position >= limit ? limit - 1 : position;
     }
 
+    /**
+     * Returns the sprite of a bullet for a state step that animates, moves or hits with it.
+     *
+     * @param bullet the bullet
+     * @return the sprite of the bullet
+     * @throws IllegalStateException if the bullet has no sprite
+     */
+    private static @NotNull Sprite requireSprite(@NotNull Bullet bullet) {
+        Sprite sprite = bullet.sprite;
+
+        if (sprite == null) {
+            throw Exceptions.newIllegalStateException("Bullet {0} has no sprite.", bullet.index);
+        }
+
+        return sprite;
+    }
+
 
     private final @NotNull Game game;
 
@@ -963,12 +1141,14 @@ public final class ProjectilePhase {
 
 
     /**
-     * Advances each bullet image before dispatching its order, reading the next link first.
+     * Advances each bullet image before dispatching its order, reading the next link first. A bullet whose last image ended has no sprite and
+     * keeps its order state: it waits in the init state for an order signal and counts down in the damage-over-time state, and a dying bullet
+     * without a sprite is released.
      *
      * @param context          the retained projectile context
      * @param instructionLimit the per-sprite instruction budget
      * @throws UnsupportedOperationException if the lists were not initialized
-     * @throws IllegalStateException         if a non-dying bullet has lost its sprite
+     * @throws IllegalStateException         if a bullet without a sprite reaches a state step that animates, moves or hits with its sprite
      */
     public void updateBullets(@NotNull Context context, int instructionLimit) {
         if (!context.emptyListsInitialized) {
@@ -990,10 +1170,6 @@ public final class ProjectilePhase {
                     }
                 }
 
-                if (bullet.sprite == null && bullet.orderState != STATE_DYING) {
-                    throw Exceptions.newIllegalStateException("A non-dying bullet lost its sprite.");
-                }
-
                 this.execute(bullet, instructionLimit);
 
                 if (bullet.orderState == STATE_DYING && bullet.sprite == null) {
@@ -1008,6 +1184,7 @@ public final class ProjectilePhase {
                     }
 
                     bullet.previous = NO_BULLET;
+                    bullet.active   = false;
 
                     if (context.firstFree < 0) {
                         bullet.next       = NO_BULLET;
@@ -1172,7 +1349,7 @@ public final class ProjectilePhase {
 
     /**
      * Creates a bullet of a weapon at a position: the flingy and sprite, the launch spin, the miss roll and the behavior's start position, then links
-     * it into the active list.
+     * it into the active list. The bullet takes the order target unit of the source, else its order target position, as its target.
      *
      * @param source           the attacking unit
      * @param weapon           the weapon
@@ -1185,7 +1362,7 @@ public final class ProjectilePhase {
      *                                       bullet that extends to the maximum range has no sprite
      * @throws NullPointerException          if the world was built without game data
      */
-    @Nullable Bullet create(@NotNull Unit source, int weapon, int positionX, int positionY, int instructionLimit) {
+    public @Nullable Bullet create(@NotNull Unit source, int weapon, int positionX, int positionY, int instructionLimit) {
         Context context = this.findContext();
 
         if (context == null || !context.emptyListsInitialized) {
@@ -1405,6 +1582,15 @@ public final class ProjectilePhase {
 
         context.activeCount++;
 
+        bullet.active     = true;
+        bullet.generation = ++context.generation;
+
+        ScrSimulationPlugins simulation = this.game.getSimulationPlugins();
+
+        if (simulation != null) {
+            simulation.reportBulletCreated(bullet, weapon, bullet.owner, source, bullet.targetUnit, bullet.targetX, bullet.targetY);
+        }
+
         return bullet;
     }
 
@@ -1424,7 +1610,8 @@ public final class ProjectilePhase {
      *
      * @param bullet           the active bullet
      * @param instructionLimit the image and order instruction budget
-     * @throws IllegalStateException if the bullet's order state is unknown, or its target unit has no sprite
+     * @throws IllegalStateException if the bullet's order state is unknown, its target unit has no sprite, or the bullet has no sprite in a step
+     *                               that animates, moves or hits with it
      */
     private void execute(@NotNull Bullet bullet, int instructionLimit) {
         while (true) {
@@ -1520,7 +1707,7 @@ public final class ProjectilePhase {
      * @param bullet           the bullet in its init state
      * @param instructionLimit the image and order instruction budget
      * @return {@code true} if the bullet left the init state, {@code false} otherwise
-     * @throws IllegalStateException if the bullet's weapon behavior is unknown
+     * @throws IllegalStateException if the bullet's weapon behavior is unknown, or the signaled bullet has no sprite
      */
     private boolean initializeState(@NotNull Bullet bullet, int instructionLimit) {
         if ((bullet.orderSignal & Unit.ORDER_SIGNAL_ACTION_DONE) == 0) {
@@ -1533,7 +1720,7 @@ public final class ProjectilePhase {
             case WeaponBehaviors.FLY, WeaponBehaviors.EXTEND_TO_MAXIMUM_RANGE -> {
                 bullet.orderState = STATE_MOVE;
 
-                this.game.getIscriptExecutor().runSpriteAnimation(bullet.sprite,
+                this.game.getIscriptExecutor().runSpriteAnimation(requireSprite(bullet),
                                                                   null,
                                                                   IscriptExecutor.ANIMATION_GROUND_ATTACK_INIT,
                                                                   0,
@@ -1544,7 +1731,7 @@ public final class ProjectilePhase {
             case WeaponBehaviors.FOLLOW_TARGET -> {
                 bullet.orderState = STATE_FOLLOW;
 
-                this.game.getIscriptExecutor().runSpriteAnimation(bullet.sprite,
+                this.game.getIscriptExecutor().runSpriteAnimation(requireSprite(bullet),
                                                                   null,
                                                                   IscriptExecutor.ANIMATION_GROUND_ATTACK_INIT,
                                                                   0,
@@ -1553,7 +1740,7 @@ public final class ProjectilePhase {
             case WeaponBehaviors.PERSIST_AT_TARGET_POSITION -> {
                 bullet.orderState = STATE_DAMAGE_OVER_TIME;
 
-                this.game.getIscriptExecutor().runSpriteAnimation(bullet.sprite,
+                this.game.getIscriptExecutor().runSpriteAnimation(requireSprite(bullet),
                                                                   null,
                                                                   IscriptExecutor.ANIMATION_SPECIAL_STATE_2,
                                                                   0,
@@ -1562,7 +1749,7 @@ public final class ProjectilePhase {
             case WeaponBehaviors.BOUNCE -> {
                 bullet.orderState = STATE_BOUNCE;
 
-                this.game.getIscriptExecutor().runSpriteAnimation(bullet.sprite,
+                this.game.getIscriptExecutor().runSpriteAnimation(requireSprite(bullet),
                                                                   null,
                                                                   IscriptExecutor.ANIMATION_GROUND_ATTACK_INIT,
                                                                   0,
@@ -1571,7 +1758,7 @@ public final class ProjectilePhase {
             case WeaponBehaviors.ATTACK_TARGET_POSITION -> {
                 bullet.orderState = STATE_HIT_NEAR_TARGET;
 
-                this.game.getIscriptExecutor().runSpriteAnimation(bullet.sprite,
+                this.game.getIscriptExecutor().runSpriteAnimation(requireSprite(bullet),
                                                                   null,
                                                                   IscriptExecutor.ANIMATION_GROUND_ATTACK_INIT,
                                                                   0,
@@ -1586,7 +1773,7 @@ public final class ProjectilePhase {
     private void kill(@NotNull Bullet bullet, int instructionLimit) {
         bullet.orderState = STATE_DYING;
 
-        this.game.getIscriptExecutor().runSpriteAnimation(bullet.sprite, null, IscriptExecutor.ANIMATION_DEATH, 0, instructionLimit);
+        this.game.getIscriptExecutor().runSpriteAnimation(requireSprite(bullet), null, IscriptExecutor.ANIMATION_DEATH, 0, instructionLimit);
     }
 
     private void updateMoveState(@NotNull Bullet bullet, int instructionLimit) {
@@ -1608,7 +1795,7 @@ public final class ProjectilePhase {
      *
      * @param bullet           the bouncing bullet
      * @param instructionLimit the image and order instruction budget
-     * @throws IllegalStateException         if an unmissed target has no sprite
+     * @throws IllegalStateException         if an unmissed target or the bullet has no sprite
      * @throws UnsupportedOperationException if a bounce remains for a bullet with an owner unit and the game has no unit finder
      */
     private void updateBounceState(@NotNull Bullet bullet, int instructionLimit) {
@@ -1638,7 +1825,7 @@ public final class ProjectilePhase {
 
             if (source != null) {
                 UnitSpatialIndex spatialIndex = this.game.getUnitSystem().requireUnitSpatialIndex();
-                Sprite sprite = bullet.sprite;
+                Sprite sprite = requireSprite(bullet);
                 int count = spatialIndex.collectPlacementCandidates(sprite.getX() - BOUNCE_SEARCH_RADIUS, sprite.getY() - BOUNCE_SEARCH_RADIUS,
                                                                     sprite.getX() + BOUNCE_SEARCH_RADIUS, sprite.getY() + BOUNCE_SEARCH_RADIUS);
 
@@ -1659,7 +1846,11 @@ public final class ProjectilePhase {
         }
 
         if (next != null) {
-            this.game.getIscriptExecutor().runSpriteAnimation(bullet.sprite, null, IscriptExecutor.ANIMATION_SPECIAL_STATE_1, 0, instructionLimit);
+            this.game.getIscriptExecutor().runSpriteAnimation(requireSprite(bullet),
+                                                              null,
+                                                              IscriptExecutor.ANIMATION_SPECIAL_STATE_1,
+                                                              0,
+                                                              instructionLimit);
 
             bullet.targetUnit = next;
         } else {
@@ -1671,17 +1862,19 @@ public final class ProjectilePhase {
      * Moves the bullet one flingy motion step ({@link FlingyMotionUtils}) and turns it, then clamps it to the map.
      *
      * @param bullet the moving bullet
+     * @throws IllegalStateException if the bullet has no sprite
      */
     private void move(@NotNull Bullet bullet) {
         FlingyMotionUtils.update(this.motionStep, bullet, this.bulletFlingyProperties);
         this.motionStep.commit(bullet);
 
+        Sprite sprite = requireSprite(bullet);
         int positionX = bullet.getPositionX();
         int positionY = bullet.getPositionY();
 
-        this.relocateSprite(bullet.sprite, positionX, positionY);
+        this.relocateSprite(sprite, positionX, positionY);
         FlingyMotionUtils.updateFacing(bullet, this.bulletFlingyProperties);
-        IscriptExecutor.applySpriteDirection(this.game, bullet.sprite, bullet.getHeading());
+        IscriptExecutor.applySpriteDirection(this.game, sprite, bullet.getHeading());
 
         int mapWidth = this.game.getMap().getWidth() * TerrainTileset.TILE_SIZE;
         int mapHeight = this.game.getMap().getHeight() * TerrainTileset.TILE_SIZE;
@@ -1693,7 +1886,7 @@ public final class ProjectilePhase {
         int clampedX = clamp(positionX, mapWidth);
         int clampedY = clamp(positionY, mapHeight);
 
-        this.relocateSprite(bullet.sprite, clampedX, clampedY);
+        this.relocateSprite(sprite, clampedX, clampedY);
 
         if (clampedX != positionX || clampedY != positionY) {
             bullet.setPosition(clampedX, clampedY);
@@ -1714,7 +1907,8 @@ public final class ProjectilePhase {
      *
      * @param bullet           the hitting bullet
      * @param instructionLimit the image and order instruction budget
-     * @throws NullPointerException if the world was built without game data
+     * @throws NullPointerException  if the world was built without game data
+     * @throws IllegalStateException if the bullet has no sprite
      */
     private void hitBullet(@NotNull Bullet bullet, int instructionLimit) {
         int divisor = 1;
@@ -1725,12 +1919,23 @@ public final class ProjectilePhase {
             }
         }
 
+        ScrSimulationPlugins simulation = this.game.getSimulationPlugins();
+
+        if (simulation != null) {
+            simulation.reportBulletHit(bullet,
+                                       bullet.weapon,
+                                       bullet.owner,
+                                       bullet.ownerUnit, bullet.targetUnit,
+                                       bullet.targetX, bullet.targetY,
+                                       (bullet.hitFlags & HIT_FLAG_MISSED) != 0);
+        }
+
         this.game.getUnitDamage().hitBullet(bullet.weapon,
                                             bullet.owner, bullet.ownerUnit,
                                             bullet.targetUnit, bullet.getHeading(),
                                             bullet.hitFlags,
                                             divisor,
-                                            bullet.sprite,
+                                            requireSprite(bullet),
                                             bullet.targetX, bullet.targetY,
                                             instructionLimit);
     }

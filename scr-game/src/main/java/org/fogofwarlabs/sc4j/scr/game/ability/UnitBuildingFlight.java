@@ -13,6 +13,7 @@ import org.fogofwarlabs.sc4j.scr.data.type.constant.SpriteIds;
 import org.fogofwarlabs.sc4j.scr.data.type.constant.UnitTypeFlags;
 import org.fogofwarlabs.sc4j.scr.game.creep.CreepField;
 import org.fogofwarlabs.sc4j.scr.game.movement.FlingyMotionUtils;
+import org.fogofwarlabs.sc4j.scr.game.movement.UnitSpeed;
 import org.fogofwarlabs.sc4j.scr.game.order.OrderPool;
 import org.fogofwarlabs.sc4j.scr.game.order.UnitSelection;
 import org.fogofwarlabs.sc4j.scr.game.path.PathPool;
@@ -274,13 +275,13 @@ public final class UnitBuildingFlight {
     }
 
     /**
-     * Raises a lifted building by its shadow offset and waits for the lift-off animation signal.
+     * Raises a lifted building by its shadow offset and waits for the lift-off animation signal. A unit whose type is not a building gets its
+     * modified top speed back when it has risen ({@link UnitSpeed#calculateModifiedTopSpeed}).
      *
      * @param building         the building executing {@link ScrOrderIds#LIFTING_OFF}
      * @param instructionLimit the order, animation and sprite initialization budget
-     * @throws UnsupportedOperationException if a lifted unit is not a building
-     * @throws IllegalStateException         if the building has no sprite
-     * @throws NullPointerException          if the world was built without game data
+     * @throws IllegalStateException if the building has no sprite
+     * @throws NullPointerException  if the world was built without game data
      */
     public void updateLiftingOff(@NotNull Unit building, int instructionLimit) {
         ScrUnitTypeView units = this.game.requireGameData().getUnitTypes();
@@ -331,7 +332,7 @@ public final class UnitBuildingFlight {
                 building.setOrderSignal(building.getOrderSignal() & ~Unit.ORDER_SIGNAL_LIFT_DONE);
 
                 if ((units.getFlags(building.getUnitId()) & UnitTypeFlags.BUILDING) == 0) {
-                    throw Exceptions.newUnsupportedOperationException("Non-building lift-off requires the modified unit speed.");
+                    building.setTopSpeed(this.game.getUnitSpeed().calculateModifiedTopSpeed(building));
                 }
 
                 SpriteImage shadow = sprite.getImages().getLast();

@@ -8,23 +8,31 @@ import org.fogofwarlabs.sc4j.engine.content.faction.Faction;
 import org.fogofwarlabs.sc4j.engine.content.type.OrderType;
 import org.fogofwarlabs.sc4j.engine.content.type.UnitType;
 import org.fogofwarlabs.sc4j.engine.player.Player;
+import org.fogofwarlabs.sc4j.engine.resource.graphics.Picture;
+import org.fogofwarlabs.sc4j.engine.resource.graphics.SpriteSheet;
 import org.fogofwarlabs.sc4j.engine.terrain.TerrainGrid;
 import org.fogofwarlabs.sc4j.scr.content.ScrResources;
 import org.fogofwarlabs.sc4j.scr.core.GameSettings;
 import org.fogofwarlabs.sc4j.scr.data.format.chk.ChkUnit;
+import org.fogofwarlabs.sc4j.scr.data.resource.ScrImageAnimation;
+import org.fogofwarlabs.sc4j.scr.data.resource.ScrImageSheet;
 import org.fogofwarlabs.sc4j.scr.data.type.ScrUnitTypeView;
 import org.fogofwarlabs.sc4j.scr.game.ability.TransportCargo;
 import org.fogofwarlabs.sc4j.scr.game.ability.UnitSpells;
 import org.fogofwarlabs.sc4j.scr.game.combat.ScrShieldLayer;
 import org.fogofwarlabs.sc4j.scr.game.combat.UnitTargeting;
+import org.fogofwarlabs.sc4j.scr.game.extension.*;
 import org.fogofwarlabs.sc4j.scr.game.frame.GameFrame;
 import org.fogofwarlabs.sc4j.scr.game.order.UnitSelection;
 import org.fogofwarlabs.sc4j.scr.game.path.PathPool;
 import org.fogofwarlabs.sc4j.scr.game.player.PlayerTable;
 import org.fogofwarlabs.sc4j.scr.game.presentation.ImageScriptPreview;
+import org.fogofwarlabs.sc4j.scr.game.presentation.ScrButtonStates;
+import org.fogofwarlabs.sc4j.scr.game.presentation.StatTextOverrides;
 import org.fogofwarlabs.sc4j.scr.game.production.PlacementEvaluator;
 import org.fogofwarlabs.sc4j.scr.game.production.ScrRequirementSystem;
 import org.fogofwarlabs.sc4j.scr.game.sprite.Sprite;
+import org.fogofwarlabs.sc4j.scr.game.sprite.SpriteImage;
 import org.fogofwarlabs.sc4j.scr.game.sprite.SpritePool;
 import org.fogofwarlabs.sc4j.scr.game.state.Game;
 import org.fogofwarlabs.sc4j.scr.game.state.GameContext;
@@ -473,6 +481,279 @@ public final class ScrGameView implements GameView {
      */
     public @Nullable SpritePool getSpritePool() {
         return this.game.getSpriteSystem().getSpritePool();
+    }
+
+    /**
+     * @return {@code true} if the game has plugins of the mod's game extensions, which may draw images with other graphics ({@link #findImageSheet}),
+     * {@code false} otherwise
+     */
+    public boolean hasPlugins() {
+        return this.game.getPlugins().length != 0;
+    }
+
+    /**
+     * Finds the graphics a sprite image draws instead of its installed GRP: the first sheet a plugin of the game gives
+     * ({@link ScrGamePlugin#findImageSheet}).
+     *
+     * @param image an image of a drawn sprite
+     * @return the frames the image draws, or {@code null} for its installed graphics
+     */
+    public @Nullable ScrImageSheet findImageSheet(@NotNull SpriteImage image) {
+        for (ScrGamePlugin plugin : this.game.getPlugins()) {
+            ScrImageSheet sheet = plugin.findImageSheet(image);
+
+            if (sheet != null) {
+                return sheet;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Finds the HD graphics a sprite image draws instead of its installed anim: the first anims a plugin of the game gives
+     * ({@link ScrGamePlugin#findImageAnimation}).
+     *
+     * @param image an image of a drawn sprite
+     * @return the anims the image draws, or {@code null} for its installed anim
+     */
+    public @Nullable ScrImageAnimation findImageAnimation(@NotNull SpriteImage image) {
+        for (ScrGamePlugin plugin : this.game.getPlugins()) {
+            ScrImageAnimation animation = plugin.findImageAnimation(image);
+
+            if (animation != null) {
+                return animation;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Finds the image type whose installed graphics a sprite image draws instead of its own: the first image type a plugin of the game gives
+     * ({@link ScrGamePlugin#findImageTypeId}).
+     *
+     * @param image an image of a drawn sprite
+     * @return the image type, or {@code -1} for the image's own
+     */
+    public int findImageTypeId(@NotNull SpriteImage image) {
+        for (ScrGamePlugin plugin : this.game.getPlugins()) {
+            int imageType = plugin.findImageTypeId(image);
+
+            if (imageType >= 0) {
+                return imageType;
+            }
+        }
+
+        return -1;
+    }
+
+    /**
+     * Finds the frame a sprite image draws instead of its own: the first frame a plugin of the game gives ({@link ScrGamePlugin#findImageFrame}).
+     *
+     * @param image an image of a drawn sprite
+     * @return the frame index, or {@code -1} for the image's own frame
+     */
+    public int findImageFrame(@NotNull SpriteImage image) {
+        for (ScrGamePlugin plugin : this.game.getPlugins()) {
+            int frame = plugin.findImageFrame(image);
+
+            if (frame >= 0) {
+                return frame;
+            }
+        }
+
+        return -1;
+    }
+
+    /**
+     * Finds the draw function a sprite image draws with instead of its own: the first draw function a plugin of the game gives
+     * ({@link ScrGamePlugin#findImageDrawFunction}).
+     *
+     * @param image an image of a drawn sprite
+     * @return the draw function, or {@code -1} for the image's own
+     */
+    public int findImageDrawFunction(@NotNull SpriteImage image) {
+        for (ScrGamePlugin plugin : this.game.getPlugins()) {
+            int drawFunction = plugin.findImageDrawFunction(image);
+
+            if (drawFunction >= 0) {
+                return drawFunction;
+            }
+        }
+
+        return -1;
+    }
+
+    /**
+     * Finds the picture a terrain megatile draws instead of its installed one: the first picture a plugin of the game gives
+     * ({@link ScrGamePlugin#findTerrainTile}).
+     *
+     * @param megatile the megatile index of a drawn tile
+     * @return the palette indices, or {@code null} for the installed picture
+     */
+    public byte @Nullable [] findTerrainTile(int megatile) {
+        for (ScrGamePlugin plugin : this.game.getPlugins()) {
+            byte[] picture = plugin.findTerrainTile(megatile);
+
+            if (picture != null) {
+                return picture;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Finds the picture drawn over the game screen and its console: the first overlay a plugin of the game gives
+     * ({@link ScrGamePlugin#findScreenOverlay}).
+     *
+     * @return the overlay, or {@code null} for none
+     */
+    public @Nullable ScrScreenOverlay findScreenOverlay() {
+        for (ScrGamePlugin plugin : this.game.getPlugins()) {
+            ScrScreenOverlay overlay = plugin.findScreenOverlay();
+
+            if (overlay != null) {
+                return overlay;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @return {@code true} if a plugin of the game hides the console ({@link ScrGamePlugin#isConsoleHidden}), {@code false} otherwise
+     */
+    public boolean isConsoleHidden() {
+        for (ScrGamePlugin plugin : this.game.getPlugins()) {
+            if (plugin.isConsoleHidden()) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Finds the resource icons the console draws: the first sheet a plugin of the game gives ({@link ScrGamePlugin#findResourceIcons}).
+     *
+     * @return the indexed sheet, or {@code null} for the installed icons
+     */
+    public @Nullable SpriteSheet findResourceIcons() {
+        for (ScrGamePlugin plugin : this.game.getPlugins()) {
+            SpriteSheet icons = plugin.findResourceIcons();
+
+            if (icons != null) {
+                return icons;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Finds how the console is placed: the first placement a plugin of the game gives ({@link ScrGamePlugin#findConsolePlacement}).
+     *
+     * @return the placement, or {@code null} for the installed console
+     */
+    public @Nullable ScrConsolePlacement findConsolePlacement() {
+        for (ScrGamePlugin plugin : this.game.getPlugins()) {
+            ScrConsolePlacement placement = plugin.findConsolePlacement();
+
+            if (placement != null) {
+                return placement;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Finds the text a plugin shows for a {@code stat_txt} string ({@link StatTextOverrides}).
+     *
+     * @param identifier the one-based string identifier
+     * @return the text, or {@code null} if no plugin overrides the string
+     */
+    public @Nullable String findStatTextOverride(int identifier) {
+        return this.game.getInterfaceLink().getStatTextOverrides().find(identifier);
+    }
+
+    /**
+     * @return the local command card state the game plugins set: the script button states and the requested button set
+     */
+    public @NotNull ScrButtonStates getButtonStates() {
+        return this.game.getInterfaceLink().getButtonStates();
+    }
+
+    /**
+     * Hands a command card button input to the game's plugins in extension order until one consumes it ({@link ScrGamePlugin#onButtonInput}).
+     *
+     * @param input the button input
+     * @return {@code true} if a plugin consumed the input, {@code false} otherwise
+     */
+    public boolean deliverButtonInput(@NotNull ScrButtonInput input) {
+        for (ScrGamePlugin plugin : this.game.getPlugins()) {
+            if (plugin.onButtonInput(input)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Finds the picture the console draws instead of an installed art file: the first picture a plugin of the game gives
+     * ({@link ScrGamePlugin#findConsoleArt}).
+     *
+     * @param art the art file
+     * @return the picture, or {@code null} for the installed file
+     */
+    public @Nullable Picture findConsoleArt(@NotNull ScrConsoleArt art) {
+        for (ScrGamePlugin plugin : this.game.getPlugins()) {
+            Picture picture = plugin.findConsoleArt(art);
+
+            if (picture != null) {
+                return picture;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Finds the picture the console draws for a resource icon: the first picture a plugin of the game gives
+     * ({@link ScrGamePlugin#findResourceIconPicture}).
+     *
+     * @param icon the resource icon frame
+     * @return the picture, or {@code null} for the icon of {@link #findResourceIcons} or the installed icon
+     */
+    public @Nullable Picture findResourceIconPicture(int icon) {
+        for (ScrGamePlugin plugin : this.game.getPlugins()) {
+            Picture picture = plugin.findResourceIconPicture(icon);
+
+            if (picture != null) {
+                return picture;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Hands the commands of one space of every plugin's draw list ({@link ScrGamePlugin#findDrawList}) to a painter, in extension order.
+     *
+     * @param space   the space
+     * @param painter the painter
+     */
+    public void paintDrawLists(ScrDrawList.@NotNull Space space, ScrDrawList.@NotNull Painter painter) {
+        for (ScrGamePlugin plugin : this.game.getPlugins()) {
+            ScrDrawList list = plugin.findDrawList();
+
+            if (list != null) {
+                list.paint(space, painter);
+            }
+        }
     }
 
     /**

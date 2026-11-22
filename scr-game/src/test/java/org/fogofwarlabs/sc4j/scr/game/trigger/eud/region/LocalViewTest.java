@@ -232,6 +232,36 @@ final class LocalViewTest {
     }
 
     @Test
+    void move_screen_should_place_the_top_left_clamped_to_the_map() {
+        LocalView view = new LocalView();
+        ClassicAddressSpace space = new ClassicAddressSpace();
+
+        for (ClassicViewRegion region : ClassicViewRegion.create(view)) {
+            space.add(region);
+        }
+
+        Assertions.assertFalse(view.moveScreen(64, 64), "The view is unknown.");
+
+        view.setView(0, 0, 10, 20);
+
+        Assertions.assertFalse(view.moveScreen(64, 64), "The display geometry is unknown.");
+
+        view.setScreenGeometry(640, 480, 2000, 1000);
+        view.takeWritten();
+
+        Assertions.assertTrue(view.moveScreen(96, 5000));
+        Assertions.assertEquals(96, view.getScreenX());
+        Assertions.assertEquals(1000, view.getScreenY(), "A position past the maximum is clamped to it.");
+        Assertions.assertEquals(96, space.readDword(LocalView.PREVIOUS_SCREEN_X_ADDRESS));
+        Assertions.assertEquals(96 >> TerrainTileset.TILE_SHIFT | (1000 >> TerrainTileset.TILE_SHIFT) << Short.SIZE, view.readScreenTiles());
+        Assertions.assertEquals(10, view.getMouseX(), "The pointer stays.");
+        Assertions.assertTrue(view.takeWritten(), "The interface follows the move.");
+
+        Assertions.assertTrue(view.moveScreen(-32, 0));
+        Assertions.assertEquals(0, view.getScreenX(), "A negative position is clamped to 0.");
+    }
+
+    @Test
     void center_view_scroll_target_centers_the_point_in_the_whole_screen() {
         LocalView view = new LocalView();
 

@@ -69,6 +69,10 @@ public final class SpriteImage extends Image {
      */
     public static final int SAVE_RECORD_SIZE = 0x40;
     /**
+     * The normal drawing function: the frame in its own colors.
+     */
+    public static final int MODIFIER_NORMAL = 0;
+    /**
      * The first of the cloak drawing functions (cloaking, cloaked and decloaking, unseen and seen: {@code 2..7}).
      */
     public static final int MODIFIER_FIRST_CLOAK = 2;

@@ -12,7 +12,7 @@ import java.util.Map;
 /**
  * Resolves command-button strings and keys for the selected hotkey profile.
  * Default keys come from each button string; the device profile applies overrides. The disabled profile retains plain strings.
- * Transformed installed strings are cached, while strings read from the game table are transformed at lookup time.
+ * Transformed installed strings are cached. A game whose EUD emulation committed a {@code stat_txt} table reads the plain strings of that table.
  */
 public final class HotkeyProfile {
     /**
@@ -178,22 +178,19 @@ public final class HotkeyProfile {
 
     /**
      * Returns the button string of an id in a game: the plain string or the entry's transform of it.
-     * The string is read from the table the game's EUD emulation committed when there is one ({@link StatText#getString(ScrGameView, int)}).
-     * The entry keys stay those the profile was built with.
+     * Once the game's EUD emulation has committed a {@code stat_txt} table, the game uses the profile {@link #NO_HOTKEYS}: every id
+     * is the plain string as the game reads it ({@link StatText#getString(ScrGameView, int)}).
      *
      * @param view       the game view, or {@code null} outside a game
      * @param identifier the one-based {@code stat_txt} id
      * @return the plain string, or the profile entry's transformed string
      */
     public @NotNull String getString(@Nullable ScrGameView view, int identifier) {
-        if (view == null || view.getGameContext().getStatTextBytes(identifier, 0) == null) {
+        if (view == null || !view.getGameContext().hasStatTextTable()) {
             return this.getString(identifier);
         }
 
-        String value = this.text.getString(view, identifier);
-        Integer key = this.keys.get(identifier);
-
-        return key == null ? value : transform(value, key);
+        return this.text.getString(view, identifier);
     }
 
     /**

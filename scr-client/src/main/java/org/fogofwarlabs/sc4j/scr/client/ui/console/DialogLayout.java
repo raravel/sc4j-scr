@@ -7,11 +7,13 @@ import org.fogofwarlabs.sc4j.scr.data.format.casc.CascStorage;
 import org.fogofwarlabs.sc4j.scr.data.resource.dialog.ScrDialogControlUtils;
 import org.fogofwarlabs.sc4j.scr.data.resource.dialog.ScrDialogImportUtils;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.function.IntFunction;
 
 /**
  * Holds one installed interface dialog definition ({@code rez/<name>.ui.json}) in the {@code 640} by {@code 480} interface space.
@@ -260,5 +262,66 @@ public final class DialogLayout {
                                 this.rectangle[HEIGHT_INDEX]};
 
         return new DialogLayout(this.definition, movedRectangle, movedControls);
+    }
+
+    /**
+     * Creates a {@link DialogLayout} instance with a top-level control at another size and this dialog grown or shrunk by the same amounts, its
+     * bottom-left corner kept; every control keeps its offset from the dialog's top-left corner.
+     *
+     * @param identifier the control identifier
+     * @param width      the control's width
+     * @param height     the control's height
+     * @return the created {@link DialogLayout} instance
+     * @throws IllegalArgumentException if the dialog has no such control, or a size becomes negative
+     */
+    public @NotNull DialogLayout createResizedLayout(int identifier, int width, int height) {
+        Control resized = this.getControl(identifier);
+        int growthX = width - resized.getWidth();
+        int growthY = height - resized.getHeight();
+        List<DialogControl> resizedControls = new ArrayList<>(this.definition.getControls().size());
+
+        for (DialogControl control : this.definition.getControls()) {
+            if (control.getId() == identifier) {
+                resizedControls.add(new DialogControl(control.getId(), control.getKind(),
+                                                      control.getX(), control.getY(), width, height,
+                                                      control.getText(), control.getTextAlignment(), control.getImage(),
+                                                      control.getAttributes(), control.getChildren()));
+            } else {
+                resizedControls.add(control);
+            }
+        }
+
+        return of(new DialogDefinition(this.definition.getName(), this.getX(), this.getY() - growthY, this.getWidth() + growthX,
+                                       this.getHeight() + growthY, resizedControls));
+    }
+
+    /**
+     * Creates a {@link DialogLayout} instance with this dialog's top-left corner at a place and some top-level controls at places of their own; the
+     * other controls keep their place in the dialog. The definition of the created layout holds the placed controls, so the dialog's runtime state
+     * draws and hit-tests them at their places.
+     *
+     * @param left   the interface column of the dialog's left edge
+     * @param top    the interface row of the dialog's top edge
+     * @param places the place of a control by identifier: its interface column and row, or {@code null} to keep its place in the dialog
+     * @return the created {@link DialogLayout} instance
+     */
+    public @NotNull DialogLayout createPlacedLayout(int left, int top, @NotNull IntFunction<int @Nullable []> places) {
+        List<DialogControl> placedControls = new ArrayList<>(this.definition.getControls().size());
+
+        for (DialogControl control : this.definition.getControls()) {
+            int[] place = places.apply(control.getId());
+
+            if (place == null) {
+                placedControls.add(control);
+            } else {
+                placedControls.add(new DialogControl(control.getId(), control.getKind(),
+                                                     place[0] - left, place[1] - top, control.getWidth(), control.getHeight(),
+                                                     control.getText(), control.getTextAlignment(), control.getImage(),
+                                                     control.getAttributes(), control.getChildren()));
+            }
+        }
+
+        return of(new DialogDefinition(this.definition.getName(), left, top, this.definition.getWidth(), this.definition.getHeight(),
+                                       placedControls));
     }
 }

@@ -19,13 +19,11 @@ import org.fogofwarlabs.sc4j.scr.game.sprite.SelectionImages;
 import org.fogofwarlabs.sc4j.scr.game.sprite.Sprite;
 import org.fogofwarlabs.sc4j.scr.game.state.Game;
 import org.fogofwarlabs.sc4j.scr.game.unit.Unit;
-import org.fogofwarlabs.sc4j.scr.game.unit.UnitQueries;
-import org.fogofwarlabs.sc4j.scr.game.unit.UnitStatusFlags;
 import org.fogofwarlabs.sc4j.scr.game.unit.finder.UnitSpatialIndex;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
-import java.util.Arrays;
 
 /**
  * Executes trigger actions through the action registry of the context ({@link TriggerContext#getActionRegistry()}) and retains the action
@@ -79,11 +77,6 @@ final class TriggerActionsUtils {
      * The unit count of a Give Units or Modify Unit action whose count is zero: all units.
      */
     private static final int ALL_MODIFIED_UNITS = 0xFFFF;
-    /**
-     * The largest countdown, {@code 99} hours, {@code 59} minutes and {@code 59} seconds.
-     */
-    private static final int COUNTDOWN_MAXIMUM = 359999;
-
     /**
      * The Order action modifiers: move, patrol and attack.
      */
@@ -302,46 +295,9 @@ final class TriggerActionsUtils {
      * or secured result; only human and computer players receive the result.
      */
     private static boolean executeGameEnd(@NotNull TriggerContext context, @NotNull RunningTrigger record, TriggerDefinition.@NotNull Action action) {
-        int player = context.currentPlayer;
+        int result = action.getType() == TriggerActionIds.VICTORY ? TriggerPlayerResults.VICTORY : TriggerPlayerResults.DEFEAT;
 
-        if (action.getType() == TriggerActionIds.DEFEAT && hasSecuredResult(context, player)) {
-            return false;
-        }
-
-        endGame(context, player, action.getType() == TriggerActionIds.VICTORY ? TriggerPlayerResults.VICTORY : TriggerPlayerResults.DEFEAT);
-
-        return true;
-    }
-
-    /**
-     * Tests whether a player's pending result is victory or secured, which Defeat and Draw do not replace.
-     *
-     * @param context the trigger context
-     * @param player  the trigger player
-     * @return {@code true} if the player's result is victory or secured, {@code false} otherwise
-     */
-    private static boolean hasSecuredResult(@NotNull TriggerContext context, int player) {
-        int result = context.getPlayerResult(player);
-
-        return result == TriggerPlayerResults.VICTORY || result == TriggerPlayerResults.SECURED;
-    }
-
-    /**
-     * Ends the game for a player as Victory, Defeat and Draw do: a human or computer player receives the result, and the
-     * victory countdown reloads ({@code 1} while triggers run during the phase gate).
-     *
-     * @param context the trigger context
-     * @param player  the trigger player
-     * @param result  the player result ({@link TriggerPlayerResults})
-     */
-    private static void endGame(@NotNull TriggerContext context, int player, int result) {
-        int playerType = context.getPlayerType(player);
-
-        if (playerType == PlayerTypes.HUMAN || playerType == PlayerTypes.COMPUTER) {
-            context.setPlayerResult(player, result);
-        }
-
-        context.victoryCountdown = context.triggersEnabledWhileGated != 0 ? 1 : TriggerContext.VICTORY_COUNTDOWN_RELOAD;
+        return context.endGame(context.currentPlayer, result);
     }
 
     /**
@@ -398,15 +354,12 @@ final class TriggerActionsUtils {
     }
 
     /**
-     * Executes Play WAV: nothing while replaying; otherwise only the local player hears the sound file named by the map
-     * string ({@link #readSoundPath}), unless the record ignores interface actions. It always succeeds.
+     * Executes Play WAV: unless the record ignores interface actions, the sound file named by the map string ({@link #readSoundPath}) plays
+     * ({@link TriggerContext#playSound(int, byte[])}). It always succeeds.
      */
     private static boolean executePlayWav(@NotNull TriggerContext context, @NotNull RunningTrigger record, TriggerDefinition.@NotNull Action action) {
-        int player = context.currentPlayer;
-
-        if (!context.replayObservation && player == context.localPlayer && action.getSoundIndex() != 0 &&
-            (record.executionFlags & TriggerFlags.EXECUTION_IGNORE_INTERFACE_ACTIONS) == 0) {
-            context.events.addSound(action.getSoundIndex(), readSoundPath(context, action.getSoundIndex()));
+        if (action.getSoundIndex() != 0 && (record.executionFlags & TriggerFlags.EXECUTION_IGNORE_INTERFACE_ACTIONS) == 0) {
+            context.playSound(context.currentPlayer, action.getSoundIndex(), readSoundPath(context, action.getSoundIndex()));
         }
 
         return true;
@@ -414,7 +367,7 @@ final class TriggerActionsUtils {
 
     /**
      * Reads the sound file path of Play WAV and Transmission when the action runs: the map string of the index's low WORD as the strings hold
-     * it then (an EUD write to the strings changes it), at most {@link TriggerEvents#SOUND_PATH_LIMIT} bytes. No string gives an empty path.
+     * it then (an EUD write to the strings changes it). No string gives an empty path.
      *
      * @param context     the trigger context
      * @param stringIndex the action's sound string DWORD
@@ -424,11 +377,7 @@ final class TriggerActionsUtils {
         MapStringSection strings = context.world == null ? null : context.world.getInterfaceLink().getMessageLines().getMapStringSection();
         byte[] path = strings == null ? null : strings.getStringBytes(stringIndex & WORD_MASK);
 
-        if (path == null) {
-            return new byte[0];
-        }
-
-        return path.length > TriggerEvents.SOUND_PATH_LIMIT ? Arrays.copyOf(path, TriggerEvents.SOUND_PATH_LIMIT) : path;
+        return path == null ? new byte[0] : path;
     }
 
     /**
@@ -462,11 +411,9 @@ final class TriggerActionsUtils {
     private static boolean executePauseGame(@NotNull TriggerContext context, @NotNull RunningTrigger record, TriggerDefinition.@NotNull Action action) {
         if (canChangePauseState(context, record, action.getType() == TriggerActionIds.PAUSE_GAME)) {
             if (action.getType() == TriggerActionIds.PAUSE_GAME) {
-                context.phaseGate                 = 1;
                 record.executionFlags |= TriggerFlags.EXECUTION_PAUSED_GAME;
-                context.triggersEnabledWhileGated = 1;
 
-                context.events.add(TriggerEvents.GAME_PAUSE, 1, 0, 0);
+                pauseGame(context);
             } else {
                 resumeGame(context, record);
             }
@@ -587,8 +534,8 @@ final class TriggerActionsUtils {
         context.beginWait(player, (context.multiplayerSession & BYTE_MASK) != 0 ? duration : WAIT_WITHOUT_EXPIRY);
 
         if (player == context.localPlayer) {
-            if (!context.replayObservation && action.getSoundIndex() != 0) {
-                context.events.addSound(action.getSoundIndex(), readSoundPath(context, action.getSoundIndex()));
+            if (action.getSoundIndex() != 0) {
+                context.playSound(player, action.getSoundIndex(), readSoundPath(context, action.getSoundIndex()));
             }
 
             Game world = ScrTriggerSystem.requireWorld(context, "Transmission");
@@ -622,21 +569,14 @@ final class TriggerActionsUtils {
     }
 
     /**
-     * Executes Set Mission Objectives: the string index is stored for the current player; for a current player past player 11 it is written to
-     * the player's mission objectives DWORD of the game data through the EUD address space.
+     * Executes Set Mission Objectives for the current player ({@link TriggerContext#setMissionObjectives}).
      *
      * @throws UnsupportedOperationException if the address space does not represent the DWORD of a player past 11
      */
     private static boolean executeSetMissionObjectives(@NotNull TriggerContext context,
                                                        @NotNull RunningTrigger record,
                                                        TriggerDefinition.@NotNull Action action) {
-        int player = context.currentPlayer;
-
-        if (Integer.compareUnsigned(player, PlayerTable.PLAYER_SLOTS) < 0) {
-            context.setMissionObjectivesStringIndex(player, action.getStringIndex());
-        } else {
-            ExtendedDeathsUtils.writeGameDataDword(context, TriggerContext.MISSION_OBJECTIVES_OFFSET + Integer.BYTES * player, action.getStringIndex());
-        }
+        context.setMissionObjectives(context.currentPlayer, action.getStringIndex());
 
         return true;
     }
@@ -655,20 +595,14 @@ final class TriggerActionsUtils {
             return true;
         }
 
-        int bit = 1 << (index & TriggerContext.SWITCH_BIT_MASK);
-
         switch (action.getModifier()) {
-            case TriggerModifiers.SET -> context.switches[index >>> TriggerContext.SWITCH_DWORD_SHIFT] |= bit;
-            case TriggerModifiers.CLEAR -> context.switches[index >>> TriggerContext.SWITCH_DWORD_SHIFT] &= ~bit;
-            case TriggerModifiers.TOGGLE -> context.switches[index >>> TriggerContext.SWITCH_DWORD_SHIFT] ^= bit;
+            case TriggerModifiers.SET -> context.setSwitch(index, true);
+            case TriggerModifiers.CLEAR -> context.setSwitch(index, false);
+            case TriggerModifiers.TOGGLE -> context.toggleSwitch(index);
             case TriggerModifiers.RANDOMIZE -> {
                 Game world = ScrTriggerSystem.requireWorld(context, "Randomized Set Switch");
 
-                if ((world.getRandom().next(SWITCH_RANDOM_SOURCE) & SWITCH_RANDOM_BIT) != 0) {
-                    context.switches[index >>> TriggerContext.SWITCH_DWORD_SHIFT] |= bit;
-                } else {
-                    context.switches[index >>> TriggerContext.SWITCH_DWORD_SHIFT] &= ~bit;
-                }
+                context.setSwitch(index, (world.getRandom().next(SWITCH_RANDOM_SOURCE) & SWITCH_RANDOM_BIT) != 0);
             }
             default -> {
             }
@@ -686,19 +620,7 @@ final class TriggerActionsUtils {
     private static boolean executeRunAiScript(@NotNull TriggerContext context,
                                               @NotNull RunningTrigger record,
                                               TriggerDefinition.@NotNull Action action) {
-        int player = context.currentPlayer;
-        int script = action.getSecondaryOperand();
-        if (!canRunScript(context, script, player)) {
-            return true;
-        }
-
-        ComputerPlayerPhase computerPhase = context.computerPhase;
-
-        if (computerPhase == null) {
-            throw Exceptions.newUnsupportedOperationException("Run AI Script requires the shared computer script pool: {0}", formatScript(script));
-        }
-
-        computerPhase.runScript(script, player, null);
+        context.runAiScript(context.currentPlayer, action.getSecondaryOperand());
 
         return true;
     }
@@ -711,13 +633,8 @@ final class TriggerActionsUtils {
     private static boolean executeTalkingPortrait(@NotNull TriggerContext context,
                                                   @NotNull RunningTrigger record,
                                                   TriggerDefinition.@NotNull Action action) {
-        int player = context.currentPlayer;
-
-        if (player == context.localPlayer && (record.executionFlags & TriggerFlags.EXECUTION_IGNORE_INTERFACE_ACTIONS) == 0) {
-            context.events.add(TriggerEvents.TRANSMISSION,
-                               action.getUnitType() & WORD_MASK,
-                               TriggerEvents.NO_POSITION, TriggerEvents.NO_POSITION,
-                               action.getDuration());
+        if ((record.executionFlags & TriggerFlags.EXECUTION_IGNORE_INTERFACE_ACTIONS) == 0) {
+            context.showTalkingPortrait(context.currentPlayer, action.getUnitType(), action.getDuration());
         }
 
         return true;
@@ -730,14 +647,8 @@ final class TriggerActionsUtils {
     private static boolean executeMuteUnitSpeech(@NotNull TriggerContext context,
                                                  @NotNull RunningTrigger record,
                                                  TriggerDefinition.@NotNull Action action) {
-        int player = context.currentPlayer;
-
         if ((record.executionFlags & TriggerFlags.EXECUTION_IGNORE_INTERFACE_ACTIONS) == 0) {
-            context.events.add(TriggerEvents.UNIT_SPEECH_MUTE, player, 0, 0);
-
-            if (context.world != null && player == context.getLocalPlayer()) {
-                context.world.getInterfaceLink().getLocalInterface().setUnitSpeechMuted(1);
-            }
+            context.setUnitSpeechMuted(context.currentPlayer, true);
         }
 
         return true;
@@ -749,13 +660,7 @@ final class TriggerActionsUtils {
     private static boolean executeUnmuteUnitSpeech(@NotNull TriggerContext context,
                                                    @NotNull RunningTrigger record,
                                                    TriggerDefinition.@NotNull Action action) {
-        int player = context.currentPlayer;
-
-        context.events.add(TriggerEvents.UNIT_SPEECH_UNMUTE, player, 0, 0);
-
-        if (context.world != null && player == context.getLocalPlayer()) {
-            context.world.getInterfaceLink().getLocalInterface().setUnitSpeechMuted(0);
-        }
+        context.setUnitSpeechMuted(context.currentPlayer, false);
 
         return true;
     }
@@ -769,29 +674,13 @@ final class TriggerActionsUtils {
     private static boolean executeRunAiScriptAtLocation(@NotNull TriggerContext context,
                                                         @NotNull RunningTrigger record,
                                                         TriggerDefinition.@NotNull Action action) {
-        int player = context.currentPlayer;
         int locationByte = action.getLocation() & BYTE_MASK;
 
         if (locationByte == 0) {
             return true;
         }
 
-        int script = action.getSecondaryOperand();
-        if (!canRunScript(context, script, player)) {
-            return true;
-        }
-
-        ComputerPlayerPhase computerPhase = context.computerPhase;
-
-        if (computerPhase == null) {
-            throw Exceptions.newUnsupportedOperationException("Run AI Script At Location requires the shared computer script pool: {0}",
-                                                              formatScript(script));
-        }
-
-        int location = locationByte - 1;
-        TriggerLocation area = context.locations[location];
-
-        computerPhase.runScript(script, player, new int[]{area.getLeft(), area.getTop(), area.getRight(), area.getBottom()});
+        context.runAiScriptAt(context.currentPlayer, action.getSecondaryOperand(), locationByte - 1);
 
         return true;
     }
@@ -906,7 +795,7 @@ final class TriggerActionsUtils {
             centerY = context.locations[source].getCenterY();
         }
 
-        world.getTriggerLocations().moveLocation(context, destination - 1, centerX, centerY);
+        world.getTriggerLocations().moveLocation(context.locations[destination - 1], centerX, centerY);
 
         context.preparationFlag = 0;
 
@@ -914,23 +803,12 @@ final class TriggerActionsUtils {
     }
 
     /**
-     * Executes Set Countdown Timer: the set, add and subtract modifiers, then the value is clamped to
-     * {@code 0..}{@link #COUNTDOWN_MAXIMUM}.
+     * Executes Set Countdown Timer ({@link TriggerContext#modifyCountdownTimer}).
      */
     private static boolean executeSetCountdownTimer(@NotNull TriggerContext context,
                                                     @NotNull RunningTrigger record,
                                                     TriggerDefinition.@NotNull Action action) {
-        int value = context.countdownTimer;
-
-        switch (action.getModifier()) {
-            case TriggerModifiers.SET_TO -> value = action.getDuration();
-            case TriggerModifiers.ADD -> value += action.getDuration();
-            case TriggerModifiers.SUBTRACT -> value -= action.getDuration();
-            default -> {
-            }
-        }
-
-        context.countdownTimer = Math.min(Math.max(value, 0), COUNTDOWN_MAXIMUM);
+        context.modifyCountdownTimer(action.getModifier(), action.getDuration());
 
         return true;
     }
@@ -941,7 +819,7 @@ final class TriggerActionsUtils {
     private static boolean executePauseTimer(@NotNull TriggerContext context,
                                              @NotNull RunningTrigger record,
                                              TriggerDefinition.@NotNull Action action) {
-        context.countdownPaused = action.getType() == TriggerActionIds.PAUSE_TIMER ? 1 : 0;
+        context.setCountdownPaused(action.getType() == TriggerActionIds.PAUSE_TIMER);
 
         return true;
     }
@@ -953,17 +831,13 @@ final class TriggerActionsUtils {
     private static boolean executeMinimapPing(@NotNull TriggerContext context,
                                               @NotNull RunningTrigger record,
                                               TriggerDefinition.@NotNull Action action) {
-        int player = context.currentPlayer;
-
-        if ((action.getLocation() & BYTE_MASK) == 0 ||
-            player != context.localPlayer ||
-            (record.executionFlags & TriggerFlags.EXECUTION_IGNORE_INTERFACE_ACTIONS) != 0) {
+        if ((action.getLocation() & BYTE_MASK) == 0 || (record.executionFlags & TriggerFlags.EXECUTION_IGNORE_INTERFACE_ACTIONS) != 0) {
             return true;
         }
 
         int location = (action.getLocation() & BYTE_MASK) - 1;
 
-        context.events.add(TriggerEvents.MINIMAP_PING, context.locations[location].getCenterX(), context.locations[location].getCenterY(), 0);
+        context.pingMinimap(context.currentPlayer, context.locations[location].getCenterX(), context.locations[location].getCenterY());
 
         return true;
     }
@@ -1023,15 +897,7 @@ final class TriggerActionsUtils {
      * result and the victory countdown is set as for Victory.
      */
     private static boolean executeDraw(@NotNull TriggerContext context, @NotNull RunningTrigger record, TriggerDefinition.@NotNull Action action) {
-        int player = context.currentPlayer;
-
-        if (hasSecuredResult(context, player)) {
-            return false;
-        }
-
-        endGame(context, player, TriggerPlayerResults.DRAW);
-
-        return true;
+        return context.endGame(context.currentPlayer, TriggerPlayerResults.DRAW);
     }
 
     /**
@@ -1052,7 +918,7 @@ final class TriggerActionsUtils {
              selected < PlayerTable.PLAYER_SLOTS;
              selected = TriggerPlayersUtils.getNextSelectedPlayer(context, selector, selected)) {
             if (selected < PlayerTable.PLAYABLE_PLAYER_SLOTS) {
-                TriggerScoreActionsUtils.modifyScore(context.requireAccounting(), selected, scoreType, modifier, action.getSecondaryOperand());
+                context.setScore(selected, scoreType, modifier, action.getSecondaryOperand());
             }
         }
 
@@ -1067,14 +933,10 @@ final class TriggerActionsUtils {
     private static boolean executeLeaderboard(@NotNull TriggerContext context,
                                               @NotNull RunningTrigger record,
                                               TriggerDefinition.@NotNull Action action) {
-        context.periodicCountdown = 1;
-
         int type = action.getType();
 
         if (type == TriggerActionIds.LEADERBOARD_GREED) {
-            context.leaderboardType     = TriggerActionIds.LEADERBOARD_GREED;
-            context.leaderboardGoal     = action.getSecondaryOperand();
-            context.leaderboardUnitType = TriggerScoreActionsUtils.RESOURCE_BOTH;
+            context.showGreedLeaderboard(action.getSecondaryOperand());
 
             return true;
         }
@@ -1083,16 +945,17 @@ final class TriggerActionsUtils {
             int location = action.getLocation() & BYTE_MASK;
 
             if (location == 0) {
+                context.periodicCountdown = 1;
+
                 return true;
             }
 
-            context.leaderboardLocation = location - 1;
+            context.showLeaderboardAt(type, location - 1, action.getUnitType(), action.getSecondaryOperand(), action.getStringIndex());
+
+            return true;
         }
 
-        context.leaderboardType     = type;
-        context.leaderboardUnitType = action.getUnitType() & WORD_MASK;
-        context.leaderboardGoal     = action.getSecondaryOperand();
-        context.leaderboardString   = action.getStringIndex();
+        context.showLeaderboard(type, action.getUnitType(), action.getSecondaryOperand(), action.getStringIndex());
 
         return true;
     }
@@ -1225,10 +1088,9 @@ final class TriggerActionsUtils {
         boolean disabled = UnitOrderEligibility.isDisabled(found);
 
         if ((modifier == TriggerModifiers.CLEAR || modifier == 0 || modifier == TriggerModifiers.TOGGLE) && !disabled) {
-            world.getOrders().issueUntargeted(found, ScrOrderIds.DISABLE_DOODAD, context.instructionLimit);
+            world.getTriggerUnitActions().disableDoodad(found, context.instructionLimit);
         } else if ((modifier == TriggerModifiers.SET || modifier == 0 || modifier == TriggerModifiers.TOGGLE) && disabled) {
-            found.setStatus(found.getStatus() & ~UnitStatusFlags.DISABLED);
-            world.getOrders().issueUntargeted(found, ScrOrderIds.ENABLE_DOODAD, context.instructionLimit);
+            world.getTriggerUnitActions().enableDoodad(found, context.instructionLimit);
         }
 
         return true;
@@ -1282,11 +1144,11 @@ final class TriggerActionsUtils {
 
             boolean counted = switch (action.getType()) {
                 case TriggerActionIds.GIVE_UNITS_TO_PLAYER -> world.getTriggerUnitActions().giveUnit(context, unit, action.getSecondaryOperand());
-                case TriggerActionIds.MODIFY_UNIT_HIT_POINTS -> world.getTriggerUnitActions().modifyHitPoints(units, unit, action.getSecondaryOperand(), context.instructionLimit);
-                case TriggerActionIds.MODIFY_UNIT_ENERGY -> world.getTriggerUnitActions().modifyEnergy(units, unit, action.getSecondaryOperand());
-                case TriggerActionIds.MODIFY_UNIT_SHIELD_POINTS -> TriggerUnitActions.modifyShields(units, unit, action.getSecondaryOperand());
-                case TriggerActionIds.MODIFY_UNIT_RESOURCE_AMOUNT -> world.getTriggerUnitActions().modifyResources(units, unit, action.getSecondaryOperand(), context.instructionLimit);
-                default -> world.getTriggerUnitActions().modifyHangar(context, unit, action.getSecondaryOperand());
+                case TriggerActionIds.MODIFY_UNIT_HIT_POINTS -> world.getTriggerUnitActions().modifyHitPoints(unit, action.getSecondaryOperand(), context.instructionLimit);
+                case TriggerActionIds.MODIFY_UNIT_ENERGY -> world.getTriggerUnitActions().modifyEnergy(unit, action.getSecondaryOperand());
+                case TriggerActionIds.MODIFY_UNIT_SHIELD_POINTS -> world.getTriggerUnitActions().modifyShields(unit, action.getSecondaryOperand());
+                case TriggerActionIds.MODIFY_UNIT_RESOURCE_AMOUNT -> world.getTriggerUnitActions().modifyResources(unit, action.getSecondaryOperand(), context.instructionLimit);
+                default -> world.getTriggerUnitActions().modifyHangar(unit, action.getSecondaryOperand(), context.instructionLimit);
             };
 
             if (counted) {
@@ -1342,22 +1204,7 @@ final class TriggerActionsUtils {
                 continue;
             }
 
-            if (UnitQueries.isGroundedBuilding(unit)) {
-                world.getUnitBuildingMove().move(unit, targetX, targetY, context.instructionLimit);
-
-                if (--remaining == 0) {
-                    break;
-                }
-
-                continue;
-            }
-
-            boolean moved = world.getUnitRelocation().relocate(unit, targetX, targetY);
-
-            // A pending queue activates, otherwise the unit returns to its computer or idle order.
-            if (moved && (unit.getStatus() & UnitStatusFlags.COMPLETED) != 0) {
-                world.getOrders().finishOrder(unit, context.instructionLimit);
-            }
+            world.getTriggerUnitActions().moveUnit(unit, targetX, targetY, context.instructionLimit);
 
             if (--remaining == 0) {
                 break;
@@ -1397,21 +1244,20 @@ final class TriggerActionsUtils {
                          ? TriggerPlayerSelectors.NONE
                          : TriggerPlayersUtils.resolveSinglePlayer(context, selector);
 
+        int relation = status == STATUS_ALLY ? PlayerRelations.ALLIED
+                                             : status == STATUS_ALLIED_VICTORY ? PlayerRelations.ALLIED_VICTORY : PlayerRelations.ENEMY;
+
         if (selected >= 0) {
-            setAllianceStatus(context, selected, status);
+            setAllianceStatus(context, player, selected, relation);
         } else if (Integer.compareUnsigned(selector, TriggerPlayerSelectors.COUNT) < 0) {
             for (selected = TriggerPlayersUtils.getNextSelectedPlayer(context, selector, TriggerContext.WALK_START);
                  selected < PlayerTable.PLAYER_SLOTS;
                  selected = TriggerPlayersUtils.getNextSelectedPlayer(context, selector, selected)) {
-                setAllianceStatus(context, selected, status);
+                setAllianceStatus(context, player, selected, relation);
             }
         }
 
-        world.getTriggerUnitActions().clearAlliedOrderTargets(player);
-
-        if (player == context.localPlayer) {
-            world.getSelectionImages().updateLocalRelations();
-        }
+        context.applyAllianceChange(world, player);
 
         return true;
     }
@@ -1424,8 +1270,8 @@ final class TriggerActionsUtils {
                                                              @NotNull RunningTrigger record,
                                                              TriggerDefinition.@NotNull Action action) {
         switch (action.getModifier()) {
-            case TriggerModifiers.SET -> context.leaderboardComputers = 1;
-            case TriggerModifiers.CLEAR -> context.leaderboardComputers = 0;
+            case TriggerModifiers.SET -> context.setLeaderboardComputersIncluded(true);
+            case TriggerModifiers.CLEAR -> context.setLeaderboardComputersIncluded(false);
             case TriggerModifiers.TOGGLE -> context.leaderboardComputers ^= 1;
             default -> {
             }
@@ -1472,7 +1318,7 @@ final class TriggerActionsUtils {
      * @return {@code true} if the handler would pause or resume the game loop, {@code false} otherwise
      */
     private static boolean canChangePauseState(@NotNull TriggerContext context, @NotNull RunningTrigger record, boolean pause) {
-        if ((context.multiplayerSession & BYTE_MASK) != 0 || (context.triggersEnabledWhileGated != 0) == pause) {
+        if (!canChangePauseState(context, pause)) {
             return false;
         }
 
@@ -1486,11 +1332,66 @@ final class TriggerActionsUtils {
     }
 
     /**
+     * Applies the checks of Pause Game (or Unpause Game) that do not read a trigger record: a multiplayer session and a game already paused (not
+     * paused) by Pause Game make the action do nothing.
+     *
+     * @param context the trigger context
+     * @param pause   {@code true} for Pause Game, {@code false} for Unpause Game
+     * @return {@code true} if the action would pause or resume the game loop, {@code false} otherwise
+     */
+    private static boolean canChangePauseState(@NotNull TriggerContext context, boolean pause) {
+        return (context.multiplayerSession & BYTE_MASK) == 0 && (context.triggersEnabledWhileGated != 0) != pause;
+    }
+
+    /**
+     * Applies a plugin's request of Pause Game or Unpause Game without a trigger record ({@link TriggerContext#requestPauseGame()},
+     * {@link TriggerContext#requestUnpauseGame()}) and forgets it: the action's rule without the owner and record checks
+     * ({@link #canChangePauseState(TriggerContext, boolean)}), then its pausing or resuming half.
+     *
+     * @param context the trigger context
+     */
+    static void applyPauseRequest(@NotNull TriggerContext context) {
+        int request = context.pauseRequest;
+
+        context.pauseRequest = TriggerContext.NO_PAUSE_REQUEST;
+
+        if (request == TriggerContext.NO_PAUSE_REQUEST || !canChangePauseState(context, request == TriggerContext.PAUSE_REQUEST)) {
+            return;
+        }
+
+        if (request == TriggerContext.PAUSE_REQUEST) {
+            pauseGame(context);
+        } else {
+            resumeGame(context);
+        }
+    }
+
+    /**
+     * Applies the pausing half of Pause Game: the game-paused state and the trigger pause set, so that the triggers keep running while no frame
+     * runs, and the game pause event is raised; menus and screen state are presentation.
+     */
+    private static void pauseGame(@NotNull TriggerContext context) {
+        context.phaseGate                 = 1;
+        context.triggersEnabledWhileGated = 1;
+
+        context.events.add(TriggerEvents.GAME_PAUSE, 1, 0, 0);
+    }
+
+    /**
      * Applies the resuming half of Unpause Game: the current record loses {@link TriggerFlags#EXECUTION_PAUSED_GAME}, the
      * trigger pause and the game-paused state clear; the camera recentering and menu restore are presentation.
      */
     private static void resumeGame(@NotNull TriggerContext context, @NotNull RunningTrigger record) {
         record.executionFlags &= ~TriggerFlags.EXECUTION_PAUSED_GAME;
+
+        resumeGame(context);
+    }
+
+    /**
+     * Applies the resuming half of Unpause Game without a trigger record: the trigger pause and the game-paused state clear and the game pause
+     * event is raised.
+     */
+    private static void resumeGame(@NotNull TriggerContext context) {
         context.triggersEnabledWhileGated = 0;
         context.phaseGate                 = 0;
 
@@ -1498,26 +1399,21 @@ final class TriggerActionsUtils {
     }
 
     /**
-     * Applies Set Alliance Status to one player: the ally status becomes allied, the allied victory status allied
-     * victory, anything else enemy; the current player's own entry is never selected. A nonzero value different from
-     * the current player's diagonal then replaces every nonzero entry of the current player's row, including the
-     * diagonal and the neutral player. The bytes are addressed unchecked ({@link TriggerPlayersUtils#readAlliance}): player 12 is column 0 of
-     * the next row, and the row of a current player past player 11 lies in the game data after the alliance table.
+     * Applies Set Alliance Status to one player: the source's entry toward the target becomes the relation; the source's own entry is never
+     * selected. A relation other than enemy and different from the source's diagonal then replaces every nonzero entry of the source's row,
+     * including the diagonal and the neutral player. The bytes are addressed unchecked ({@link TriggerPlayersUtils#readAlliance}): player 12
+     * is column 0 of the next row, and the row of a source past player 11 lies in the game data after the alliance table.
      *
      * @param context the trigger context
+     * @param current the source player, the current player of the action
      * @param target  the target player, {@code 0} through {@code 12}
-     * @param status  the action's status WORD
+     * @param value   {@link PlayerRelations#ENEMY}, {@link PlayerRelations#ALLIED} or {@link PlayerRelations#ALLIED_VICTORY}
      * @throws UnsupportedOperationException if the EUD address space does not represent a byte outside the table
      */
-    static void setAllianceStatus(@NotNull TriggerContext context, int target, int status) {
-        int current = context.currentPlayer;
-
+    static void setAllianceStatus(@NotNull TriggerContext context, int current, int target, int value) {
         if (target == current) {
             return;
         }
-
-        int value = status == STATUS_ALLY ? PlayerRelations.ALLIED
-                                          : status == STATUS_ALLIED_VICTORY ? PlayerRelations.ALLIED_VICTORY : PlayerRelations.ENEMY;
 
         TriggerPlayersUtils.writeAlliance(context, current, target, value);
 
@@ -1528,6 +1424,32 @@ final class TriggerActionsUtils {
                 }
             }
         }
+    }
+
+    /**
+     * Starts a computer script for Run AI Script and Run AI Script At Location after the owner gate ({@link #canRunScript}).
+     *
+     * @param context the trigger context
+     * @param player  the player that runs the script
+     * @param script  the script identifier
+     * @param bounds  the left, top, right and bottom bounds of the location, or {@code null}
+     * @return {@code true} if the script started, {@code false} if the player may not run it
+     * @throws UnsupportedOperationException if the script runs without the shared computer script pool
+     */
+    static boolean runScript(@NotNull TriggerContext context, int player, int script, int @Nullable [] bounds) {
+        if (!canRunScript(context, script, player)) {
+            return false;
+        }
+
+        ComputerPlayerPhase computerPhase = context.computerPhase;
+
+        if (computerPhase == null) {
+            throw Exceptions.newUnsupportedOperationException("Run AI Script requires the shared computer script pool: {0}", formatScript(script));
+        }
+
+        computerPhase.runScript(script, player, bounds);
+
+        return true;
     }
 
     /**

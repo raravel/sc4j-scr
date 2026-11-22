@@ -354,6 +354,31 @@ public final class ConsoleLayout implements InterfaceTransform {
     }
 
     /**
+     * Creates a {@link ConsoleLayout} instance with other dialogs in this layout's interface width and console top.
+     *
+     * @param commandButtons the command card dialog
+     * @param selectionPanel the selection panel dialog
+     * @param resources      the resource dialog
+     * @param portrait       the portrait dialog
+     * @param minimap        the minimap dialog
+     * @param menu           the menu button dialog
+     * @return the created {@link ConsoleLayout} instance
+     */
+    public @NotNull ConsoleLayout createPlacedLayout(@NotNull DialogLayout commandButtons,
+                                                     @NotNull DialogLayout selectionPanel,
+                                                     @NotNull DialogLayout resources,
+                                                     @NotNull DialogLayout portrait,
+                                                     @NotNull DialogLayout minimap,
+                                                     @NotNull DialogLayout menu) {
+        ConsoleLayout placed = new ConsoleLayout(commandButtons, selectionPanel, resources, portrait, minimap, menu);
+
+        placed.interfaceWidth = this.interfaceWidth;
+        placed.consoleTop     = this.consoleTop;
+
+        return placed;
+    }
+
+    /**
      * Creates a {@link ConsoleLayout} instance with this layout's dialogs moved and a wider interface space.
      *
      * @param interfaceWidth the interface width

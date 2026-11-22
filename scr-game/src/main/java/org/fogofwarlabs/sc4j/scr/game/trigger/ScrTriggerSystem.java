@@ -6,6 +6,7 @@ import org.fogofwarlabs.sc4j.scr.core.GameSettings;
 import org.fogofwarlabs.sc4j.scr.data.format.chk.ChkFile;
 import org.fogofwarlabs.sc4j.scr.data.format.chk.ChkSection;
 import org.fogofwarlabs.sc4j.scr.data.format.replay.ReplaySettings;
+import org.fogofwarlabs.sc4j.scr.game.extension.ScrSimulationPlugins;
 import org.fogofwarlabs.sc4j.scr.game.player.PlayerTable;
 import org.fogofwarlabs.sc4j.scr.game.presentation.MessageLines;
 import org.fogofwarlabs.sc4j.scr.game.replay.ReplayFrameRunner;
@@ -120,6 +121,9 @@ public final class ScrTriggerSystem implements TriggerSystem {
      * {@link TriggerContext#consumeOutcomeDisplay()}), and the local player then receives the presentation output of Play WAV, which
      * is skipped while replaying. The presentation queue {@link TriggerContext#getEvents()} is cleared first. Earlier timer, action
      * and player mutations remain if an owner fails; evaluation does not roll them back.
+     * <p>
+     * A plugin's request of Pause Game or Unpause Game ({@link TriggerContext#requestPauseGame()}) runs after the clocks of the step and before
+     * its triggers; a step that the Pause command keeps from running drops it.
      *
      * @param context           the initialized trigger state
      * @param frameDuration     the duration of the frame in milliseconds
@@ -144,6 +148,8 @@ public final class ScrTriggerSystem implements TriggerSystem {
         context.triggersEnabledWhileGated = enabledWhileGated & BYTE_MASK;
 
         if (phaseGate != 0 && (enabledWhileGated & BYTE_MASK) == 0) {
+            context.pauseRequest = TriggerContext.NO_PAUSE_REQUEST;
+
             return;
         }
 
@@ -208,6 +214,9 @@ public final class ScrTriggerSystem implements TriggerSystem {
             }
         }
 
+        // A plugin's Pause Game or Unpause Game runs where the actions of the triggers run, after the clocks of this frame.
+        TriggerActionsUtils.applyPauseRequest(context);
+
         int previous = context.cycleCountdown;
 
         context.cycleCountdown = (previous - 1) & WORD_MASK;
@@ -225,26 +234,32 @@ public final class ScrTriggerSystem implements TriggerSystem {
             throw Exceptions.newUnsupportedOperationException("Trigger evaluation requires retained player records.");
         }
 
-        for (int player = context.getNextActivePlayer(TriggerContext.WALK_START); player < PlayerTable.PLAYABLE_PLAYER_SLOTS;
-             player = context.getNextActivePlayer(player)) {
-            context.currentPlayer            = player;
-            context.currentPlayerInitialized = true;
+        context.passRunning = true;
 
-            boolean hasRecords;
+        try {
+            for (int player = context.getNextActivePlayer(TriggerContext.WALK_START); player < PlayerTable.PLAYABLE_PLAYER_SLOTS;
+                 player = context.getNextActivePlayer(player)) {
+                context.currentPlayer            = player;
+                context.currentPlayerInitialized = true;
 
-            if (context.extendedDeathsMode != 0) {
-                ClassicTriggerMirror mirror = ClassicTriggerWalkUtils.getMirror(context);
+                boolean hasRecords;
 
-                hasRecords = mirror == null ? context.playerRecords[player].length != 0 : !mirror.isEmpty(player);
-            } else {
-                hasRecords = context.playerRecords[player].length != 0;
+                if (context.extendedDeathsMode != 0) {
+                    ClassicTriggerMirror mirror = ClassicTriggerWalkUtils.getMirror(context);
+
+                    hasRecords = mirror == null ? context.playerRecords[player].length != 0 : !mirror.isEmpty(player);
+                } else {
+                    hasRecords = context.playerRecords[player].length != 0;
+                }
+
+                if (hasRecords) {
+                    evaluatePlayer(context, player);
+
+                    evaluatedRecords = true;
+                }
             }
-
-            if (hasRecords) {
-                evaluatePlayer(context, player);
-
-                evaluatedRecords = true;
-            }
+        } finally {
+            context.passRunning = false;
         }
 
         context.currentPlayer            = PlayerTable.PLAYABLE_PLAYER_SLOTS;
@@ -430,6 +445,12 @@ public final class ScrTriggerSystem implements TriggerSystem {
             }
 
             context.players[player].setVictoryState(result);
+
+            ScrSimulationPlugins simulation = world != null ? world.getSimulationPlugins() : null;
+
+            if (simulation != null) {
+                simulation.reportPlayerResult(player, context.players[player].getVictoryState());
+            }
 
             if (result == TriggerPlayerResults.DEFEAT) {
                 // The elimination message is only presentation; the removal follows.

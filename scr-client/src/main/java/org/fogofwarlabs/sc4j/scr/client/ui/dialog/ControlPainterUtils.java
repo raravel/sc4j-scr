@@ -94,7 +94,7 @@ public final class ControlPainterUtils {
             "| EN", "| \u65E5\u672C\u8A9E", "| \uAC00", "| \u4E2D", "| \u4E2D", "| EN", "| PL", "| RU"
     };
     /**
-     * The fill of the composition's target clause (RGB {@code 0.5} at alpha {@code 0.3}).
+     * The fill of a text selection and of the composition's target clause (RGB {@code 0.5} at alpha {@code 0.3}).
      */
     private static final int COMPOSITION_FILL = 0x8080804D;
     /**
@@ -292,6 +292,7 @@ public final class ControlPainterUtils {
         float room = right - left + 1 - painter.measure(slot, EDIT_CARET_GLYPH) - markWidth;
 
         edit.updateScroll(mode, room, character -> painter.measure(slot, character));
+        edit.setTextLeft(left);
 
         String text = edit.getDrawnText(focused);
 
@@ -310,13 +311,13 @@ public final class ControlPainterUtils {
         // The selection of the edit operations (TextEditOperation) is marked as the composition clause is: one fill rule for
         // every text input.
         if (focused) {
-            fillVisibleRange(painter,
-                             slot,
-                             visible,
-                             edit.getSelectionStart() - edit.getScroll(),
-                             edit.getSelectionEnd() - edit.getScroll(),
-                             left,
-                             top);
+            fillTextRange(painter,
+                          slot,
+                          visible,
+                          edit.getSelectionStart() - edit.getScroll(),
+                          edit.getSelectionEnd() - edit.getScroll(),
+                          left,
+                          top);
         }
 
         int[] clause = InputMethod.getCompositionClause();
@@ -329,28 +330,37 @@ public final class ControlPainterUtils {
         // over the ceiling of its own width (the caret glyph advances nothing here), the .fnt maximum height tall.
         int compositionStart = edit.getCaret() - edit.getScroll() - clause[CLAUSE_CURSOR_INDEX];
 
-        fillVisibleRange(painter,
-                         slot,
-                         visible,
-                         compositionStart + clause[CLAUSE_START_INDEX],
-                         compositionStart + clause[CLAUSE_END_INDEX],
-                         left,
-                         top);
+        fillTextRange(painter,
+                      slot,
+                      visible,
+                      compositionStart + clause[CLAUSE_START_INDEX],
+                      compositionStart + clause[CLAUSE_END_INDEX],
+                      left,
+                      top);
     }
 
     /**
-     * Fills the characters {@code [start, end)} of the visible edit text, clamped to it.
+     * Fills the selected characters {@code [start, end)} of a drawn line, clamped to it: from the floor of the width before them over the
+     * ceiling of their own width, one line of the font tall. The text inputs and the read-only logs mark their selection with this one fill.
+     *
+     * @param painter the painter
+     * @param slot    the line's font slot
+     * @param line    the drawn line
+     * @param start   the first selected UTF-16 index of the line
+     * @param end     the UTF-16 index after the selected characters
+     * @param left    the line's left edge
+     * @param top     the line's top edge
      */
-    private static void fillVisibleRange(@NotNull DialogPainter painter, int slot, @NotNull String visible, int start, int end, float left, float top) {
-        int from = Math.clamp(start, 0, visible.length());
-        int to = Math.clamp(end, from, visible.length());
+    public static void fillTextRange(@NotNull DialogPainter painter, int slot, @NotNull String line, int start, int end, float left, float top) {
+        int from = Math.clamp(start, 0, line.length());
+        int to = Math.clamp(end, from, line.length());
 
         if (to <= from) {
             return;
         }
 
-        float x = left + (float) Math.floor(painter.measure(slot, visible.substring(0, from)));
-        float width = (float) Math.ceil(painter.measure(slot, visible.substring(from, to)));
+        float x = left + (float) Math.floor(painter.measure(slot, line.substring(0, from)));
+        float width = (float) Math.ceil(painter.measure(slot, line.substring(from, to)));
 
         painter.fillRectangle(x, top, width, painter.getLineHeight(slot) - InterfaceText.LINE_GAP, COMPOSITION_FILL);
     }

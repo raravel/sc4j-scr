@@ -5,7 +5,9 @@ import org.fogofwarlabs.sc4j.base.exception.Exceptions;
 import org.fogofwarlabs.sc4j.engine.trigger.TriggerRegistry;
 import org.fogofwarlabs.sc4j.scr.game.ai.ComputerPlayerPhase;
 import org.fogofwarlabs.sc4j.scr.game.frame.GameSpeed;
+import org.fogofwarlabs.sc4j.scr.game.map.MapStringSection;
 import org.fogofwarlabs.sc4j.scr.game.player.*;
+import org.fogofwarlabs.sc4j.scr.game.presentation.MessageLines;
 import org.fogofwarlabs.sc4j.scr.game.state.Game;
 import org.fogofwarlabs.sc4j.scr.game.trigger.eud.ClassicAddressSpace;
 import org.fogofwarlabs.sc4j.scr.game.trigger.eud.ClassicRegion;
@@ -14,6 +16,7 @@ import org.jetbrains.annotations.Nullable;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
 
@@ -119,6 +122,22 @@ public final class TriggerContext implements org.fogofwarlabs.sc4j.engine.trigge
      * The victory countdown WORD after it made the outcome screen due, and after a defeat of the local player.
      */
     static final int VICTORY_COUNTDOWN_RELOAD = 45;
+    /**
+     * The pause request of the next trigger step while no plugin requested a change.
+     */
+    static final int NO_PAUSE_REQUEST = 0;
+    /**
+     * The pause request of the next trigger step after a plugin requested Pause Game ({@link #requestPauseGame()}).
+     */
+    static final int PAUSE_REQUEST = 1;
+    /**
+     * The pause request of the next trigger step after a plugin requested Unpause Game ({@link #requestUnpauseGame()}).
+     */
+    static final int UNPAUSE_REQUEST = 2;
+    /**
+     * The largest countdown, {@code 99} hours, {@code 59} minutes and {@code 59} seconds.
+     */
+    static final int COUNTDOWN_MAXIMUM = 359999;
     /**
      * The number of switches, one bit each.
      */
@@ -383,6 +402,60 @@ public final class TriggerContext implements org.fogofwarlabs.sc4j.engine.trigge
     }
 
     /**
+     * Checks a switch index.
+     *
+     * @param index the switch index
+     * @return the switch index
+     * @throws IllegalArgumentException if the index is not {@code 0} through {@code 255}
+     */
+    private static int requireSwitch(int index) {
+        if (index < 0 || index >= SWITCH_COUNT) {
+            throw Exceptions.newIllegalArgumentException("Switch {0} is not a switch 0 through 255.", index);
+        }
+
+        return index;
+    }
+
+    /**
+     * Checks a zero-based location index.
+     *
+     * @param location the location index
+     * @return the location index
+     * @throws IllegalArgumentException if the index is not {@code 0} through {@code 254}
+     */
+    private static int requireLocation(int location) {
+        if (location < 0 || location >= LOCATION_COUNT) {
+            throw Exceptions.newIllegalArgumentException("Location {0} is not a location 0 through 254.", location);
+        }
+
+        return location;
+    }
+
+    /**
+     * Checks that a player owns triggers, as the players the trigger walk visits.
+     *
+     * @param player the player index
+     * @throws IllegalArgumentException if the player is not {@code 0} through {@code 7}
+     */
+    private static void requireTriggerPlayer(int player) {
+        if (player < 0 || player >= PlayerTable.PLAYABLE_PLAYER_SLOTS) {
+            throw Exceptions.newIllegalArgumentException("Player {0} owns no triggers.", player);
+        }
+    }
+
+    /**
+     * Checks a number modifier.
+     *
+     * @param modifier the modifier
+     * @throws IllegalArgumentException if the modifier is not set, add or subtract
+     */
+    private static void requireNumericModifier(int modifier) {
+        if (!TriggerModifiers.isNumericModifier(modifier)) {
+            throw Exceptions.newIllegalArgumentException("Modifier {0} is not set, add or subtract.", modifier);
+        }
+    }
+
+    /**
      * Reads a byte of the trigger globals at an offset from the pending result bytes: the results, the waiting bytes, the wait DWORDs, the
      * initially active bytes, the current-record pointer, eight unused bytes and the fallback record ({@link #fallbackRecord}).
      *
@@ -509,6 +582,10 @@ public final class TriggerContext implements org.fogofwarlabs.sc4j.engine.trigge
      */
     final byte @NotNull [] fallbackRecord;
     int preparationFlag;
+    /**
+     * Whether the active-player walk of a trigger pass runs; outside the hash, as it is {@code false} between updates.
+     */
+    boolean passRunning;
     boolean evaluationStateInitialized;
     boolean evaluationControlsInitialized;
     int evaluationStopFlags;
@@ -521,6 +598,10 @@ public final class TriggerContext implements org.fogofwarlabs.sc4j.engine.trigge
     boolean currentRecordInitialized;
     int phaseGate;
     int triggersEnabledWhileGated;
+    /**
+     * The Pause Game or Unpause Game a plugin requested for the next trigger step; outside the hash, as the trigger step takes it.
+     */
+    int pauseRequest;
     boolean replayObservation;
     int instructionLimit;
 
@@ -632,6 +713,7 @@ public final class TriggerContext implements org.fogofwarlabs.sc4j.engine.trigge
 
         this.playerEvaluationFlags         = 0;
         this.preparationFlag               = 0;
+        this.passRunning                   = false;
         this.evaluationStateInitialized    = false;
         this.evaluationControlsInitialized = false;
         this.evaluationStopFlags           = 0;
@@ -644,21 +726,22 @@ public final class TriggerContext implements org.fogofwarlabs.sc4j.engine.trigge
         this.currentRecordInitialized      = false;
         this.phaseGate                     = 0;
         this.triggersEnabledWhileGated     = 0;
+        this.pauseRequest                  = NO_PAUSE_REQUEST;
         this.replayObservation             = false;
         this.instructionLimit              = 0;
 
-        this.world                  = null;
-        this.players                = null;
-        this.accounting             = null;
-        this.accountingSnapshot     = null;
-        this.relations              = null;
-        this.computerPhase          = null;
-        this.localPlayer            = 0;
-        this.initiallyActive        = new byte[PlayerTable.PLAYABLE_PLAYER_SLOTS];
-        this.decodedSessionState    = 0;
-        this.multiplayerSession     = 0;
-        this.resultFlags            = 0;
-        this.outcomeDisplay         = 0;
+        this.world               = null;
+        this.players             = null;
+        this.accounting          = null;
+        this.accountingSnapshot  = null;
+        this.relations           = null;
+        this.computerPhase       = null;
+        this.localPlayer         = 0;
+        this.initiallyActive     = new byte[PlayerTable.PLAYABLE_PLAYER_SLOTS];
+        this.decodedSessionState = 0;
+        this.multiplayerSession  = 0;
+        this.resultFlags         = 0;
+        this.outcomeDisplay      = 0;
 
         this.switches               = new int[SWITCH_COUNT / Integer.SIZE];
         this.missionObjectives      = new int[PlayerTable.PLAYABLE_PLAYER_SLOTS];
@@ -958,6 +1041,17 @@ public final class TriggerContext implements org.fogofwarlabs.sc4j.engine.trigge
     }
 
     /**
+     * Sets the world whose state the trigger routines of this context act on, as every trigger update sets it, with the replay observation of
+     * the world ({@link Game#isReplayPlayback()}).
+     *
+     * @param world the world
+     */
+    public void setWorld(@NotNull Game world) {
+        this.world             = world;
+        this.replayObservation = world.isReplayPlayback();
+    }
+
+    /**
      * @return the local player DWORD of trigger evaluation, whose triggers present text, sounds, transmissions and view
      * changes ({@code 8} when no player is local)
      */
@@ -1198,6 +1292,522 @@ public final class TriggerContext implements org.fogofwarlabs.sc4j.engine.trigge
     }
 
     /**
+     * Ends the game for a player as the Victory, Defeat and Draw actions do: Defeat and Draw fail against a pending victory or secured
+     * result; otherwise a human or computer player receives the pending result and the victory countdown reloads ({@code 1} while triggers run
+     * during the phase gate). The trigger step of the frame then applies the pending results ({@link ScrTriggerSystem}).
+     *
+     * @param player the trigger-owner index
+     * @param result {@link TriggerPlayerResults#VICTORY}, {@link TriggerPlayerResults#DEFEAT} or {@link TriggerPlayerResults#DRAW}
+     * @return {@code true} if the game ended for the player, {@code false} if a Defeat or Draw met a victory or secured result
+     * @throws IllegalArgumentException      if the result is not victory, defeat or draw
+     * @throws IllegalStateException         if players have not been bound
+     * @throws UnsupportedOperationException if the player's record or result byte is not represented
+     */
+    public boolean endGame(int player, int result) {
+        if (result != TriggerPlayerResults.VICTORY && result != TriggerPlayerResults.DEFEAT && result != TriggerPlayerResults.DRAW) {
+            throw Exceptions.newIllegalArgumentException("A game ends in victory, defeat or a draw, not in the result {0}.", result);
+        }
+
+        int pending = this.getPlayerResult(player);
+
+        if (result != TriggerPlayerResults.VICTORY && (pending == TriggerPlayerResults.VICTORY || pending == TriggerPlayerResults.SECURED)) {
+            return false;
+        }
+
+        int playerType = this.getPlayerType(player);
+
+        if (playerType == PlayerTypes.HUMAN || playerType == PlayerTypes.COMPUTER) {
+            this.setPlayerResult(player, result);
+        }
+
+        this.victoryCountdown = this.triggersEnabledWhileGated != 0 ? 1 : VICTORY_COUNTDOWN_RELOAD;
+
+        return true;
+    }
+
+    /**
+     * Returns the deaths of a unit type for a player as the Deaths condition reads them for one player: the loss counter, or in EUD mode
+     * ({@link #getExtendedDeathsMode()}) the DWORD of the EUD address space the player and unit type address (the loss counters for the unit
+     * groups).
+     *
+     * @param player   the player index, any value in EUD mode, below {@code 12} otherwise
+     * @param unitType the unit type or unit group (its low WORD is used)
+     * @return the deaths, {@code 0} for a unit operand above the unit groups outside EUD mode
+     * @throws UnsupportedOperationException if the evaluation controls are missing, or the EUD address space does not represent the DWORD
+     */
+    public int getDeaths(int player, int unitType) {
+        return ExtendedDeathsUtils.readPlayerDeaths(this, player, unitType & WORD_MASK, -1);
+    }
+
+    /**
+     * Sets the deaths of a unit type for a player as Set Deaths sets them for one player: outside EUD mode the loss counter of a player below
+     * {@code 8}, in EUD mode ({@link #getExtendedDeathsMode()}) the loss counter for the unit groups and else the DWORD of the EUD address space.
+     *
+     * @param player   the player index
+     * @param unitType the unit type or unit group (its low WORD is used)
+     * @param modifier {@link TriggerModifiers#SET_TO}, {@link TriggerModifiers#ADD} or {@link TriggerModifiers#SUBTRACT}
+     * @param amount   the amount; a subtraction clamps at zero
+     * @throws IllegalArgumentException      if the modifier is not set, add or subtract
+     * @throws UnsupportedOperationException if the evaluation controls are missing, or the EUD address space does not represent the DWORD
+     */
+    public void setDeaths(int player, int unitType, int modifier, int amount) {
+        requireNumericModifier(modifier);
+
+        ExtendedDeathsUtils.writePlayerDeaths(this, player, unitType & WORD_MASK, modifier, amount, -1, false);
+    }
+
+    /**
+     * Sets or clears a switch, as Set Switch does with the set and clear states.
+     *
+     * @param index the switch index from {@code 0} through {@code 255}
+     * @param set   {@code true} to set the switch, {@code false} to clear it
+     * @throws IllegalArgumentException if the index is not a switch
+     */
+    public void setSwitch(int index, boolean set) {
+        int bit = 1 << (requireSwitch(index) & SWITCH_BIT_MASK);
+
+        if (set) {
+            this.switches[index >>> SWITCH_DWORD_SHIFT] |= bit;
+        } else {
+            this.switches[index >>> SWITCH_DWORD_SHIFT] &= ~bit;
+        }
+    }
+
+    /**
+     * Toggles a switch, as Set Switch does with the toggle state.
+     *
+     * @param index the switch index from {@code 0} through {@code 255}
+     * @throws IllegalArgumentException if the index is not a switch
+     */
+    public void toggleSwitch(int index) {
+        this.switches[requireSwitch(index) >>> SWITCH_DWORD_SHIFT] ^= 1 << (index & SWITCH_BIT_MASK);
+    }
+
+    /**
+     * @return the countdown timer in seconds, which the Countdown Timer condition compares
+     */
+    public int getCountdownTimer() {
+        return this.countdownTimer;
+    }
+
+    /**
+     * Sets the countdown timer as Set Countdown Timer does: set, add or subtract (another modifier keeps the value), then the value is clamped to
+     * {@code 0} through {@code 359999} seconds.
+     *
+     * @param modifier {@link TriggerModifiers#SET_TO}, {@link TriggerModifiers#ADD} or {@link TriggerModifiers#SUBTRACT}
+     * @param seconds  the seconds
+     */
+    public void modifyCountdownTimer(int modifier, int seconds) {
+        int value = this.countdownTimer;
+
+        switch (modifier) {
+            case TriggerModifiers.SET_TO -> value = seconds;
+            case TriggerModifiers.ADD -> value += seconds;
+            case TriggerModifiers.SUBTRACT -> value -= seconds;
+            default -> {
+            }
+        }
+
+        this.countdownTimer = Math.min(Math.max(value, 0), COUNTDOWN_MAXIMUM);
+    }
+
+    /**
+     * @return {@code true} if Pause Timer paused the countdown timer, {@code false} otherwise
+     */
+    public boolean isCountdownPaused() {
+        return this.countdownPaused != 0;
+    }
+
+    /**
+     * Pauses or resumes the countdown timer, as Pause Timer and Unpause Timer do.
+     *
+     * @param paused {@code true} to pause the countdown, {@code false} to resume it
+     */
+    public void setCountdownPaused(boolean paused) {
+        this.countdownPaused = paused ? 1 : 0;
+    }
+
+    /**
+     * Sets the mission objectives of a player as Set Mission Objectives does: the string index is stored for players {@code 0} through
+     * {@code 11}; for a later player index it is written to the player's mission objectives DWORD of the game data through the EUD address
+     * space. The objectives show the map string, which may be a registered string ({@link MapStringSection#registerString}).
+     *
+     * @param player      the player index
+     * @param stringIndex the map string index
+     * @throws UnsupportedOperationException if the address space does not represent the DWORD of a player past {@code 11}
+     */
+    public void setMissionObjectives(int player, int stringIndex) {
+        if (Integer.compareUnsigned(player, PlayerTable.PLAYER_SLOTS) < 0) {
+            this.setMissionObjectivesStringIndex(player, stringIndex);
+        } else {
+            ExtendedDeathsUtils.writeGameDataDword(this, MISSION_OBJECTIVES_OFFSET + Integer.BYTES * player, stringIndex);
+        }
+    }
+
+    /**
+     * Shows a leaderboard as the leaderboard actions without a location do: the leaderboard calculation is scheduled for the next frame and the
+     * type, unit operand, goal and label are stored. The label is a map string, which may be a registered string
+     * ({@link MapStringSection#registerString}).
+     * <p>
+     * The type is {@link TriggerActionIds#LEADERBOARD_CONTROL}, {@link TriggerActionIds#LEADERBOARD_RESOURCES},
+     * {@link TriggerActionIds#LEADERBOARD_KILLS}, {@link TriggerActionIds#LEADERBOARD_POINTS} or one of their goal forms. The operand is the unit
+     * type of the control and kills forms, the resource type of the resources forms or the score type of the points forms.
+     *
+     * @param type        the leaderboard action type
+     * @param unitType    the unit, resource or score operand (its low WORD is used)
+     * @param goal        the goal of the goal forms
+     * @param stringIndex the map string index of the label
+     * @throws IllegalArgumentException if the type is not a leaderboard type without a location
+     */
+    public void showLeaderboard(int type, int unitType, int goal, int stringIndex) {
+        switch (type) {
+            case TriggerActionIds.LEADERBOARD_CONTROL, TriggerActionIds.LEADERBOARD_RESOURCES, TriggerActionIds.LEADERBOARD_KILLS,
+                 TriggerActionIds.LEADERBOARD_POINTS, TriggerActionIds.LEADERBOARD_GOAL_CONTROL, TriggerActionIds.LEADERBOARD_GOAL_RESOURCES,
+                 TriggerActionIds.LEADERBOARD_GOAL_KILLS, TriggerActionIds.LEADERBOARD_GOAL_POINTS -> {
+                this.storeLeaderboard(type, unitType, goal, stringIndex);
+            }
+            default -> throw Exceptions.newIllegalArgumentException("Leaderboard type {0} is not a leaderboard without a location.", type);
+        }
+    }
+
+    /**
+     * Shows a leaderboard of the units at a location, as Leaderboard Control At Location and its goal form do with a location.
+     *
+     * @param type        {@link TriggerActionIds#LEADERBOARD_CONTROL_AT_LOCATION} or {@link TriggerActionIds#LEADERBOARD_GOAL_CONTROL_AT_LOCATION}
+     * @param location    the zero-based location index
+     * @param unitType    the unit type (its low WORD is used)
+     * @param goal        the goal of the goal form
+     * @param stringIndex the map string index of the label
+     * @throws IllegalArgumentException if the type is not a leaderboard type with a location or the location is not a location index
+     */
+    public void showLeaderboardAt(int type, int location, int unitType, int goal, int stringIndex) {
+        if (type != TriggerActionIds.LEADERBOARD_CONTROL_AT_LOCATION && type != TriggerActionIds.LEADERBOARD_GOAL_CONTROL_AT_LOCATION) {
+            throw Exceptions.newIllegalArgumentException("Leaderboard type {0} is not a leaderboard at a location.", type);
+        }
+
+        this.leaderboardLocation = requireLocation(location);
+
+        this.storeLeaderboard(type, unitType, goal, stringIndex);
+    }
+
+    /**
+     * Shows the Greed leaderboard of the minerals and gas of every player, as Leaderboard Greed does.
+     *
+     * @param goal the resources goal
+     */
+    public void showGreedLeaderboard(int goal) {
+        this.periodicCountdown   = 1;
+        this.leaderboardType     = TriggerActionIds.LEADERBOARD_GREED;
+        this.leaderboardGoal     = goal;
+        this.leaderboardUnitType = TriggerScoreActionsUtils.RESOURCE_BOTH;
+    }
+
+    /**
+     * @return {@code true} if the leaderboards include computer players, {@code false} otherwise
+     */
+    public boolean areLeaderboardComputersIncluded() {
+        return this.leaderboardComputers != 0;
+    }
+
+    /**
+     * Includes or excludes computer players in the leaderboards, as Leaderboard Computer Players does with the set and clear states.
+     *
+     * @param included {@code true} to include computer players, {@code false} to exclude them
+     */
+    public void setLeaderboardComputersIncluded(boolean included) {
+        this.leaderboardComputers = included ? 1 : 0;
+    }
+
+    /**
+     * Pings the minimap of the local player at a position, as Minimap Ping does at the center of its location; for any other player the call
+     * does nothing.
+     *
+     * @param player    the player whose triggers ping
+     * @param positionX the horizontal map position in pixels
+     * @param positionY the vertical map position in pixels
+     */
+    public void pingMinimap(int player, int positionX, int positionY) {
+        if (player == this.localPlayer) {
+            this.events.add(TriggerEvents.MINIMAP_PING, positionX, positionY, 0);
+        }
+    }
+
+    /**
+     * Plays a sound file of the map archive for the local player, as Play WAV plays the sound its map string names: nothing while replaying or
+     * for any other player. The path is cut at {@link TriggerEvents#SOUND_PATH_LIMIT} bytes.
+     *
+     * @param player the player whose triggers play the sound
+     * @param path   the sound file path in the map archive, as the map strings hold it
+     */
+    public void playSound(int player, byte @NotNull [] path) {
+        this.playSound(player, 0, path);
+    }
+
+    /**
+     * Plays a sound file for the local player ({@link #playSound(int, byte[])}).
+     *
+     * @param player      the player whose triggers play the sound
+     * @param stringIndex the map string index that named the path, {@code 0} for a path without one
+     * @param path        the sound file path
+     */
+    void playSound(int player, int stringIndex, byte @NotNull [] path) {
+        if (this.replayObservation || player != this.localPlayer) {
+            return;
+        }
+
+        this.events.addSound(stringIndex, path.length > TriggerEvents.SOUND_PATH_LIMIT ? Arrays.copyOf(path, TriggerEvents.SOUND_PATH_LIMIT) : path);
+    }
+
+    /**
+     * Shows text for the local player as Display Text Message shows its map string ({@link MessageLines#writeTriggerText(byte[], boolean, int)}):
+     * when the subtitle option is on or the display is forced; for any other player the call does nothing.
+     *
+     * @param player the player whose triggers show the text
+     * @param text   the text
+     * @param forced whether the display is forced, as the always-display flag of the action
+     */
+    public void displayText(int player, @NotNull String text, boolean forced) {
+        if (player != this.localPlayer) {
+            return;
+        }
+
+        this.events.add(TriggerEvents.TEXT, 0, forced ? 1 : 0, 0);
+
+        if (this.world != null) {
+            this.world.getInterfaceLink().getMessageLines().writeTriggerText(text.getBytes(StandardCharsets.UTF_8), forced, 0);
+        }
+    }
+
+    /**
+     * Shows the talking portrait of a unit type for the local player, as Talking Portrait does: the portrait talks for the duration like the
+     * portrait of a Transmission, and its timer ends the local player's trigger wait as a Transmission's does ({@link #completeTransmission()});
+     * for any other player the call does nothing.
+     *
+     * @param player       the player whose triggers show the portrait
+     * @param unitType     the unit type whose portrait talks (its low WORD is used)
+     * @param milliseconds the talking duration in milliseconds
+     */
+    public void showTalkingPortrait(int player, int unitType, int milliseconds) {
+        if (player == this.localPlayer) {
+            this.events.add(TriggerEvents.TRANSMISSION, unitType & WORD_MASK, TriggerEvents.NO_POSITION, TriggerEvents.NO_POSITION, milliseconds);
+        }
+    }
+
+    /**
+     * Mutes or unmutes unit speech as Mute Unit Speech and Unmute Unit Speech do: the event reaches the consumer, which applies the local-player
+     * test, and the local interface follows at once when the player is the local player.
+     *
+     * @param player the player whose triggers mute or unmute
+     * @param muted  {@code true} to mute unit speech, {@code false} to unmute it
+     */
+    public void setUnitSpeechMuted(int player, boolean muted) {
+        this.events.add(muted ? TriggerEvents.UNIT_SPEECH_MUTE : TriggerEvents.UNIT_SPEECH_UNMUTE, player, 0, 0);
+
+        if (this.world != null && player == this.localPlayer) {
+            this.world.getInterfaceLink().getLocalInterface().setUnitSpeechMuted(muted ? 1 : 0);
+        }
+    }
+
+    /**
+     * Sets the alliance of a player toward a target as Set Alliance Status does for one selected player, then the player's units drop targets
+     * that became allied and, for the local player, the local relations and selection circles follow.
+     *
+     * @param player   the player whose alliance row changes, {@code 0} through {@code 7}
+     * @param target   the target player, {@code 0} through {@code 12}; the player itself is never changed
+     * @param relation {@link PlayerRelations#ENEMY}, {@link PlayerRelations#ALLIED} or {@link PlayerRelations#ALLIED_VICTORY}
+     * @throws IllegalArgumentException      if the player, the target or the relation is outside its values
+     * @throws UnsupportedOperationException if the context has no world
+     */
+    public void setAllianceStatus(int player, int target, int relation) {
+        requireTriggerPlayer(player);
+
+        if (target < 0 || target > PlayerTable.PLAYER_SLOTS) {
+            throw Exceptions.newIllegalArgumentException("Alliance target {0} is not a player 0 through 12.", target);
+        }
+
+        if (relation != PlayerRelations.ENEMY && relation != PlayerRelations.ALLIED && relation != PlayerRelations.ALLIED_VICTORY) {
+            throw Exceptions.newIllegalArgumentException("Alliance relation {0} is not enemy, allied or allied victory.", relation);
+        }
+
+        Game current = ScrTriggerSystem.requireWorld(this, "Set Alliance Status");
+
+        TriggerActionsUtils.setAllianceStatus(this, player, target, relation);
+
+        this.applyAllianceChange(current, player);
+    }
+
+    /**
+     * Applies the effects of changed alliances of a player: the player's units drop targets that became allied, and for the local player the
+     * local relation table and the selection circles follow.
+     *
+     * @param world  the world
+     * @param player the player whose alliance row changed
+     */
+    void applyAllianceChange(@NotNull Game world, int player) {
+        world.getTriggerUnitActions().clearAlliedOrderTargets(player);
+
+        if (player == this.localPlayer) {
+            world.getSelectionImages().updateLocalRelations();
+        }
+    }
+
+    /**
+     * Starts a computer script for a player as Run AI Script does: scripts outside the list human players may start run only for computer
+     * players, and the rescue script also for neutral players.
+     *
+     * @param player the player that runs the script
+     * @param script the four-character script identifier, its first character in the low byte
+     * @return {@code true} if the script started, {@code false} if the player may not run it
+     * @throws UnsupportedOperationException if the script runs without the shared computer script pool
+     */
+    public boolean runAiScript(int player, int script) {
+        return TriggerActionsUtils.runScript(this, player, script, null);
+    }
+
+    /**
+     * Starts a computer script for a player at a location as Run AI Script At Location does, with the owner gate of {@link #runAiScript}.
+     *
+     * @param player   the player that runs the script
+     * @param script   the four-character script identifier, its first character in the low byte
+     * @param location the zero-based location index whose bounds the script receives
+     * @return {@code true} if the script started, {@code false} if the player may not run it
+     * @throws IllegalArgumentException      if the location is not a location index
+     * @throws UnsupportedOperationException if the script runs without the shared computer script pool
+     */
+    public boolean runAiScriptAt(int player, int script, int location) {
+        TriggerLocation area = this.locations[requireLocation(location)];
+
+        return TriggerActionsUtils.runScript(this, player, script, new int[]{area.getLeft(), area.getTop(), area.getRight(), area.getBottom()});
+    }
+
+    /**
+     * Returns a score of a player as the Score and Highest Score conditions read it. The score types {@code 0} through {@code 7} are total,
+     * units, buildings, units and buildings, kills, razings, kills and razings and custom; a later type reads {@code 0}.
+     *
+     * @param player    the player index
+     * @param scoreType the score type
+     * @return the score
+     * @throws UnsupportedOperationException if the evaluation controls are missing
+     */
+    public int getScore(int player, int scoreType) {
+        return TriggerConditions.readPlayerCounter(this, player, scoreType, TriggerConditions.COUNTER_SCORE);
+    }
+
+    /**
+     * Sets a score of a player as Set Score does for one player: the total score splits the amount into quarters and the combined types into
+     * halves over their scores; a subtraction clamps at zero.
+     *
+     * @param player    the player, {@code 0} through {@code 7}
+     * @param scoreType the score type ({@link #getScore}); a later type changes nothing
+     * @param modifier  {@link TriggerModifiers#SET_TO}, {@link TriggerModifiers#ADD} or {@link TriggerModifiers#SUBTRACT}
+     * @param amount    the amount
+     * @throws IllegalArgumentException      if the player is not {@code 0} through {@code 7} or the modifier is not set, add or subtract
+     * @throws UnsupportedOperationException if the evaluation controls are missing
+     */
+    public void setScore(int player, int scoreType, int modifier, int amount) {
+        requireTriggerPlayer(player);
+        requireNumericModifier(modifier);
+
+        TriggerScoreActionsUtils.modifyScore(this.requireAccounting(), player, scoreType, modifier, amount);
+    }
+
+    /**
+     * Returns the kills of a unit type by a player as the Kill and Most Kills conditions read them.
+     *
+     * @param player   the player index
+     * @param unitType the unit type or unit group (its low WORD is used)
+     * @return the kills, {@code 0} for a unit operand above the unit groups
+     * @throws UnsupportedOperationException if the evaluation controls are missing
+     */
+    public int getKills(int player, int unitType) {
+        return TriggerConditions.readPlayerCounter(this, player, unitType & WORD_MASK, TriggerConditions.COUNTER_KILLS);
+    }
+
+    /**
+     * Counts the units of a unit type a player commands, as the Command and Command the Most conditions count them.
+     * <p>
+     * The counts come from the count cache. During the walk of a trigger pass the cache holds the pass's counts, as for the walk's own
+     * conditions; outside the walk the cache is reset first, so the count is the current one. Every reset copies all counts again, and the
+     * cache is part of the state hash.
+     *
+     * @param player    the player index; {@code 12} and above count {@code 0}
+     * @param unitType  the unit type or unit group (its low WORD is used); above the unit groups counts {@code 0}
+     * @param completed {@code true} to count completed units only (every comparison but At Most), {@code false} to count all units
+     * @return the unit count
+     * @throws UnsupportedOperationException if the evaluation controls are missing
+     */
+    public int countCommandedUnits(int player, int unitType, boolean completed) {
+        this.resetCountCacheOutsidePass();
+
+        TriggerConditions.prepareCommandCounts(this);
+
+        return TriggerConditions.countPlayerUnits(this, player, unitType, completed);
+    }
+
+    /**
+     * Counts the units of a unit type a player has at a location, as the Bring and Command the Most At conditions count them: the units of the
+     * location rectangle that pass its elevation filter and are neither hallucinations nor subunits; completed units also count their loaded
+     * units, hangar units and carried powerup.
+     * <p>
+     * The counts come from the count cache under the rule of {@link #countCommandedUnits}; the cache holds one location at a time, so a count at
+     * another location fills it again.
+     *
+     * @param player    the player index; {@code 12} and above count {@code 0}
+     * @param unitType  the unit type or unit group (its low WORD is used); above the unit groups counts {@code 0}
+     * @param location  the zero-based location index
+     * @param completed {@code true} to count completed units only (every comparison but At Most), {@code false} to count all units
+     * @return the unit count
+     * @throws IllegalArgumentException      if the location is not a location index
+     * @throws UnsupportedOperationException if the context has no world or the world has no unit spatial index
+     */
+    public int countUnitsAt(int player, int unitType, int location, boolean completed) {
+        requireLocation(location);
+
+        this.resetCountCacheOutsidePass();
+
+        TriggerConditions.prepareLocationCounts(this, location);
+
+        return TriggerConditions.countPlayerUnits(this, player, unitType, completed);
+    }
+
+    /**
+     * Counts the opponents of a player as the Opponents condition counts them for one player: none for a player from {@code 8} and for
+     * rescuable and neutral players; otherwise every active player that is not rescuable or neutral and lacks mutual allied victory with the
+     * player or one of its mutual allies.
+     *
+     * @param player the player index
+     * @return the number of opponents
+     */
+    public int countOpponents(int player) {
+        return TriggerConditions.countOpponents(this, player);
+    }
+
+    /**
+     * Resets the count cache mode outside the walk of a trigger pass, so the next count fills the cache again.
+     */
+    private void resetCountCacheOutsidePass() {
+        if (!this.passRunning) {
+            this.preparationFlag = 0;
+        }
+    }
+
+    /**
+     * Stores the shown leaderboard and schedules its calculation for the next frame.
+     *
+     * @param type        the leaderboard action type
+     * @param unitType    the unit, resource or score operand
+     * @param goal        the goal
+     * @param stringIndex the map string index of the label
+     */
+    void storeLeaderboard(int type, int unitType, int goal, int stringIndex) {
+        this.periodicCountdown   = 1;
+        this.leaderboardType     = type;
+        this.leaderboardUnitType = unitType & WORD_MASK;
+        this.leaderboardGoal     = goal;
+        this.leaderboardString   = stringIndex;
+    }
+
+    /**
      * @param player the trigger-owner index
      * @return the actual number of retained executable records
      * @throws IllegalStateException if players have not been bound
@@ -1396,6 +2006,25 @@ public final class TriggerContext implements org.fogofwarlabs.sc4j.engine.trigge
         this.phaseGate = 0;
 
         return true;
+    }
+
+    /**
+     * Requests Pause Game for the next trigger step, as a plugin does without a trigger record. The step runs the action's rule before its
+     * triggers, after it advanced its clocks with the frame's paused state ({@link ScrTriggerSystem#update}): nothing in a multiplayer session or
+     * while Pause Game already paused the game; otherwise the game is paused, the triggers keep running and the game pause event is raised, until
+     * Unpause Game. A request replaces an earlier one of the same step; a step that the Pause command keeps from running drops it.
+     */
+    public void requestPauseGame() {
+        this.pauseRequest = PAUSE_REQUEST;
+    }
+
+    /**
+     * Requests Unpause Game for the next trigger step, as a plugin does without a trigger record. The step runs the action's rule before its
+     * triggers ({@link ScrTriggerSystem#update}): nothing in a multiplayer session or while Pause Game did not pause the game; otherwise the trigger
+     * pause and the game-paused DWORD clear and the game pause event is raised. A request replaces an earlier one of the same step.
+     */
+    public void requestUnpauseGame() {
+        this.pauseRequest = UNPAUSE_REQUEST;
     }
 
     /**
@@ -1926,7 +2555,8 @@ public final class TriggerContext implements org.fogofwarlabs.sc4j.engine.trigge
     }
 
     /**
-     * Adds the retained scheduling, evaluation and map trigger state to a diagnostic hash.
+     * Adds the retained scheduling, evaluation and map trigger state and the regions of the memory sources
+     * ({@link ClassicAddressSpace#computeProvidedStateHash}) to a diagnostic hash.
      *
      * @param hash the preceding diagnostic hash
      * @return the hash including retained scheduling effects
@@ -2038,6 +2668,11 @@ public final class TriggerContext implements org.fogofwarlabs.sc4j.engine.trigge
 
         for (TriggerLocation location : this.locations) {
             hash = HASH_MULTIPLIER * hash + location.getElevationFlags();
+        }
+
+        // The regions of the memory sources; nothing without them.
+        if (this.extendedDeathsOperations instanceof ClassicAddressSpace space) {
+            hash = space.computeProvidedStateHash(hash);
         }
 
         return hash;

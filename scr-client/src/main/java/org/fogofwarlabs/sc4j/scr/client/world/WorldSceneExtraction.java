@@ -1,9 +1,12 @@
 package org.fogofwarlabs.sc4j.scr.client.world;
 
+import org.fogofwarlabs.sc4j.engine.resource.graphics.TextureSheet;
 import org.fogofwarlabs.sc4j.scr.client.ui.input.PlacementPreview;
 import org.fogofwarlabs.sc4j.scr.client.ui.input.WorldInterface;
 import org.fogofwarlabs.sc4j.scr.content.ScrUnitIds;
 import org.fogofwarlabs.sc4j.scr.data.format.terrain.TerrainTileset;
+import org.fogofwarlabs.sc4j.scr.data.resource.ScrImageAnimation;
+import org.fogofwarlabs.sc4j.scr.data.resource.ScrImageSheet;
 import org.fogofwarlabs.sc4j.scr.data.type.ScrImageTypeView;
 import org.fogofwarlabs.sc4j.scr.data.type.ScrSpriteTypeView;
 import org.fogofwarlabs.sc4j.scr.data.type.ScrUnitTypeView;
@@ -206,6 +209,7 @@ public final class WorldSceneExtraction {
             this.collectCloakViews(gameView, sprites, vision.getViewMask());
 
             ScrImageTypeView imageTable = gameView.requireGameData().getImageTypes();
+            boolean plugins = gameView.hasPlugins();
 
             // Collects the rows from the camera's top tile row and the view height in world pixels.
             int cameraRow = Math.floorDiv((int) Math.floor(renderer.getCameraY()), TerrainTileset.TILE_SIZE);
@@ -239,14 +243,25 @@ public final class WorldSceneExtraction {
                     }
 
                     try {
-                        int modifier = getViewModifier(image.getModifier(), cloakView, burrowed);
+                        int drawFunction = plugins ? gameView.findImageDrawFunction(image) : -1;
+                        int modifier = getViewModifier(drawFunction >= 0 ? drawFunction : image.getModifier(), cloakView, burrowed);
+                        int pluginFrame = plugins ? gameView.findImageFrame(image) : -1;
+                        int frame = pluginFrame >= 0 ? pluginFrame : image.getDrawnFrameIndex();
 
                         if (cloakView == CLOAK_VIEW_HIDDEN && burrowed && imageTable.getDrawIfCloaked(image.getImageTypeId()) == 0) {
                             continue;
                         }
 
+                        ScrImageSheet sheet = plugins ? gameView.findImageSheet(image) : null;
+                        ScrImageAnimation animation = plugins && scene.getAssetScale() > 0 ? gameView.findImageAnimation(image) : null;
+                        TextureSheet animationSheet = animation != null ? animation.findSheet(scene.getAssetScale()) : null;
+                        int pluginImageType = plugins && sheet == null && animationSheet == null ? gameView.findImageTypeId(image) : -1;
+                        int imageType = pluginImageType >= 0 ? pluginImageType : image.getImageTypeId();
+
                         // Skips images whose frame has no drawable rectangle.
-                        if (!renderer.isDrawnFrame(image.getImageTypeId(), image.getDrawnFrameIndex())) {
+                        if (animationSheet != null ? frame >= animationSheet.getFrameCount()
+                                                   : sheet != null ? frame >= sheet.getFrameCount()
+                                                                   : !renderer.isDrawnFrame(imageType, frame)) {
                             continue;
                         }
 
@@ -254,7 +269,7 @@ public final class WorldSceneExtraction {
                         int imageY = sprite.getY() + image.getOffsetY();
 
                         // Drops the engine-glow vertical offset for the remastered backend.
-                        if (image.getImageTypeId() == ARBITER_ENGINE_GLOW_IMAGE && scene.isRemastered() &&
+                        if (imageType == ARBITER_ENGINE_GLOW_IMAGE && scene.isRemastered() &&
                             (image.getOffsetY() == ARBITER_FIRST_GLOW_OFFSET || image.getOffsetY() == ARBITER_LAST_GLOW_OFFSET)) {
                             imageY -= image.getOffsetY();
                         }
@@ -263,15 +278,38 @@ public final class WorldSceneExtraction {
 
                         // The frozen canvas center comes from the classic frame rectangle; both backends center their canvas there.
                         if ((image.getFlags() & SpriteImage.FLAG_Y_FROZEN) != 0) {
-                            imageY = renderer.getFrozenCenterY(image.getImageTypeId(), image.getDrawnFrameIndex(), image.getFrozenMapY());
+                            imageY = renderer.getFrozenCenterY(imageType, frame, image.getFrozenMapY());
                         }
 
-                        if (modifier == SceneRenderer.DRAW_FUNCTION_UPDATE_RECTANGLE) {
-                            scene.drawUpdateRectangle(image.getImageTypeId(), image.getDrawnFrameIndex(), imageX, imageY, flipped);
+                        if (animationSheet != null) {
+                            // A plugin's anim replaces the installed anim in every draw function.
+                            scene.drawImageAnimation(animationSheet,
+                                                     sheet,
+                                                     imageType,
+                                                     frame,
+                                                     modifier,
+                                                     image.getModifierData1(),
+                                                     playerColor,
+                                                     imageX,
+                                                     imageY,
+                                                     flipped);
+                        } else if (sheet != null) {
+                            // A plugin's sheet replaces the installed graphics in every draw function.
+                            scene.drawImageSheet(sheet,
+                                                 imageType,
+                                                 frame,
+                                                 modifier,
+                                                 image.getModifierData1(),
+                                                 playerColor,
+                                                 imageX,
+                                                 imageY,
+                                                 flipped);
+                        } else if (modifier == SceneRenderer.DRAW_FUNCTION_UPDATE_RECTANGLE) {
+                            scene.drawUpdateRectangle(imageType, frame, imageX, imageY, flipped);
                         } else if (modifier == SpriteImage.MODIFIER_REMAPPING) {
                             // Uses the remapping index retained by the image.
-                            scene.drawRemappedImage(image.getImageTypeId(),
-                                                    image.getDrawnFrameIndex(),
+                            scene.drawRemappedImage(imageType,
+                                                    frame,
                                                     image.getColorRemappingIndex(),
                                                     playerColor,
                                                     imageX,
@@ -284,10 +322,10 @@ public final class WorldSceneExtraction {
                                                    ? primary.getModifierData1()
                                                    : -1;
 
-                            scene.drawShadowImage(image.getImageTypeId(), image.getDrawnFrameIndex(), primaryWarpFrame, imageX, imageY, flipped);
+                            scene.drawShadowImage(imageType, frame, primaryWarpFrame, imageX, imageY, flipped);
                         } else {
-                            scene.drawImage(image.getImageTypeId(),
-                                            image.getDrawnFrameIndex(),
+                            scene.drawImage(imageType,
+                                            frame,
                                             modifier,
                                             image.getModifierData1(),
                                             playerColor,
@@ -382,12 +420,14 @@ public final class WorldSceneExtraction {
                     this.foliageResources = Arrays.copyOf(this.foliageResources, this.foliageResources.length * FOLIAGE_CAPACITY_GROWTH_FACTOR);
                 }
 
-                this.foliageResources[count * FOLIAGE_RESOURCE_FIELDS + FOLIAGE_RESOURCE_X]      =
-                        unit.getPositionX() / TerrainTileset.TILE_SIZE - columns / PLACEMENT_CENTER_DIVISOR;
-                this.foliageResources[count * FOLIAGE_RESOURCE_FIELDS + FOLIAGE_RESOURCE_Y]      =
-                        unit.getPositionY() / TerrainTileset.TILE_SIZE - rows / PLACEMENT_CENTER_DIVISOR;
-                this.foliageResources[count * FOLIAGE_RESOURCE_FIELDS + FOLIAGE_RESOURCE_WIDTH]  = columns;
-                this.foliageResources[count * FOLIAGE_RESOURCE_FIELDS + FOLIAGE_RESOURCE_HEIGHT] = rows;
+                int resourceOffset = count * FOLIAGE_RESOURCE_FIELDS;
+                int tileX = unit.getPositionX() / TerrainTileset.TILE_SIZE - columns / PLACEMENT_CENTER_DIVISOR;
+                int tileY = unit.getPositionY() / TerrainTileset.TILE_SIZE - rows / PLACEMENT_CENTER_DIVISOR;
+
+                this.foliageResources[resourceOffset + FOLIAGE_RESOURCE_X]      = tileX;
+                this.foliageResources[resourceOffset + FOLIAGE_RESOURCE_Y]      = tileY;
+                this.foliageResources[resourceOffset + FOLIAGE_RESOURCE_WIDTH]  = columns;
+                this.foliageResources[resourceOffset + FOLIAGE_RESOURCE_HEIGHT] = rows;
 
                 count++;
             }

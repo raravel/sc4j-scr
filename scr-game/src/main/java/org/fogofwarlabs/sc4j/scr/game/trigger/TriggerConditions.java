@@ -337,7 +337,7 @@ public final class TriggerConditions {
         prepareCommandCounts(context);
 
         boolean completed = condition.getComparison() != TriggerModifiers.AT_MOST;
-        int count = countCommandUnits(context, condition.getSelector(), condition.getUnitType(), completed);
+        int count = countCommandUnits(context, condition.getSelector(), condition.getUnitType(), -1, completed);
 
         return compareCount(condition.getComparison(), count, condition.getAmount());
     }
@@ -353,10 +353,12 @@ public final class TriggerConditions {
             return false;
         }
 
-        prepareLocationCounts(context, (locationIndex - 1) & BYTE_MASK);
+        int location = (locationIndex - 1) & BYTE_MASK;
+
+        prepareLocationCounts(context, location);
 
         boolean completed = condition.getComparison() != TriggerModifiers.AT_MOST;
-        int count = countCommandUnits(context, condition.getSelector(), condition.getUnitType(), completed);
+        int count = countCommandUnits(context, condition.getSelector(), condition.getUnitType(), location, completed);
 
         return compareCount(condition.getComparison(), count, condition.getAmount());
     }
@@ -388,14 +390,14 @@ public final class TriggerConditions {
      * Tests Countdown Timer against the countdown.
      */
     private static boolean testCountdownTimer(@NotNull TriggerContext context, @NotNull TriggerConditionOperands condition) {
-        return compareCount(condition.getComparison(), context.countdownTimer, condition.getAmount());
+        return compareCount(condition.getComparison(), context.getCountdownTimer(), condition.getAmount());
     }
 
     /**
      * Tests Elapsed Time against the elapsed game seconds.
      */
     private static boolean testElapsedTime(@NotNull TriggerContext context, @NotNull TriggerConditionOperands condition) {
-        return compareCount(condition.getComparison(), context.elapsedClockTicks, condition.getAmount());
+        return compareCount(condition.getComparison(), context.getElapsedClockTicks(), condition.getAmount());
     }
 
     /**
@@ -592,23 +594,45 @@ public final class TriggerConditions {
     }
 
     /**
-     * Counts units for a Command condition through the player selector.
+     * Counts units for a Command or Bring condition through the player selector, each player as {@link TriggerContext#countCommandedUnits} or
+     * {@link TriggerContext#countUnitsAt} counts it.
+     *
+     * @param context   the trigger context
+     * @param selector  the player selector
+     * @param unitType  the unit operand
+     * @param location  the location index of Bring, {@code -1} for Command
+     * @param completed whether only completed units count
+     * @return the unit count
      */
-    private static int countCommandUnits(@NotNull TriggerContext context, int selector, int unitType, boolean completed) {
+    private static int countCommandUnits(@NotNull TriggerContext context, int selector, int unitType, int location, boolean completed) {
         int player = TriggerPlayersUtils.resolveSinglePlayer(context, selector);
 
         if (player >= 0) {
-            return countPlayerUnits(context, player, unitType, completed);
+            return countSelectedPlayerUnits(context, player, unitType, location, completed);
         }
 
         int count = 0;
 
         for (player = TriggerPlayersUtils.getNextSelectedPlayer(context, selector, TriggerContext.WALK_START); player < PlayerTable.PLAYER_SLOTS;
              player = TriggerPlayersUtils.getNextSelectedPlayer(context, selector, player)) {
-            count += countPlayerUnits(context, player, unitType, completed);
+            count += countSelectedPlayerUnits(context, player, unitType, location, completed);
         }
 
         return count;
+    }
+
+    /**
+     * Counts one player's units for a Command or Bring condition.
+     *
+     * @param context   the trigger context
+     * @param player    the player
+     * @param unitType  the unit operand
+     * @param location  the location index of Bring, {@code -1} for Command
+     * @param completed whether only completed units count
+     * @return the unit count
+     */
+    private static int countSelectedPlayerUnits(@NotNull TriggerContext context, int player, int unitType, int location, boolean completed) {
+        return location < 0 ? context.countCommandedUnits(player, unitType, completed) : context.countUnitsAt(player, unitType, location, completed);
     }
 
     /**
@@ -693,13 +717,14 @@ public final class TriggerConditions {
     }
 
     /**
-     * Returns one player's resources of a resource type: minerals, gas or both, other types zero.
+     * Returns one player's resources of a resource type as the Accumulate and Most Resources conditions read them: minerals, gas or both, other
+     * types zero.
      *
      * @param player       the player
      * @param resourceType the resource type operand
      * @return the resources
      */
-    static int readResources(@NotNull Player player, int resourceType) {
+    public static int readResources(@NotNull Player player, int resourceType) {
         return resourceType == TriggerScoreActionsUtils.RESOURCE_MINERALS
                ? player.getMinerals()
                : resourceType == TriggerScoreActionsUtils.RESOURCE_GAS

@@ -114,10 +114,10 @@ public final class GraphicsSettings {
     private int windowMode;
 
     /**
-     * Creates a {@link GraphicsSettings} instance with vertical synchronization on and the frame rate limit disabled.
+     * Creates a {@link GraphicsSettings} instance with vertical synchronization off and the frame rate limit disabled.
      */
     public GraphicsSettings() {
-        this.vsync                 = Vsync.ON;
+        this.vsync                 = Vsync.OFF;
         this.frameRateLimitEnabled = false;
         this.frameRateLimit        = DEFAULT_FRAME_RATE_LIMIT;
 

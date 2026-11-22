@@ -42,6 +42,7 @@ public final class GrpFile {
     private static final int PACKET_LITERAL = 0x00;
     private static final int TRANSPARENT_COUNT_MASK = 0x7F;
     private static final int COUNT_MASK = 0x3F;
+    private static final long DWORD_MASK = 0xFFFFFFFFL;
 
     /**
      * Represents a decoded GRP frame on its full canvas.
@@ -153,6 +154,19 @@ public final class GrpFile {
      * @throws IOException if the GRP header or frame table is malformed
      */
     public static @NotNull GrpFile parse(byte @NotNull [] data) throws IOException {
+        return parse(data, 0);
+    }
+
+    /**
+     * Creates a {@link GrpFile} instance from GRP bytes whose frame data offsets count from a base: {@code 0} for a file, the address of the
+     * first byte for a GRP in memory, whose offsets are absolute addresses.
+     *
+     * @param data the GRP bytes
+     * @param base the unsigned base the frame data offsets count from
+     * @return the created {@link GrpFile} instance
+     * @throws IOException if the GRP header or frame table is malformed
+     */
+    public static @NotNull GrpFile parse(byte @NotNull [] data, int base) throws IOException {
         if (data.length < HEADER_SIZE) {
             throw Exceptions.newIOException("The GRP file is too small: {0}", data.length);
         }
@@ -167,11 +181,12 @@ public final class GrpFile {
             throw Exceptions.newIOException("The GRP frame table exceeds the file size.");
         }
 
-        return new GrpFile(data, frameCount, width, height, frameTableOffset);
+        return new GrpFile(data, base, frameCount, width, height, frameTableOffset);
     }
 
 
     private final byte @NotNull [] data;
+    private final long base;
     private final int frameCount;
 
     private final int width;
@@ -183,13 +198,15 @@ public final class GrpFile {
      * Creates a {@link GrpFile} instance.
      *
      * @param data             the GRP file content
+     * @param base             the unsigned base the frame data offsets count from
      * @param frameCount       the frame count
      * @param width            the canvas width
      * @param height           the canvas height
      * @param frameTableOffset the frame table offset
      */
-    private GrpFile(byte @NotNull [] data, int frameCount, int width, int height, int frameTableOffset) {
+    private GrpFile(byte @NotNull [] data, int base, int frameCount, int width, int height, int frameTableOffset) {
         this.data       = data;
+        this.base       = base & DWORD_MASK;
         this.frameCount = frameCount;
 
         this.width  = width;
@@ -253,13 +270,13 @@ public final class GrpFile {
 
     /**
      * @param frameIndex the frame index
-     * @return the file offset of the frame's line table; frames that repeat another frame share it
+     * @return the offset of the frame's line table in the GRP bytes; frames that repeat another frame share it
      * @throws IndexOutOfBoundsException if the frame index is outside the file
      */
     public int getFrameDataOffset(int frameIndex) {
         this.checkFrameIndex(frameIndex);
 
-        return LittleEndianUtils.readInt32(this.data, this.frameTableOffset + frameIndex * FRAME_HEADER_SIZE + FRAME_DATA_OFFSET);
+        return (int) this.readDataOffset(this.frameTableOffset + frameIndex * FRAME_HEADER_SIZE);
     }
 
     /**
@@ -277,8 +294,7 @@ public final class GrpFile {
             return false;
         }
 
-        int frameOffset = this.frameTableOffset + frameIndex * FRAME_HEADER_SIZE;
-        long dataOffset = LittleEndianUtils.readUnsigned32(this.data, frameOffset + FRAME_DATA_OFFSET);
+        long dataOffset = this.readDataOffset(this.frameTableOffset + frameIndex * FRAME_HEADER_SIZE);
         long lineOffset = dataOffset + positionY * (long) LINE_OFFSET_SIZE;
 
         if (lineOffset < 0 || lineOffset + LINE_OFFSET_SIZE > this.data.length) {
@@ -329,9 +345,9 @@ public final class GrpFile {
         int yOffset = this.data[headerOffset + FRAME_Y_OFFSET] & BYTE_MASK;
         int frameWidth = this.data[headerOffset + FRAME_WIDTH_OFFSET] & BYTE_MASK;
         int frameHeight = this.data[headerOffset + FRAME_HEIGHT_OFFSET] & BYTE_MASK;
-        long imageDataOffsetLong = LittleEndianUtils.readUnsigned32(this.data, headerOffset + FRAME_DATA_OFFSET);
+        long imageDataOffsetLong = this.readDataOffset(headerOffset);
 
-        if (imageDataOffsetLong > this.data.length) {
+        if (imageDataOffsetLong < 0 || imageDataOffsetLong > this.data.length) {
             throw Exceptions.newIOException("The GRP image data offset is out of bounds for frame {0}", frameIndex);
         }
 
@@ -439,6 +455,16 @@ public final class GrpFile {
         }
 
         return Collections.unmodifiableList(frames);
+    }
+
+    /**
+     * Reads the line table offset of a frame header relative to the GRP bytes.
+     *
+     * @param headerOffset the offset of the frame header
+     * @return the offset in the GRP bytes, negative when the stored offset lies before the base
+     */
+    private long readDataOffset(int headerOffset) {
+        return LittleEndianUtils.readUnsigned32(this.data, headerOffset + FRAME_DATA_OFFSET) - this.base;
     }
 
     private int readFrameByte(int frameIndex, int fieldOffset) {

@@ -424,8 +424,8 @@ public final class GameListScreen extends GlueScreen {
     private void followJoin(@NotNull LanClient client) {
         GlueContext glueContext = this.getContext();
 
+        // The join stays pending while the screen slides away, so that no second join starts.
         if (isLobbyReady(client)) {
-            this.joining = false;
             this.leave(() -> glueContext.getNavigator().show(GlueNavigator.Destination.GAME_LOBBY));
         } else if (client.getState() == LanClient.State.FAILED) {
             this.joining = false;

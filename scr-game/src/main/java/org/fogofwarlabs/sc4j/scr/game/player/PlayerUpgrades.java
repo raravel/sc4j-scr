@@ -268,6 +268,26 @@ public final class PlayerUpgrades implements GameContextBytes {
     }
 
     /**
+     * Sets a maximum upgrade level as an EUD write of the game-data block stores it, without an expansion gate. A player outside the player slots or
+     * an upgrade WORD outside the upgrade table writes the game-context byte the maximum level layout addresses, in this storage or through the
+     * game-context view.
+     *
+     * @param playerIndex       the original player DWORD, without truncation
+     * @param upgradeIdentifier the original upgrade WORD
+     * @param level             the new maximum level, truncated to a byte without clamping
+     * @throws UnsupportedOperationException if the addressed byte lies past the game context, or outside the upgrade tables without a game context
+     */
+    public void setMaximumLevel(int playerIndex, int upgradeIdentifier, int level) {
+        upgradeIdentifier &= WORD_MASK;
+
+        if (isTableEntry(playerIndex, upgradeIdentifier)) {
+            this.progress.setMaximumUpgradeLevel(playerIndex, upgradeIdentifier, level & BYTE_MASK);
+        } else {
+            this.contextAccess.writeByte(getTableOffset(CLASSIC_MAXIMUM_OFFSET, EXPANSION_MAXIMUM_OFFSET, playerIndex, upgradeIdentifier), level);
+        }
+    }
+
+    /**
      * Tells whether a building of the player is researching the upgrade. A player outside the player slots or an upgrade BYTE outside the upgrade
      * table tests the bit of the game-context byte the upgrading bit layout addresses.
      *

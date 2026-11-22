@@ -11,7 +11,7 @@ import java.util.*;
 /**
  * Verifies that both sides of a session answer the recorded LAN provider packets ({@link ProviderTestResources#readLobbyJoin})
  * with the packets of the native host and joiner, and that two in-memory sessions consume a turn only at the complete barrier,
- * request missing turns and report departures at their turn.
+ * request missing turns, count the turn resend requests on both sides and report departures at their turn.
  */
 final class ProviderSessionTest {
     private static final int CLOCK_BASE = 10_000_000;
@@ -418,6 +418,30 @@ final class ProviderSessionTest {
 
         Assertions.assertTrue(joinerBatch.isComplete());
         Assertions.assertArrayEquals(new byte[]{5}, joinerBatch.getTurn(0));
+    }
+
+    @Test
+    void overdue_turn_request_is_counted_for_the_player_on_both_sides() {
+        Network network = new Network().joinClients();
+        ProviderPeer joinerOnHost = network.host.getPeers().getFirst();
+        ProviderPeer hostOnJoiner = network.joiner.getPeers().getFirst();
+
+        joinerOnHost.takeTurnResendRequestsSent();
+        hostOnJoiner.takeTurnResendRequestsReceived();
+
+        network.host.sendTurn(new byte[]{5});
+        network.step();
+
+        Assertions.assertFalse(network.host.receiveTurns(0, PLAYER_COUNT, 0).isComplete());
+        Assertions.assertFalse(network.host.receiveTurns(0, PLAYER_COUNT, 0).isComplete());
+
+        network.step();
+
+        Assertions.assertEquals(1, joinerOnHost.takeTurnResendRequestsSent(), "at most one request per request interval");
+        Assertions.assertEquals(0, joinerOnHost.takeTurnResendRequestsSent());
+        Assertions.assertEquals(0, joinerOnHost.takeTurnResendRequestsReceived());
+        Assertions.assertEquals(1, hostOnJoiner.takeTurnResendRequestsReceived());
+        Assertions.assertEquals(0, hostOnJoiner.takeTurnResendRequestsSent());
     }
 
     @Test

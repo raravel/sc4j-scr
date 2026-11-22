@@ -25,6 +25,7 @@ final class RecordingDialogPainter implements DialogPainter {
     private static final int FONT_SLOT = 0;
 
     private final @NotNull List<String> texts;
+    private final @NotNull List<Float> widths;
     private final @NotNull List<String> codeTexts;
     private final @NotNull List<Integer> codes;
     private final @NotNull List<Integer> colors;
@@ -34,6 +35,7 @@ final class RecordingDialogPainter implements DialogPainter {
      */
     RecordingDialogPainter() {
         this.texts     = new ArrayList<>();
+        this.widths    = new ArrayList<>();
         this.codeTexts = new ArrayList<>();
         this.codes     = new ArrayList<>();
         this.colors    = new ArrayList<>();
@@ -44,6 +46,13 @@ final class RecordingDialogPainter implements DialogPainter {
      */
     @NotNull List<String> getTexts() {
         return this.texts;
+    }
+
+    /**
+     * @return the rectangle widths of both text draws, in drawing order
+     */
+    @NotNull List<Float> getWidths() {
+        return this.widths;
     }
 
     /**
@@ -207,6 +216,7 @@ final class RecordingDialogPainter implements DialogPainter {
     @Override
     public void drawCodeText(int slot, @NotNull String text, float left, float top, float width, float height, int format, int code) {
         this.texts.add(text);
+        this.widths.add(width);
         this.codeTexts.add(text);
         this.codes.add(code);
     }
@@ -229,6 +239,7 @@ final class RecordingDialogPainter implements DialogPainter {
     @Override
     public void drawColorText(int slot, @NotNull String text, float left, float top, float width, float height, int format, int color) {
         this.texts.add(text);
+        this.widths.add(width);
         this.colors.add(color);
     }
 

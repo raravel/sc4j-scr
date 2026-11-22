@@ -269,6 +269,29 @@ final class SpritePoolTest {
     }
 
     @Test
+    void allocate_should_stamp_each_allocation_with_the_next_generation() {
+        SpritePool pool = new SpritePool(SINGLE_SLOT_CAPACITY);
+
+        Assertions.assertEquals(0, pool.getGeneration());
+
+        Sprite sprite = pool.allocate();
+
+        Assertions.assertNotNull(sprite);
+        Assertions.assertEquals(1, pool.getGeneration(sprite.getPoolIndex()));
+
+        pool.recycleFailedInitialization(sprite);
+
+        Assertions.assertEquals(1, pool.getGeneration(sprite.getPoolIndex()), "a freed slot keeps its generation");
+        Assertions.assertSame(sprite, pool.allocate());
+        Assertions.assertEquals(2, pool.getGeneration(sprite.getPoolIndex()));
+        Assertions.assertEquals(2, pool.getGeneration());
+
+        pool.clear();
+
+        Assertions.assertEquals(0, pool.getGeneration(sprite.getPoolIndex()));
+    }
+
+    @Test
     void row_attachment_keeps_the_row_head_and_storage_registration() {
         SpritePool pool = new SpritePool(ROW_POOL_CAPACITY);
         Sprite first = pool.allocate();

@@ -4,9 +4,9 @@ import org.fogofwarlabs.sc4j.base.binary.LittleEndianUtils;
 import org.jetbrains.annotations.NotNull;
 
 /**
- * Provides the MPQ hash and decryption primitives.
+ * Provides the MPQ hash, encryption and decryption primitives.
  * <p>
- * The hash function and the block decryption both rely on the {@code 0x500}-entry crypt table that is generated from a fixed seed sequence.
+ * The hash function and the block encryption both rely on the {@code 0x500}-entry crypt table that is generated from a fixed seed sequence.
  */
 public final class MpqCryptoUtils {
     private static final int CRYPT_TABLE_SIZE = 0x500;
@@ -202,6 +202,28 @@ public final class MpqCryptoUtils {
 
             key   = ((~key << KEY_SHIFT_LEFT) + KEY_INCREMENT) | (key >>> KEY_SHIFT_RIGHT);
             seed2 = decryptedValue + seed2 + (seed2 << SEED_2_SHIFT) + SEED_2_INCREMENT;
+        }
+    }
+
+    /**
+     * Encrypts the given little-endian data in place; {@link #decrypt} with the same key restores it.
+     *
+     * @param data the little-endian {@code 32}-bit words to encrypt
+     * @param key  the encryption key
+     */
+    public static void encrypt(int @NotNull [] data, int key) {
+        int seed2 = HASH_SEED_2;
+
+        for (int dataIndex = 0; dataIndex < data.length; dataIndex++) {
+            seed2 += CRYPT_TABLE[KEY2_MIX_OFFSET + (key & BYTE_MASK)];
+
+            // The key update uses the plain value.
+            int plainValue = data[dataIndex];
+
+            data[dataIndex] = plainValue ^ (key + seed2);
+
+            key   = ((~key << KEY_SHIFT_LEFT) + KEY_INCREMENT) | (key >>> KEY_SHIFT_RIGHT);
+            seed2 = plainValue + seed2 + (seed2 << SEED_2_SHIFT) + SEED_2_INCREMENT;
         }
     }
 

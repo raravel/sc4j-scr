@@ -405,10 +405,7 @@ public final class LocalView {
     /**
      * Centers the screen on a point as the multiplayer Center View does: the screen position is the point less half the
      * game screen width and half the play view rows ({@link #calculateCenteredScreenX}, {@link #calculateCenteredScreenY}),
-     * and the camera moves there at once: each axis is clamped to
-     * {@code 0..maximum} (a negative position becomes {@code 0}, one at or past the maximum the maximum), the screen tile
-     * WORDs and the screen position are stored, and the moved screen position follows when the position changed. The
-     * interface applies the move ({@link #takeWritten()}). Not modeled: the observer and replay gates of the camera move.
+     * and the camera moves there at once ({@link #moveScreen}).
      *
      * @param centerX the point X in pixels
      * @param centerY the point Y in pixels
@@ -419,17 +416,35 @@ public final class LocalView {
             return false;
         }
 
-        int centeredScreenX = clampScreenPosition(this.calculateCenteredScreenX(centerX), this.maximumScreenX);
-        int centeredScreenY = clampScreenPosition(this.calculateCenteredScreenY(centerY), this.maximumScreenY);
+        return this.moveScreen(this.calculateCenteredScreenX(centerX), this.calculateCenteredScreenY(centerY));
+    }
 
-        this.screenTileX = centeredScreenX >> TerrainTileset.TILE_SHIFT & WORD_MASK;
-        this.screenTileY = centeredScreenY >> TerrainTileset.TILE_SHIFT & WORD_MASK;
-        this.screenX     = centeredScreenX;
-        this.screenY     = centeredScreenY;
+    /**
+     * Moves the camera at once to a screen position, as the camera move of the multiplayer Center View does: each axis is clamped to
+     * {@code 0..maximum} (a negative position becomes {@code 0}, one at or past the maximum the maximum), the screen tile WORDs and the
+     * screen position are stored, and the moved screen position follows when the position changed. The interface applies the move
+     * ({@link #takeWritten()}). Not modeled: the observer and replay gates of the camera move.
+     *
+     * @param screenX the screen X in pixels before the clamp
+     * @param screenY the screen Y in pixels before the clamp
+     * @return {@code true} if the view is known and display geometry was supplied, {@code false} otherwise
+     */
+    public boolean moveScreen(int screenX, int screenY) {
+        if (!this.known || !this.geometryKnown) {
+            return false;
+        }
 
-        if (centeredScreenX != this.movedScreenX || centeredScreenY != this.movedScreenY) {
-            this.movedScreenX = centeredScreenX;
-            this.movedScreenY = centeredScreenY;
+        int movedX = clampScreenPosition(screenX, this.maximumScreenX);
+        int movedY = clampScreenPosition(screenY, this.maximumScreenY);
+
+        this.screenTileX = movedX >> TerrainTileset.TILE_SHIFT & WORD_MASK;
+        this.screenTileY = movedY >> TerrainTileset.TILE_SHIFT & WORD_MASK;
+        this.screenX     = movedX;
+        this.screenY     = movedY;
+
+        if (movedX != this.movedScreenX || movedY != this.movedScreenY) {
+            this.movedScreenX = movedX;
+            this.movedScreenY = movedY;
         }
 
         this.written = true;

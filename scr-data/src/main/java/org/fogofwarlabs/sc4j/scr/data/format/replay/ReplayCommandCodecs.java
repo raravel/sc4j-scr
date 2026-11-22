@@ -6,7 +6,7 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * Holds the payload codec of every dispatched native command type, one codec per type byte: the dispatcher reads its commands with it, the
+ * Holds the payload codec of every dispatched command type, one codec per type byte: the dispatcher reads its commands with it, the
  * client encodes the commands it submits with it and the replay tools decode recorded commands with it, so a payload layout exists once.
  * <p>
  * Command types without a payload or with the same layout share one codec object ({@link ReplayRawCommand#CODEC},
@@ -272,6 +272,10 @@ public final class ReplayCommandCodecs {
      * The codec of {@link ReplayCommandIds#DYNAMIC_TURN_RATE}.
      */
     public static final @NotNull ReplayCommandCodec<ReplayRawCommand> DYNAMIC_TURN_RATE = put(ReplayCommandIds.DYNAMIC_TURN_RATE, ReplayRawCommand.CODEC);
+    /**
+     * The codec of {@link ReplayCommandIds#MOD_COMMAND}.
+     */
+    public static final @NotNull ReplayCommandCodec<ReplayModCommand> MOD_COMMAND = put(ReplayCommandIds.MOD_COMMAND, ReplayModCommand.CODEC);
 
     /**
      * Finds the codec of a command type byte.

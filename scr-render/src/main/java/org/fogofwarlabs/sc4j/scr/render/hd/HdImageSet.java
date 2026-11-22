@@ -13,7 +13,7 @@ import org.lwjgl.opengl.GL;
 import java.io.Closeable;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.util.Arrays;
+import java.util.*;
 import java.util.concurrent.locks.LockSupport;
 
 import static org.lwjgl.opengl.GL33C.*;
@@ -41,6 +41,15 @@ public final class HdImageSet implements AutoCloseable {
      */
     private static final long HD_TEXTURE_BUDGET = 1024L << MEBIBYTE_SHIFT;
     private static final long HD2_TEXTURE_BUDGET = 384L << MEBIBYTE_SHIFT;
+    /**
+     * The texture-memory budget of override sheets ({@link #acquireSheet}) at the HD and HD2 qualities.
+     */
+    private static final long HD_SHEET_BUDGET = 256L << MEBIBYTE_SHIFT;
+    private static final long HD2_SHEET_BUDGET = 96L << MEBIBYTE_SHIFT;
+    /**
+     * The override sheets remembered as unpreparable; past it, the one that failed first is forgotten.
+     */
+    private static final int MAXIMUM_FAILED_SHEETS = 64;
     /**
      * The wait between two polls of the loader threads while the render thread continues a load.
      */
@@ -93,6 +102,7 @@ public final class HdImageSet implements AutoCloseable {
 
     private final @NotNull HdAnimations animations;
     private final long textureBudget;
+    private final long sheetBudget;
     /**
      * The hidden window whose context shares objects with the render context, for the upload thread, or {@code null}.
      */
@@ -105,6 +115,14 @@ public final class HdImageSet implements AutoCloseable {
     private final @Nullable HdImageTextures @NotNull [] diffuseImages;
     private final boolean @NotNull [] missingImages;
     private final @NotNull HdImageLoader loader;
+    /**
+     * The textures of the override sheets, the one used least recently first.
+     */
+    private final @NotNull SequencedMap<TextureSheet, HdImageTextures> sheetImages;
+    /**
+     * The override sheets whose preparation failed, in the order they failed.
+     */
+    private final @NotNull SequencedSet<TextureSheet> failedSheets;
 
     private boolean lighting;
     /**
@@ -114,6 +132,7 @@ public final class HdImageSet implements AutoCloseable {
     private volatile boolean uploadCanceled;
 
     private long textureBytes;
+    private long sheetTextureBytes;
     private long uploadNanoseconds;
     /**
      * The time the running load spent uploading and waiting for prepared images, for its log line.
@@ -156,18 +175,22 @@ public final class HdImageSet implements AutoCloseable {
 
         this.animations    = animations;
         this.textureBudget = animations.getQuality() == HdRenderAssets.Quality.HD ? HD_TEXTURE_BUDGET : HD2_TEXTURE_BUDGET;
+        this.sheetBudget   = animations.getQuality() == HdRenderAssets.Quality.HD ? HD_SHEET_BUDGET : HD2_SHEET_BUDGET;
         this.uploadWindow  = uploadWindow;
 
         this.images        = new HdImageTextures[IMAGE_ID_COUNT];
         this.diffuseImages = new HdImageTextures[IMAGE_ID_COUNT];
         this.missingImages = new boolean[IMAGE_ID_COUNT];
         this.loader        = new HdImageLoader(animations, compressedTextures);
+        this.sheetImages   = new LinkedHashMap<>();
+        this.failedSheets  = new LinkedHashSet<>();
 
         this.lighting       = lighting;
         this.uploadThread   = null;
         this.uploadCanceled = false;
 
         this.textureBytes          = 0L;
+        this.sheetTextureBytes     = 0L;
         this.uploadNanoseconds     = 0L;
         this.loadUploadNanoseconds = 0L;
         this.loadWaitNanoseconds   = 0L;
@@ -250,10 +273,10 @@ public final class HdImageSet implements AutoCloseable {
     }
 
     /**
-     * @return the anim texture bytes currently uploaded
+     * @return the anim texture bytes currently uploaded, override sheets included
      */
     public long getTextureBytes() {
-        return this.textureBytes;
+        return this.textureBytes + this.sheetTextureBytes;
     }
 
     /**
@@ -370,7 +393,8 @@ public final class HdImageSet implements AutoCloseable {
                         HdImageTextures textures = this.createTextures(image, prepared);
 
                         this.images[image] = textures;
-                                             this.loadUploadNanoseconds += System.nanoTime() - uploadStarted;
+
+                        this.loadUploadNanoseconds += System.nanoTime() - uploadStarted;
                     } catch (IOException exception) {
                         this.missingImages[image] = true;
                         LOGGER.warning("HD image {0} is unavailable: {1}", image, exception.getMessage());
@@ -485,7 +509,8 @@ public final class HdImageSet implements AutoCloseable {
                     HdImageTextures textures = this.createTextures(image, prepared);
 
                     this.images[image] = textures;
-                                         this.loadUploadNanoseconds += System.nanoTime() - uploadStarted;
+
+                    this.loadUploadNanoseconds += System.nanoTime() - uploadStarted;
                 } catch (IOException exception) {
                     this.missingImages[image] = true;
                     LOGGER.warning("HD image {0} is unavailable: {1}", image, exception.getMessage());
@@ -579,7 +604,8 @@ public final class HdImageSet implements AutoCloseable {
             HdImageTextures uploadedTextures = this.createTextures(image, prepared);
 
             this.images[image] = uploadedTextures;
-                                 textures = uploadedTextures;
+
+            textures = uploadedTextures;
 
             this.uploadNanoseconds += System.nanoTime() - started;
         }
@@ -648,6 +674,84 @@ public final class HdImageSet implements AutoCloseable {
         return textures;
     }
 
+    /**
+     * Returns the textures of an override sheet, uploading it once the loader threads have prepared it. Past the override budget, the sheets used
+     * least recently release their textures, also in a resident set. A sheet whose preparation failed is logged once and gives no textures.
+     *
+     * @param sheet        the texture sheet of an override anim
+     * @param streaming    {@code true} to skip the upload when this frame's upload budget is spent, {@code false} to upload once prepared
+     * @param uploadBudget the upload time per frame while streaming
+     * @param frame        the scene frame counter
+     * @param beforeUpload run before an upload (the scene flushes its batch)
+     * @return the textures, or {@code null} while the sheet is not prepared or uploaded yet, or when its preparation failed
+     */
+    @Nullable HdImageTextures acquireSheet(@NotNull TextureSheet sheet,
+                                           boolean streaming, long uploadBudget, long frame, @NotNull Runnable beforeUpload) {
+        this.awaitUploadThread();
+
+        HdImageTextures textures = this.sheetImages.get(sheet);
+
+        if (textures == null) {
+            if (this.failedSheets.contains(sheet) || streaming && this.uploadNanoseconds > uploadBudget) {
+                return null;
+            }
+
+            HdImageLoader.Prepared prepared;
+
+            try {
+                prepared = this.loader.pollSheet(sheet, this.lighting);
+            } catch (IOException exception) {
+                LOGGER.warning("An HD override sheet is unavailable: {0}", exception.getMessage());
+
+                if (this.failedSheets.size() >= MAXIMUM_FAILED_SHEETS) {
+                    this.failedSheets.removeFirst();
+                }
+
+                this.failedSheets.add(sheet);
+
+                return null;
+            }
+
+            if (prepared == null) {
+                return null;
+            }
+
+            long started = System.nanoTime();
+
+            beforeUpload.run();
+
+            while (!this.sheetImages.isEmpty() && this.sheetTextureBytes + prepared.getByteSize() > this.sheetBudget) {
+                HdImageTextures evicted = this.sheetImages.pollFirstEntry().getValue();
+
+                evicted.delete();
+                this.sheetTextureBytes -= evicted.byteSize;
+            }
+
+            textures = this.createTextures(sheet, prepared, true);
+            this.sheetTextureBytes += textures.byteSize;
+
+            this.uploadNanoseconds += System.nanoTime() - started;
+        }
+
+        this.sheetImages.putLast(sheet, textures);
+        textures.lastUsedFrame = frame;
+
+        return textures;
+    }
+
+    /**
+     * Releases the textures of every override sheet.
+     */
+    void releaseSheets() {
+        for (HdImageTextures textures : this.sheetImages.values()) {
+            textures.delete();
+        }
+
+        this.sheetImages.clear();
+        this.failedSheets.clear();
+        this.sheetTextureBytes = 0;
+    }
+
     private @NotNull HdImageTextures createTextures(int image, HdImageLoader.@NotNull Prepared prepared) throws IOException {
         TextureSheet sheet = prepared.getSheet();
 
@@ -658,6 +762,22 @@ public final class HdImageSet implements AutoCloseable {
             throw Exceptions.newIOException("Image {0} has no HD anim.", image);
         }
 
+        HdImageTextures textures = this.createTextures(sheet, prepared, image >= ImagesDat.IMAGE_COUNT);
+
+        this.textureBytes += textures.byteSize;
+
+        return textures;
+    }
+
+    /**
+     * Uploads the layers of a prepared sheet and frees its buffers.
+     *
+     * @param sheet          the prepared texture sheet
+     * @param prepared       the prepared layers
+     * @param keepsTeamColor whether a frame drawn from the diffuse layer in the lit path keeps the team color mask
+     * @return the textures
+     */
+    private @NotNull HdImageTextures createTextures(@NotNull TextureSheet sheet, HdImageLoader.@NotNull Prepared prepared, boolean keepsTeamColor) {
         int[] names = new int[HdImageLoader.UNLIT_LAYER + 1];
 
         try {
@@ -673,15 +793,12 @@ public final class HdImageSet implements AutoCloseable {
         boolean lightingData = prepared.isBright() && lightingTextures[HdImageLoader.LIGHTING_NORMAL] != 0 &&
                                lightingTextures[HdImageLoader.LIGHTING_SPECULAR] != 0 && lightingTextures[HdImageLoader.LIGHTING_AO_DEPTH] != 0;
         int unlitTexture = prepared.isBright() ? names[HdImageLoader.UNLIT_LAYER] : names[HdImageLoader.SPRITE_LAYER];
-        HdImageTextures textures = new HdImageTextures(HdFrameGeometry.of(sheet),
-                                                       names[HdImageLoader.SPRITE_LAYER], names[HdImageLoader.TEAM_COLOR_LAYER],
-                                                       lightingTextures, unlitTexture, lightingData,
-                                                       prepared.getTextureWidth(), prepared.getTextureHeight(),
-                                                       prepared.getByteSize());
-
-        this.textureBytes += prepared.getByteSize();
-
-        return textures;
+        return new HdImageTextures(HdFrameGeometry.of(sheet),
+                                   names[HdImageLoader.SPRITE_LAYER], names[HdImageLoader.TEAM_COLOR_LAYER],
+                                   lightingTextures, unlitTexture, lightingData,
+                                   keepsTeamColor,
+                                   prepared.getTextureWidth(), prepared.getTextureHeight(),
+                                   prepared.getByteSize());
     }
 
     private void evictTextures(long incomingBytes, long frame) {
@@ -743,6 +860,7 @@ public final class HdImageSet implements AutoCloseable {
             }
         }
 
+        this.releaseSheets();
         this.textureBytes = 0;
         this.loader.clear();
     }

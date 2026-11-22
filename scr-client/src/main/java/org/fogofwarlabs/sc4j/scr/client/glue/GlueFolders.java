@@ -1,6 +1,7 @@
 package org.fogofwarlabs.sc4j.scr.client.glue;
 
 import org.fogofwarlabs.sc4j.engine.net.lobby.MapFolders;
+import org.fogofwarlabs.sc4j.scr.client.ClientPlayer;
 import org.fogofwarlabs.sc4j.scr.net.lan.LanMapTransfer;
 import org.jetbrains.annotations.NotNull;
 
@@ -45,6 +46,13 @@ public final class GlueFolders {
     }
 
     /**
+     * @return the folder of the local IDs: the {@value ClientPlayer#LOCAL_ID_FOLDER} subfolder of the single player ID folder
+     */
+    public @NotNull Path getLocalIdDirectory() {
+        return this.characterDirectory.resolve(ClientPlayer.LOCAL_ID_FOLDER);
+    }
+
+    /**
      * @return the map folder
      */
     public @NotNull Path getMapDirectory() {
@@ -69,11 +77,11 @@ public final class GlueFolders {
     /**
      * Returns the saved game folder of a player.
      *
-     * @param folderName the player's folder name ({@link org.fogofwarlabs.sc4j.scr.client.ClientPlayer#getFolderName()})
-     * @return {@code <save folder>/<folder name>}
+     * @param player the player
+     * @return the player's folder in the save folder ({@link ClientPlayer#getSaveDirectory(Path)})
      */
-    public @NotNull Path getSaveDirectory(@NotNull String folderName) {
-        return this.saveDirectory.resolve(folderName);
+    public @NotNull Path getSaveDirectory(@NotNull ClientPlayer player) {
+        return player.getSaveDirectory(this.saveDirectory);
     }
 
     /**

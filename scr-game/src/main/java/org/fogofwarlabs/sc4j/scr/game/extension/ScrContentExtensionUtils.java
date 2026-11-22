@@ -12,11 +12,10 @@ import java.util.ServiceLoader;
  * the class loader of {@link ScrContentExtension}, so a mod jar in its own class loader finds its own implementations.
  */
 public final class ScrContentExtensionUtils {
-    private static final @NotNull List<@NotNull ScrContentExtension> EXTENSIONS =
-            ServiceLoader.load(ScrContentExtension.class, ScrContentExtension.class.getClassLoader())
-                         .stream()
-                         .map(ServiceLoader.Provider::get)
-                         .toList();
+    private static final @NotNull List<@NotNull ScrContentExtension> EXTENSIONS = ServiceLoader.load(ScrContentExtension.class, ScrContentExtension.class.getClassLoader())
+                                                                                               .stream()
+                                                                                               .map(ServiceLoader.Provider::get)
+                                                                                               .toList();
 
     /**
      * Lets every extension extend the installed data ({@link ScrContentExtension#extendInstalledData}).

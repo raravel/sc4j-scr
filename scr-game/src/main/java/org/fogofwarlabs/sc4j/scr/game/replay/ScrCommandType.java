@@ -13,7 +13,9 @@ import java.io.IOException;
 
 /**
  * Serves one native command type, a type byte of the command stream, as an engine {@link CommandType}: the payload codec of the type and its
- * case of the native command dispatcher ({@link ReplayCommandExecutor}), run for the command player of the issuing record.
+ * case of the native command dispatcher ({@link ReplayCommandExecutor}), run for the command player of the issuing record. A case that needs the
+ * issuing record itself ({@link IssuerAction}) receives it besides the command player: in a team game the command player of every member is the
+ * team's leader, while the issuing record is the member's own record.
  * <p>
  * The dispatcher runs a type in one of three ways ({@link Dispatch}): a keep-alive marker, a session command outside the current selection, or a
  * command of the issuer's current selection.
@@ -30,8 +32,8 @@ public final class ScrCommandType<C> implements CommandType<C> {
          */
         MARKER,
         /**
-         * A session command (Restart Game, Replay Seek and the ignored session commands): it runs outside the issuer's selection and resets the
-         * dispatch marker count.
+         * A session command (Restart Game, Replay Seek, the ignored session commands and the SC4J mod command): it runs outside the issuer's
+         * selection and resets the dispatch marker count.
          */
         SESSION,
         /**
@@ -58,13 +60,31 @@ public final class ScrCommandType<C> implements CommandType<C> {
         void execute(@NotNull Game game, int commandPlayer, @NotNull C command);
     }
 
+    /**
+     * Runs the dispatcher case of a command type that reads the issuing player record besides the command player.
+     *
+     * @param <C> the command class
+     */
+    @FunctionalInterface
+    public interface IssuerAction<C> {
+        /**
+         * Runs a command.
+         *
+         * @param game          the SC:R game
+         * @param issuer        the player record the command's issuer resolved to: the issuing player's own record, also in a team game
+         * @param commandPlayer the command player DWORD of the issuing record, the team's leader in a team game
+         * @param command       the command
+         */
+        void execute(@NotNull Game game, org.fogofwarlabs.sc4j.scr.game.player.@NotNull Player issuer, int commandPlayer, @NotNull C command);
+    }
+
     private final int id;
     private final @NotNull ReplayCommandCodec<C> codec;
     private final @NotNull Dispatch dispatch;
-    private final @NotNull Action<C> action;
+    private final @NotNull IssuerAction<C> action;
 
     /**
-     * Creates a {@link ScrCommandType} instance.
+     * Creates a {@link ScrCommandType} instance whose case reads the command player only.
      *
      * @param id       the command type byte
      * @param codec    the payload codec
@@ -72,6 +92,18 @@ public final class ScrCommandType<C> implements CommandType<C> {
      * @param action   the dispatcher case
      */
     public ScrCommandType(int id, @NotNull ReplayCommandCodec<C> codec, @NotNull Dispatch dispatch, @NotNull Action<C> action) {
+        this(id, codec, dispatch, (game, issuer, commandPlayer, command) -> action.execute(game, commandPlayer, command));
+    }
+
+    /**
+     * Creates a {@link ScrCommandType} instance whose case reads the issuing record besides the command player.
+     *
+     * @param id       the command type byte
+     * @param codec    the payload codec
+     * @param dispatch how the dispatcher runs the type
+     * @param action   the dispatcher case
+     */
+    public ScrCommandType(int id, @NotNull ReplayCommandCodec<C> codec, @NotNull Dispatch dispatch, @NotNull IssuerAction<C> action) {
         this.id       = id;
         this.codec    = codec;
         this.dispatch = dispatch;
@@ -117,7 +149,7 @@ public final class ScrCommandType<C> implements CommandType<C> {
     }
 
     /**
-     * Applies a command of a player to the game: the dispatcher case of the type, for the command player DWORD of the player's record.
+     * Applies a command of a player to the game: the dispatcher case of the type, for the player's record and its command player DWORD.
      *
      * @param game    the game
      * @param player  the issuing player, the record the issuer resolved to
@@ -134,6 +166,6 @@ public final class ScrCommandType<C> implements CommandType<C> {
             throw Exceptions.newIllegalStateException("The command issuer {0} has no player record.", player);
         }
 
-        this.action.execute(scrGame, record.getCommandPlayerIndex(), command);
+        this.action.execute(scrGame, record, record.getCommandPlayerIndex(), command);
     }
 }

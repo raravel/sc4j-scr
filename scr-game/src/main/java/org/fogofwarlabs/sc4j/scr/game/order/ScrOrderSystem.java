@@ -9,6 +9,8 @@ import org.fogofwarlabs.sc4j.scr.content.ScrUnitIds;
 import org.fogofwarlabs.sc4j.scr.data.type.ScrOrderTypeView;
 import org.fogofwarlabs.sc4j.scr.data.type.ScrUnitTypeView;
 import org.fogofwarlabs.sc4j.scr.data.type.constant.UnitTypeFlags;
+import org.fogofwarlabs.sc4j.scr.game.extension.ScrSimulationPlugins;
+import org.fogofwarlabs.sc4j.scr.game.extension.simulation.OrderDecision;
 import org.fogofwarlabs.sc4j.scr.game.sprite.Sprite;
 import org.fogofwarlabs.sc4j.scr.game.state.Game;
 import org.fogofwarlabs.sc4j.scr.game.state.GameRulesVersion;
@@ -175,7 +177,8 @@ public final class ScrOrderSystem implements OrderSystem {
     /**
      * Issues a runtime order using the pooled queue. A queued order is appended unless the queue or the order pool is full, which only shows a status
      * text. Any other order records the user action, then, unless the unit is dying, removes the interruptible trailing orders and appends the order
-     * when the capacity test allows it; the queue head activates in every case, also for a dying unit.
+     * when the capacity test allows it; the queue head activates in every case, also for a dying unit. The simulation plugins decide the order
+     * first ({@link ScrSimulationPlugins#decideOrder}): a rejected order changes nothing, and the order continues with the decided values.
      *
      * @param unit             the receiving unit
      * @param orderId          the requested order BYTE
@@ -199,6 +202,21 @@ public final class ScrOrderSystem implements OrderSystem {
         OrderPool pool = this.requireGame().requireOrderPool();
 
         orderId &= BYTE_MASK;
+
+        ScrSimulationPlugins simulation = this.requireGame().getSimulationPlugins();
+
+        if (simulation != null) {
+            OrderDecision decision = simulation.decideOrder(unit, orderId, targetUnit, positionX, positionY, targetUnitType, queue);
+
+            if (decision.isRejected()) {
+                return;
+            }
+
+            orderId    = decision.getOrderId() & BYTE_MASK;
+            targetUnit = decision.getTargetUnit();
+            positionX  = decision.getPositionX();
+            positionY  = decision.getPositionY();
+        }
 
         if (orderId >= ScrOrderIds.NONE || orderId == ScrOrderIds.CLOAK) {
             throw Exceptions.newUnsupportedOperationException("Unrepresented runtime order branch: {0}", orderId);

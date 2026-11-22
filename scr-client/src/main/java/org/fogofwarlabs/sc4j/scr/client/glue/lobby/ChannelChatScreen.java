@@ -2,19 +2,16 @@ package org.fogofwarlabs.sc4j.scr.client.glue.lobby;
 
 import org.fogofwarlabs.sc4j.base.exception.Exceptions;
 import org.fogofwarlabs.sc4j.base.log.Logger;
-import org.fogofwarlabs.sc4j.engine.client.community.ChannelChat;
-import org.fogofwarlabs.sc4j.engine.client.community.ChatEntryKind;
-import org.fogofwarlabs.sc4j.engine.client.community.CommunityText;
 import org.fogofwarlabs.sc4j.engine.net.beaconlink.*;
 import org.fogofwarlabs.sc4j.engine.net.beaconlink.community.ChatChannel;
 import org.fogofwarlabs.sc4j.engine.net.beaconlink.community.PlayerPresence;
+import org.fogofwarlabs.sc4j.engine.net.beaconlink.community.chat.ChannelChat;
+import org.fogofwarlabs.sc4j.engine.net.beaconlink.community.chat.ChatEntryKind;
+import org.fogofwarlabs.sc4j.engine.net.beaconlink.community.chat.CommunityText;
 import org.fogofwarlabs.sc4j.engine.net.lobby.MapFolders;
 import org.fogofwarlabs.sc4j.engine.resource.dialog.DialogControl;
 import org.fogofwarlabs.sc4j.engine.resource.dialog.DialogDefinition;
-import org.fogofwarlabs.sc4j.scr.client.glue.GlueCanvas;
-import org.fogofwarlabs.sc4j.scr.client.glue.GlueContext;
-import org.fogofwarlabs.sc4j.scr.client.glue.GlueNavigator;
-import org.fogofwarlabs.sc4j.scr.client.glue.GlueScreen;
+import org.fogofwarlabs.sc4j.scr.client.glue.*;
 import org.fogofwarlabs.sc4j.scr.client.ui.dialog.ComboBox;
 import org.fogofwarlabs.sc4j.scr.client.ui.dialog.EditControl;
 import org.fogofwarlabs.sc4j.scr.client.ui.dialog.WebPanelStyleUtils;
@@ -349,9 +346,9 @@ public final class ChannelChatScreen extends GlueScreen {
             this.bindControl(control).setVisible(false);
         }
 
-        this.bindControl(WHISPER).setReplacedText(BeaconLinkText.WHISPER_BUTTON.get(locale));
-        this.bindControl(LADDER).setReplacedText(BeaconLinkText.LADDER_BUTTON.get(locale));
-        this.bindControl(RECORDS).setReplacedText(BeaconLinkText.RECORDS_BUTTON.get(locale));
+        this.bindControl(WHISPER).setReplacedText(OwnText.WHISPER_BUTTON.get(locale));
+        this.bindControl(LADDER).setReplacedText(OwnText.LADDER_BUTTON.get(locale));
+        this.bindControl(RECORDS).setReplacedText(OwnText.RECORDS_BUTTON.get(locale));
         this.bindControl(LADDER).setEnabled(false);
         this.bindControl(RECORDS).setEnabled(false);
         this.setSwish(SWISH, SWISH_DELAY_MILLISECONDS);
@@ -504,13 +501,13 @@ public final class ChannelChatScreen extends GlueScreen {
         return false;
     }
 
-    private static @NotNull BeaconLinkText getFailureText(@NotNull LinkFailure failure) {
+    private static @NotNull OwnText getFailureText(@NotNull LinkFailure failure) {
         return switch (failure) {
-            case NO_NODES_CONFIGURED -> BeaconLinkText.NO_NODES;
-            case NO_NODE_ANSWERED -> BeaconLinkText.NO_ANSWER;
-            case ALL_NODES_REFUSED, ROOM_REFUSED -> BeaconLinkText.REFUSED;
-            case TOO_MANY_CONNECTIONS -> BeaconLinkText.TOO_MANY_DEVICES;
-            case SIGNED_OUT -> BeaconLinkText.SIGNED_OUT;
+            case NO_NODES_CONFIGURED -> OwnText.NO_NODES;
+            case NO_NODE_ANSWERED -> OwnText.NO_ANSWER;
+            case ALL_NODES_REFUSED, ROOM_REFUSED -> OwnText.REFUSED;
+            case TOO_MANY_CONNECTIONS -> OwnText.TOO_MANY_DEVICES;
+            case SIGNED_OUT -> OwnText.SIGNED_OUT;
         };
     }
 
@@ -716,10 +713,11 @@ public final class ChannelChatScreen extends GlueScreen {
     }
 
     /**
-     * Called first for every press of the screen that no open popup or open combo box takes.
+     * Called first for every press of the screen that no open popup or open combo box takes, while the screen takes input.
      * <p>
-     * An open context menu takes the press: it runs the action under it and shuts. Otherwise takes presses on the scroll bars and the tabs,
-     * folds a group open or shut at its label and selects the player under a press on the list; a double press starts a whisper to the player.
+     * An open context menu takes the press: it runs the action under it and shuts. Otherwise takes presses on the scroll bars, the chat text (a
+     * selection) and the tabs, folds a group open or shut at its label and selects the player under a press on the list; a double press starts a
+     * whisper to the player.
      *
      * @param x the interface x
      * @param y the interface y
@@ -740,7 +738,7 @@ public final class ChannelChatScreen extends GlueScreen {
             return true;
         }
 
-        if (this.chatLog.press(x, y) || this.users.press(x, y)) {
+        if (this.chatLog.press(this.getContext().getCanvas(), x, y, this.isExtendingPress(), this.isDoublePress()) || this.users.press(x, y)) {
             return true;
         }
 
@@ -903,7 +901,7 @@ public final class ChannelChatScreen extends GlueScreen {
     /**
      * Called for every pointer move of the screen (after an open combo box or popup takes it).
      * <p>
-     * Drags the scroll bars and follows the hovered action of an open context menu.
+     * Drags the scroll bars or the chat selection and follows the hovered action of an open context menu.
      *
      * @param x the interface x
      * @param y the interface y
@@ -914,14 +912,14 @@ public final class ChannelChatScreen extends GlueScreen {
             this.menuHovered = ParticipantRowsUtils.findMenuItem(x, y, this.menuLeft, this.menuTop, this.menuActions.size());
         }
 
-        this.chatLog.drag(y);
+        this.chatLog.drag(this.getContext().getCanvas(), x, y);
         this.users.drag(y);
     }
 
     /**
      * Called for every release of the left button of the screen.
      * <p>
-     * Releases the scroll bars.
+     * Releases the scroll bars and the chat selection.
      *
      * @param x the interface x
      * @param y the interface y
@@ -930,6 +928,19 @@ public final class ChannelChatScreen extends GlueScreen {
     protected void onPointerReleased(float x, float y) {
         this.chatLog.release();
         this.users.release();
+    }
+
+    /**
+     * Called first for a copy (Ctrl+C or the edit menu's Copy): a screen whose read-only text (a chat log) holds a selection copies it here,
+     * before the focused edit control.
+     * <p>
+     * Copies the chat log's selection.
+     *
+     * @return {@code true} if the copy was consumed, {@code false} otherwise
+     */
+    @Override
+    protected boolean onCopy() {
+        return this.chatLog.copy(this.getContext().getClipboard());
     }
 
     /**
@@ -1058,7 +1069,7 @@ public final class ChannelChatScreen extends GlueScreen {
         if (current == null || session == null) {
             WebPanelStyleUtils.drawCenteredLine(canvas,
                                                 TAB_TEXT,
-                                                BeaconLinkText.CONNECTING.get(glueContext.getLocale()),
+                                                OwnText.CONNECTING.get(glueContext.getLocale()),
                                                 listLeft, top + LIST_TOP,
                                                 listWidth, getListHeight(page),
                                                 GlueCanvas.FORMAT_CENTER,

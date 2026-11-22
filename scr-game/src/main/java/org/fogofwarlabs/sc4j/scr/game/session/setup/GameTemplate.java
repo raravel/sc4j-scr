@@ -111,18 +111,15 @@ public final class GameTemplate {
     /**
      * The Melee template, the game options of {@code Templates\Melee(1).got}.
      */
-    public static final @NotNull GameTemplate MELEE =
-            parse(HexFormat.of().parseHex("0200010000000000010101020200030100010000000000320000000000000000"));
+    public static final @NotNull GameTemplate MELEE = parse(HexFormat.of().parseHex("0200010000000000010101020200030100010000000000320000000000000000"));
     /**
      * The Free For All template, the game options of {@code Templates\Free For All(1).got}.
      */
-    public static final @NotNull GameTemplate FREE_FOR_ALL =
-            parse(HexFormat.of().parseHex("0300010000000000010101020200030000010000000000320000000000000000"));
+    public static final @NotNull GameTemplate FREE_FOR_ALL = parse(HexFormat.of().parseHex("0300010000000000010101020200030000010000000000320000000000000000"));
     /**
      * The Use Map Settings template, the game options of {@code Templates\Use Map Settings(1).got}.
      */
-    public static final @NotNull GameTemplate USE_MAP_SETTINGS =
-            parse(HexFormat.of().parseHex("0a00010000000000000000020001030100010000000000000000000000000000"));
+    public static final @NotNull GameTemplate USE_MAP_SETTINGS = parse(HexFormat.of().parseHex("0a00010000000000000000020001030100010000000000000000000000000000"));
     /**
      * The masks of an unsigned BYTE and WORD field.
      */

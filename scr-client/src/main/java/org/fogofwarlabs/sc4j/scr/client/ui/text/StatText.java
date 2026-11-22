@@ -49,8 +49,7 @@ public final class StatText {
      * string tables ({@link #decode}: {@code stat_txt}, {@code gluAll}, {@code network}, {@code RC3} and the campaign names), never to keys, file
      * names, protocol identifiers or text that a map or a player wrote; the domain name {@code battle.net} is kept.
      */
-    public static final @NotNull TextSubstitutionHook PRODUCT_NAME_SUBSTITUTION =
-            text -> NAME_SUBSTITUTION.substitute(REGISTERED_NAME_SUBSTITUTION.substitute(text));
+    public static final @NotNull TextSubstitutionHook PRODUCT_NAME_SUBSTITUTION = text -> NAME_SUBSTITUTION.substitute(REGISTERED_NAME_SUBSTITUTION.substitute(text));
 
     private static final int BUTTON_PREFIX_LENGTH = 2;
     private static final int UNICODE_ESCAPE_LENGTH = 6;
@@ -212,15 +211,21 @@ public final class StatText {
     }
 
     /**
-     * Reads a string from the game's committed table or falls back to the installed string.
-     * {@link GameContext#getStatTextBytes} supplies the committed bytes, decoded through {@link LegacyTextUtils}.
+     * Reads a string a plugin of the game overrides ({@link ScrGameView#findStatTextOverride}), else from the game's committed table, else the
+     * installed string. {@link GameContext#getStatTextBytes} supplies the committed bytes, decoded through {@link LegacyTextUtils}.
      * A one-byte hotkey prefix is joined to text read at offset two with an intervening NUL character.
      *
-     * @param view       the game view whose committed table applies, or {@code null} outside a game
+     * @param view       the game view whose overrides and committed table apply, or {@code null} outside a game
      * @param identifier the one-based string identifier
      * @return the string
      */
     public @NotNull String getString(@Nullable ScrGameView view, int identifier) {
+        String override = view == null ? null : view.findStatTextOverride(identifier);
+
+        if (override != null) {
+            return override;
+        }
+
         byte[] head = view == null ? null : view.getGameContext().getStatTextBytes(identifier, 0);
 
         if (head == null) {

@@ -12,6 +12,8 @@ import org.lwjgl.system.MemoryUtil;
 import java.io.Closeable;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.*;
 
@@ -84,6 +86,10 @@ final class HdImageLoader implements AutoCloseable {
      * The native upload buffers a load sequence keeps prepared ahead of the uploads before it waits for them.
      */
     private static final long SEQUENCE_PREPARED_BYTES = 512L << HdImageSet.MEBIBYTE_SHIFT;
+    /**
+     * The override sheets whose preparations are kept until they are taken; past it, the one requested first is dropped.
+     */
+    private static final int MAXIMUM_PENDING_SHEETS = 16;
 
     /**
      * One prepared image: the texture sheet and the native upload buffers of its layers.
@@ -287,12 +293,33 @@ final class HdImageLoader implements AutoCloseable {
         return false;
     }
 
+    /**
+     * Cancels a preparation, or frees its buffers if it has finished.
+     *
+     * @param future the preparation
+     */
+    private static void discard(@NotNull Future<Prepared> future) {
+        if (!future.cancel(false) && future.isDone()) {
+            try {
+                future.get().free();
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+            } catch (ExecutionException | CancellationException ignored) {
+                // A failed preparation holds no buffers.
+            }
+        }
+    }
+
     private final @NotNull HdAnimations animations;
     private final boolean compressedTextures;
 
     private final @NotNull ExecutorService executor;
     private final @NotNull Map<Integer, Future<Prepared>> pending;
     private final @NotNull Map<Integer, HdFrameGeometry> geometries;
+    /**
+     * The preparations of override sheets by sheet instance, in the order they were requested; guarded by itself.
+     */
+    private final @NotNull Map<TextureSheet, Future<Prepared>> pendingSheets;
     private volatile int generation;
 
     /**
@@ -314,7 +341,7 @@ final class HdImageLoader implements AutoCloseable {
         this.animations         = animations;
         this.compressedTextures = compressedTextures;
 
-        this.executor   = Executors.newFixedThreadPool(WORKER_COUNT, runnable -> {
+        this.executor      = Executors.newFixedThreadPool(WORKER_COUNT, runnable -> {
             Thread thread = new Thread(runnable, "HD image loader");
 
             thread.setDaemon(true);
@@ -322,9 +349,10 @@ final class HdImageLoader implements AutoCloseable {
 
             return thread;
         });
-        this.pending    = new ConcurrentHashMap<>();
-        this.geometries = new ConcurrentHashMap<>();
-        this.generation = 0;
+        this.pending       = new ConcurrentHashMap<>();
+        this.geometries    = new ConcurrentHashMap<>();
+        this.pendingSheets = new LinkedHashMap<>();
+        this.generation    = 0;
 
         this.sequence              = null;
         this.sequenceLighting      = false;
@@ -472,8 +500,58 @@ final class HdImageLoader implements AutoCloseable {
         return this.take(image, lighting, this.request(image, lighting, false));
     }
 
+    /**
+     * Returns a prepared override sheet if its preparation has finished, without waiting; the first call queues it. Past
+     * {@value #MAXIMUM_PENDING_SHEETS} sheets queued or prepared and not taken, the one requested first is dropped and its buffers freed.
+     *
+     * @param sheet    the texture sheet of an override anim
+     * @param lighting whether the lighting layers are prepared
+     * @return the prepared sheet, or {@code null} while it is still being prepared
+     * @throws IOException if the preparation failed
+     */
+    @Nullable Prepared pollSheet(@NotNull TextureSheet sheet, boolean lighting) throws IOException {
+        Future<Prepared> future;
+
+        synchronized (this.pendingSheets) {
+            future = this.pendingSheets.get(sheet);
+
+            if (future == null) {
+                int requested = this.generation;
+
+                this.pendingSheets.put(sheet, this.executor.submit(() -> {
+                    Prepared prepared = this.prepare(sheet, lighting);
+
+                    if (requested != this.generation) {
+                        prepared.free();
+                    }
+
+                    return prepared;
+                }));
+
+                if (this.pendingSheets.size() > MAXIMUM_PENDING_SHEETS) {
+                    Iterator<Future<Prepared>> eldest = this.pendingSheets.values().iterator();
+
+                    discard(eldest.next());
+                    eldest.remove();
+                }
+
+                return null;
+            }
+
+            if (!future.isDone()) {
+                return null;
+            }
+
+            this.pendingSheets.remove(sheet);
+        }
+
+        return this.take(-1, lighting, future);
+    }
+
     private @NotNull Prepared take(int image, boolean lighting, @NotNull Future<Prepared> future) throws IOException {
-        this.pending.remove(getRequestKey(image, lighting));
+        if (image >= 0) {
+            this.pending.remove(getRequestKey(image, lighting));
+        }
 
         try {
             Prepared prepared = future.get();
@@ -505,10 +583,23 @@ final class HdImageLoader implements AutoCloseable {
 
         this.geometries.putIfAbsent(image, HdFrameGeometry.of(sheet));
 
+        return this.prepare(sheet, lighting);
+    }
+
+    /**
+     * Prepares the layers of a texture sheet: the sprite layer (diffuse, or bright in the lit path where the sheet has one), team color and, for
+     * the lit path, the lighting layers and the diffuse layer of frames without lighting data, each level {@code 0} in its upload format.
+     *
+     * @param sheet    the texture sheet
+     * @param lighting whether the lighting layers are prepared
+     * @return the prepared sheet
+     * @throws IOException if the sheet has no diffuse layer or a layer cannot be decoded
+     */
+    private @NotNull Prepared prepare(@NotNull TextureSheet sheet, boolean lighting) throws IOException {
         CompressedTexture diffuse = sheet.findLayer(DIFFUSE_LAYER_NAME);
 
         if (diffuse == null) {
-            throw Exceptions.newIOException("Image {0} has no HD diffuse layer.", image);
+            throw Exceptions.newIOException("The HD texture sheet has no diffuse layer.");
         }
 
         CompressedTexture[] layers = new CompressedTexture[lighting ? UNLIT_LAYER + 1 : FORWARD_LAYER_COUNT];
@@ -597,18 +688,18 @@ final class HdImageLoader implements AutoCloseable {
         }
 
         for (Future<Prepared> future : this.pending.values()) {
-            if (!future.cancel(false) && future.isDone()) {
-                try {
-                    future.get().free();
-                } catch (InterruptedException exception) {
-                    Thread.currentThread().interrupt();
-                } catch (ExecutionException ignored) {
-                    // A failed preparation holds no buffers.
-                }
-            }
+            discard(future);
         }
 
         this.pending.clear();
+
+        synchronized (this.pendingSheets) {
+            for (Future<Prepared> future : this.pendingSheets.values()) {
+                discard(future);
+            }
+
+            this.pendingSheets.clear();
+        }
     }
 
 

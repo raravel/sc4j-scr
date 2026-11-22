@@ -1,9 +1,12 @@
 package org.fogofwarlabs.sc4j.scr.client.glue;
 
+import org.fogofwarlabs.sc4j.base.exception.Exceptions;
 import org.fogofwarlabs.sc4j.base.log.Logger;
 import org.fogofwarlabs.sc4j.base.text.TerminatedStringUtils;
+import org.fogofwarlabs.sc4j.scr.core.FileNameUtils;
 import org.fogofwarlabs.sc4j.scr.data.format.replay.ReplayFile;
 import org.fogofwarlabs.sc4j.scr.data.format.replay.ReplayWriter;
+import org.fogofwarlabs.sc4j.scr.game.save.SaveGameKind;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -11,16 +14,17 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.file.Files;
-import java.nio.file.Path;
+import java.nio.file.*;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
 
 /**
- * Stores the campaign progress of the run's player in a single-player ID file, encoded in replay sections: a record section, whose
- * unrecognized bytes are kept, and a UTF-8 name section. The file is named after the player's folder name ({@link
- * org.fogofwarlabs.sc4j.scr.client.ClientPlayer#getFolderName()}) and holds the player's name. Files from before {@code 1.18} using the
- * PKWare codec are unsupported.
+ * Stores the campaign progress of a player in a single-player ID file, encoded in replay sections: a record section, whose unrecognized
+ * bytes are kept, and a UTF-8 name section. The file is named after the player's folder name ({@link
+ * org.fogofwarlabs.sc4j.scr.client.ClientPlayer#getFolderName()}) and holds the player's name: an account's file is named after the
+ * account id, a local ID's file after the ID's name. Files from before {@code 1.18} using the PKWare codec are unsupported.
  */
 public final class CharacterFile {
     /**
@@ -31,9 +35,18 @@ public final class CharacterFile {
      * The size of the name section: the longest name in bytes and its terminator.
      */
     public static final int NAME_SIZE = 0x60;
+    /**
+     * The longest name in bytes: the name section less its terminator.
+     */
+    public static final int MAXIMUM_NAME_LENGTH = NAME_SIZE - 1;
+    /**
+     * The most local IDs {@link #list} returns.
+     */
+    public static final int MAXIMUM_COUNT = 250;
 
     private static final @NotNull Logger LOGGER = Logger.of(CharacterFile.class);
     private static final int MILLISECONDS_PER_SECOND = 1000;
+    private static final @NotNull String FILE_PATTERN = "*" + EXTENSION;
 
     private static final int RECORD_SECTION_INDEX = 0;
     private static final int NAME_SECTION_INDEX = 1;
@@ -66,6 +79,37 @@ public final class CharacterFile {
     }
 
     /**
+     * Lists the local IDs of a folder: the valid single-player ID files whose name is their file name, oldest first and by file name within the
+     * same second, at most {@link #MAXIMUM_COUNT}.
+     *
+     * @param directory the character folder
+     * @return the local IDs; none if the folder does not exist or cannot be read
+     */
+    public static @NotNull List<CharacterFile> list(@NotNull Path directory) {
+        List<CharacterFile> characters = new ArrayList<>();
+
+        if (!Files.isDirectory(directory)) {
+            return characters;
+        }
+
+        try (DirectoryStream<Path> files = Files.newDirectoryStream(directory, FILE_PATTERN)) {
+            for (Path file : files) {
+                CharacterFile character = read(file);
+
+                if (character != null && !character.isMultiplayer() && character.getName().equals(character.getFileName())) {
+                    characters.add(character);
+                }
+            }
+        } catch (IOException exception) {
+            LOGGER.warning("CHARACTERS UNREADABLE: {0}: {1}", directory, exception.getMessage());
+        }
+
+        characters.sort(Comparator.comparingLong(CharacterFile::getCreationTime).thenComparing(CharacterFile::getFileName));
+
+        return characters.size() > MAXIMUM_COUNT ? new ArrayList<>(characters.subList(0, MAXIMUM_COUNT)) : characters;
+    }
+
+    /**
      * Opens the character file of a player: reads the file when it is a valid single-player ID, which keeps its progress, and creates and
      * writes a new one otherwise. The ID holds the given name; a read file takes it at its next write.
      *
@@ -86,7 +130,7 @@ public final class CharacterFile {
         try {
             return create(directory, fileName, nameBytes);
         } catch (IOException exception) {
-            LOGGER.warning("CHARACTER CREATE FAILED: " + file + ": " + exception.getMessage());
+            LOGGER.warning("CHARACTER CREATE FAILED: {0}: {1}", file, exception.getMessage());
 
             return new CharacterFile(file, nameBytes, createRecord(nameBytes));
         }
@@ -111,14 +155,14 @@ public final class CharacterFile {
 
             return new CharacterFile(file, Arrays.copyOf(section, TerminatedStringUtils.getTextLength(section)), record);
         } catch (IOException | RuntimeException exception) {
-            LOGGER.warning("CHARACTER UNREADABLE: " + file + ": " + exception.getMessage());
+            LOGGER.warning("CHARACTER UNREADABLE: {0}: {1}", file, exception.getMessage());
 
             return null;
         }
     }
 
     /**
-     * Creates a {@link CharacterFile} instance for a new single-player ID and writes its file.
+     * Creates a {@link CharacterFile} instance for a new single-player ID and writes its file, replacing a file of the same name.
      * <p>
      * The ID keeps the name bytes as its name section holds them: more than the name section's {@value #NAME_SIZE} bytes less the
      * terminator are cut ({@link TerminatedStringUtils#cutText(byte[], int)}).
@@ -130,14 +174,49 @@ public final class CharacterFile {
      * @throws IOException if the file cannot be written
      */
     public static @NotNull CharacterFile create(@NotNull Path directory, @NotNull String fileName, byte @NotNull [] name) throws IOException {
-        byte[] sectionName = TerminatedStringUtils.cutText(name, NAME_SIZE);
+        return write(directory, fileName, TerminatedStringUtils.cutText(name, NAME_SIZE));
+    }
 
+    /**
+     * Creates a {@link CharacterFile} instance for a new local ID and writes its file, named after the name as the name section holds it.
+     * <p>
+     * More than {@link #MAXIMUM_NAME_LENGTH} name bytes are cut ({@link TerminatedStringUtils#cutText(byte[], int)}); cut bytes that do not
+     * convert to a file name ({@link FileNameUtils#readFileName}) open no file.
+     *
+     * @param directory the character folder
+     * @param name      the name bytes without terminator, which the caller checked with {@link FileNameUtils#isValidFileName(byte[], int, String)}
+     * @return the created {@link CharacterFile} instance
+     * @throws IOException if the cut name is no file name, or the file exists or cannot be written
+     */
+    public static @NotNull CharacterFile createNamed(@NotNull Path directory, byte @NotNull [] name) throws IOException {
+        byte[] sectionName = TerminatedStringUtils.cutText(name, NAME_SIZE);
+        String fileName = FileNameUtils.readFileName(sectionName);
+
+        if (fileName == null) {
+            throw Exceptions.newIOException("The character name {0} is no file name.", TerminatedStringUtils.readText(sectionName));
+        }
+
+        return write(directory, fileName, sectionName, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+    }
+
+    /**
+     * Creates a {@link CharacterFile} instance for a new single-player ID and writes its file.
+     *
+     * @param directory   the character folder
+     * @param fileName    the file name without {@link #EXTENSION}
+     * @param sectionName the name bytes as the name section holds them
+     * @param options     how the file is opened; none creates or replaces it
+     * @return the created {@link CharacterFile} instance
+     * @throws IOException if the file cannot be written
+     */
+    private static @NotNull CharacterFile write(@NotNull Path directory, @NotNull String fileName, byte @NotNull [] sectionName,
+                                                @NotNull OpenOption @NotNull ... options) throws IOException {
         Files.createDirectories(directory);
 
         Path file = directory.resolve(fileName + EXTENSION);
         CharacterFile character = new CharacterFile(file, sectionName, createRecord(sectionName));
 
-        Files.write(file, character.encode());
+        Files.write(file, character.encode(), options);
 
         return character;
     }
@@ -199,6 +278,22 @@ public final class CharacterFile {
     }
 
     /**
+     * @return the file name without {@link #EXTENSION}: the player's folder name
+     */
+    public @NotNull String getFileName() {
+        String fileName = this.path.getFileName().toString();
+
+        return fileName.substring(0, fileName.length() - EXTENSION.length());
+    }
+
+    /**
+     * @return the creation time in seconds since 1970, unsigned
+     */
+    public long getCreationTime() {
+        return Integer.toUnsignedLong(createRecordBuffer(this.record).getInt(CREATION_TIME_OFFSET));
+    }
+
+    /**
      * @return {@code true} if this is a multiplayer ID, {@code false} otherwise
      */
     public boolean isMultiplayer() {
@@ -225,6 +320,37 @@ public final class CharacterFile {
     public void setCampaignProgress(boolean expansion, @NotNull Race race, int mission) throws IOException {
         createRecordBuffer(this.record).putInt(findProgressOffset(expansion, race), mission);
         Files.write(this.path, this.encode());
+    }
+
+    /**
+     * Deletes the file of this ID, then the saved games of its saved-game folder and the folder once it is empty. Saved games that cannot be
+     * deleted are kept and logged.
+     *
+     * @param saveDirectory the ID's saved-game folder
+     * @throws IOException if the file cannot be deleted; the saved games are kept then
+     */
+    public void delete(@NotNull Path saveDirectory) throws IOException {
+        Files.deleteIfExists(this.path);
+
+        if (!Files.isDirectory(saveDirectory)) {
+            return;
+        }
+
+        try {
+            for (SaveGameKind kind : SaveGameKind.values()) {
+                try (DirectoryStream<Path> files = Files.newDirectoryStream(saveDirectory, kind.getPattern())) {
+                    for (Path file : files) {
+                        Files.deleteIfExists(file);
+                    }
+                }
+            }
+
+            Files.deleteIfExists(saveDirectory);
+        } catch (DirectoryNotEmptyException exception) {
+            LOGGER.info("SAVED GAME FOLDER KEPT: {0}", saveDirectory);
+        } catch (IOException exception) {
+            LOGGER.warning("SAVED GAMES NOT DELETED: {0}: {1}", saveDirectory, exception.getMessage());
+        }
     }
 
     private byte @NotNull [] encode() {

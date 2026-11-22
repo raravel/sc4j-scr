@@ -16,6 +16,7 @@ import org.fogofwarlabs.sc4j.scr.game.ai.ComputerUnitRecord;
 import org.fogofwarlabs.sc4j.scr.game.ai.ComputerUnits;
 import org.fogofwarlabs.sc4j.scr.game.creep.CreepField;
 import org.fogofwarlabs.sc4j.scr.game.map.PreplacedUnitLoaderUtils;
+import org.fogofwarlabs.sc4j.scr.game.order.UnitOrderEligibility;
 import org.fogofwarlabs.sc4j.scr.game.player.*;
 import org.fogofwarlabs.sc4j.scr.game.sprite.Sprite;
 import org.fogofwarlabs.sc4j.scr.game.state.Game;
@@ -38,9 +39,9 @@ public final class TriggerUnitActions {
     private static final int POSITION_CENTER_DIVISOR = 2;
 
     /**
-     * The location index of a Kill Unit or Remove Unit action without a location.
+     * The location index of a Kill Unit or Remove Unit action without a location ({@link #removeUnits}).
      */
-    static final int NO_LOCATION = 0xFF;
+    public static final int NO_LOCATION = 0xFF;
 
     /**
      * The size of one {@code UPRP} unit property record.
@@ -119,30 +120,6 @@ public final class TriggerUnitActions {
     }
 
     /**
-     * Applies modify shields for units with shields: the shields become the unsigned percentage of the maximum, limited
-     * to it.
-     *
-     * @param units   the unit type table
-     * @param unit    the unit
-     * @param percent the percentage
-     * @return {@code true} if the unit has shields, {@code false} otherwise
-     */
-    static boolean modifyShields(@NotNull ScrUnitTypeView units, @NotNull Unit unit, int percent) {
-        int type = unit.getUnitId();
-
-        if (units.getShieldEnabled(type) == 0) {
-            return false;
-        }
-
-        int maximum = units.getShieldAmount(type);
-        int shields = Integer.divideUnsigned(maximum * percent, PERCENT);
-
-        unit.setShieldPoints(Math.min(shields, maximum) << FIXED_POINT_FRACTION_BITS);
-
-        return true;
-    }
-
-    /**
      * Applies the type predicates of Kill Unit and Remove Unit: the owner must match; men, buildings and factories
      * require their StarEdit group flag, other values the exact type. Any Unit accepts every unit of the owner.
      *
@@ -180,15 +157,15 @@ public final class TriggerUnitActions {
      *
      * @param context  the trigger context
      * @param player   the player whose units are killed or removed
-     * @param unitType the unit operand
-     * @param location the location index, or {@link #NO_LOCATION}
-     * @param limit    the number of units to kill or remove
+     * @param unitType the unit type or unit group (its low WORD is used)
+     * @param location the zero-based location index, or {@link #NO_LOCATION}
+     * @param limit    the number of units to kill or remove ({@code 999999} for all units)
      * @param remove   whether the units are removed instead of killed
      * @throws NullPointerException          if the world was built without game data
      * @throws UnsupportedOperationException if a location action has no unit rectangle query or the unit pool is not initialized
      * @throws IllegalStateException         if the terrain miniature flags cannot be loaded
      */
-    void removeUnits(@NotNull TriggerContext context, int player, int unitType, int location, int limit, boolean remove) {
+    public void removeUnits(@NotNull TriggerContext context, int player, int unitType, int location, int limit, boolean remove) {
         ScrUnitTypeView units = this.game.requireGameData().getUnitTypes();
 
         if (location == NO_LOCATION) {
@@ -203,7 +180,7 @@ public final class TriggerUnitActions {
 
                 if ((units.getFlags(unit.getUnitId()) & UnitTypeFlags.SUBUNIT) == 0 && !ComputerUnits.isDeadOrHidden(unit) &&
                     matchesTriggerUnit(units, unit, player, unitType)) {
-                    this.removeUnit(units, unit, remove, false);
+                    this.removeUnit(unit, remove, false);
 
                     if (--remaining == 0) {
                         return;
@@ -300,7 +277,7 @@ public final class TriggerUnitActions {
             return false;
         }
 
-        this.removeUnit(units, unit, remove, providesSpace);
+        this.removeUnit(unit, remove, providesSpace);
 
         if (!counted) {
             return false;
@@ -309,7 +286,21 @@ public final class TriggerUnitActions {
         return --remaining[0] == 0;
     }
 
-    private void removeUnit(@NotNull ScrUnitTypeView units, @NotNull Unit unit, boolean remove, boolean providesSpace) {
+    /**
+     * Kills or removes one unit as Kill Unit and Remove Unit do: a powerup a worker carries is released through its carrier instead; a removed
+     * unit is hidden before it is killed, except a unit that provides space whose loaded units the caller handled, which its Die order hides.
+     * The unit is not tested for its owner, its type or its state. The location actions kill or remove the loaded units of a unit that provides
+     * space ({@link TriggerLocations#providesSpace}) first; the actions without a location do not.
+     *
+     * @param unit          the unit
+     * @param remove        {@code true} for Remove Unit, {@code false} for Kill Unit
+     * @param providesSpace {@code true} if the unit provides space and its loaded units were killed or removed first, {@code false} otherwise
+     * @throws NullPointerException          if the world was built without game data
+     * @throws UnsupportedOperationException if the order pool is not initialized
+     */
+    public void removeUnit(@NotNull Unit unit, boolean remove, boolean providesSpace) {
+        ScrUnitTypeView units = this.game.requireGameData().getUnitTypes();
+
         // A powerup carried by a worker is released through its carrier instead; an uncarried powerup is hidden and killed
         // like any other unit.
         if ((units.getFlags(unit.getUnitId()) & UnitTypeFlags.POWERUP) != 0 && unit.getPowerupCarrier() != null) {
@@ -381,14 +372,49 @@ public final class TriggerUnitActions {
             return;
         }
 
-        boolean invincible = (unit.getStatus() & UnitStatusFlags.INVINCIBLE) != 0;
-
         switch (modifier & BYTE_MASK) {
-            case TriggerModifiers.SET -> unit.setStatus(unit.getStatus() | UnitStatusFlags.INVINCIBLE);
-            case TriggerModifiers.CLEAR -> unit.setStatus(unit.getStatus() & ~UnitStatusFlags.INVINCIBLE);
-            case TriggerModifiers.TOGGLE -> unit.setStatus(invincible ? unit.getStatus() & ~UnitStatusFlags.INVINCIBLE : unit.getStatus() | UnitStatusFlags.INVINCIBLE);
+            case TriggerModifiers.SET -> this.setInvincible(unit, true);
+            case TriggerModifiers.CLEAR -> this.setInvincible(unit, false);
+            case TriggerModifiers.TOGGLE -> this.setInvincible(unit, (unit.getStatus() & UnitStatusFlags.INVINCIBLE) == 0);
             default -> {
             }
+        }
+    }
+
+    /**
+     * Sets or clears the invincible status of one unit, as Set Invincibility does for each unit it selects.
+     *
+     * @param unit       the unit
+     * @param invincible {@code true} to make the unit invincible, {@code false} to make it vulnerable
+     */
+    public void setInvincible(@NotNull Unit unit, boolean invincible) {
+        unit.setStatus(invincible ? unit.getStatus() | UnitStatusFlags.INVINCIBLE : unit.getStatus() & ~UnitStatusFlags.INVINCIBLE);
+    }
+
+    /**
+     * Disables a doodad as Set Doodad State does with the disable state: a unit that is not disabled yet receives the DisableDoodad order
+     * through the empty-queue order path.
+     *
+     * @param unit             the doodad unit
+     * @param instructionLimit the iscript budget
+     */
+    public void disableDoodad(@NotNull Unit unit, int instructionLimit) {
+        if (!UnitOrderEligibility.isDisabled(unit)) {
+            this.game.getOrders().issueUntargeted(unit, ScrOrderIds.DISABLE_DOODAD, instructionLimit);
+        }
+    }
+
+    /**
+     * Enables a doodad as Set Doodad State does with the enable state: a disabled unit loses its disabled status and receives the
+     * EnableDoodad order through the empty-queue order path.
+     *
+     * @param unit             the doodad unit
+     * @param instructionLimit the iscript budget
+     */
+    public void enableDoodad(@NotNull Unit unit, int instructionLimit) {
+        if (UnitOrderEligibility.isDisabled(unit)) {
+            unit.setStatus(unit.getStatus() & ~UnitStatusFlags.DISABLED);
+            this.game.getOrders().issueUntargeted(unit, ScrOrderIds.ENABLE_DOODAD, instructionLimit);
         }
     }
 
@@ -418,6 +444,23 @@ public final class TriggerUnitActions {
             return false;
         }
 
+        return this.canMoveUnit(unit) && TriggerLocations.matchesGroupType(units, unit.getUnitId(), unitType);
+    }
+
+    /**
+     * Tests the unit filters of Move Unit: removed or dying units, buildings executing BuildingLand or BuildingLiftoff, Nuclear Missiles, Dark
+     * Swarm, mineral fields, geysers and other resource containers and the trap doodads are not moved.
+     *
+     * @param unit the unit
+     * @return {@code true} if Move Unit moves the unit ({@link #moveUnit}), {@code false} otherwise
+     * @throws NullPointerException if the world was built without game data
+     */
+    public boolean canMoveUnit(@NotNull Unit unit) {
+        if (ComputerUnits.isDeadOrHidden(unit)) {
+            return false;
+        }
+
+        ScrUnitTypeView units = this.game.requireGameData().getUnitTypes();
         int type = unit.getUnitId();
 
         if (UnitQueries.isBuilding(units, type) &&
@@ -425,14 +468,35 @@ public final class TriggerUnitActions {
             return false;
         }
 
-        if (units.getBaseType(type) == ScrUnitIds.TERRAN_NUCLEAR_MISSILE || type == ScrUnitIds.SPELL_DARK_SWARM ||
-            units.isMineralField(type) || type == ScrUnitIds.RESOURCE_VESPENE_GEYSER ||
-            (units.getFlags(type) & UnitTypeFlags.RESOURCE_CONTAINER) != 0 ||
-            type >= ScrUnitIds.SPECIAL_FLOOR_MISSILE_TRAP && type <= ScrUnitIds.SPECIAL_RIGHT_WALL_FLAME_TRAP) {
-            return false;
+        return units.getBaseType(type) != ScrUnitIds.TERRAN_NUCLEAR_MISSILE && type != ScrUnitIds.SPELL_DARK_SWARM &&
+               !units.isMineralField(type) && type != ScrUnitIds.RESOURCE_VESPENE_GEYSER &&
+               (units.getFlags(type) & UnitTypeFlags.RESOURCE_CONTAINER) == 0 &&
+               (type < ScrUnitIds.SPECIAL_FLOOR_MISSILE_TRAP || type > ScrUnitIds.SPECIAL_RIGHT_WALL_FLAME_TRAP);
+    }
+
+    /**
+     * Moves one unit as Move Unit does: a grounded building moves through {@link UnitBuildingMove}, another unit is relocated and, when it was
+     * moved and is completed, finishes its order, so a pending queue activates or it returns to its computer or idle order. The unit is not
+     * tested ({@link #canMoveUnit}).
+     *
+     * @param unit             the unit
+     * @param targetX          the horizontal center to move to
+     * @param targetY          the vertical center to move to
+     * @param instructionLimit the order and script budget
+     */
+    public void moveUnit(@NotNull Unit unit, int targetX, int targetY, int instructionLimit) {
+        if (UnitQueries.isGroundedBuilding(unit)) {
+            this.game.getUnitBuildingMove().move(unit, targetX, targetY, instructionLimit);
+
+            return;
         }
 
-        return TriggerLocations.matchesGroupType(units, type, unitType);
+        boolean moved = this.game.getUnitRelocation().relocate(unit, targetX, targetY);
+
+        // A pending queue activates, otherwise the unit returns to its computer or idle order.
+        if (moved && (unit.getStatus() & UnitStatusFlags.COMPLETED) != 0) {
+            this.game.getOrders().finishOrder(unit, instructionLimit);
+        }
     }
 
     /**
@@ -577,10 +641,8 @@ public final class TriggerUnitActions {
     }
 
     /**
-     * Applies Order to one unit after the elevation and owner tests: buildings executing BuildingLand or
-     * BuildingLiftoff, units that cannot move, Nuclear Missiles, Interceptors, Scarabs and units of rescuable players are
-     * skipped. A burrowed unit unburrows and queues the order without interruption; another unit receives it when it
-     * can receive the order. Move and Attack Move also move a guard computer record's position.
+     * Applies Order to one unit after the elevation and owner tests: a unit the unit operand does not match is skipped, any other unit receives
+     * the order as {@link #issueUnitOrder(Unit, int, int, int, int)} gives it.
      *
      * @param context  the trigger context
      * @param units    the unit type table
@@ -596,6 +658,25 @@ public final class TriggerUnitActions {
                         int unitType,
                         int order,
                         int targetX, int targetY) {
+        if (TriggerLocations.matchesGroupType(units, unit.getUnitId(), unitType)) {
+            this.issueUnitOrder(unit, order, targetX, targetY, context.instructionLimit);
+        }
+    }
+
+    /**
+     * Gives one unit an order as the Order action does: buildings executing BuildingLand or BuildingLiftoff, units that cannot move, Nuclear
+     * Missiles, Interceptors, Scarabs and units of rescuable players are skipped. A burrowed unit unburrows and queues the order without
+     * interruption; another unit receives it when it can receive the order. Move and Attack Move also move a guard computer record's position.
+     *
+     * @param unit             the unit
+     * @param order            the orders.dat entry
+     * @param targetX          the target X
+     * @param targetY          the target Y
+     * @param instructionLimit the order and script budget
+     * @throws NullPointerException if the world was built without game data
+     */
+    public void issueUnitOrder(@NotNull Unit unit, int order, int targetX, int targetY, int instructionLimit) {
+        ScrUnitTypeView units = this.game.requireGameData().getUnitTypes();
         int type = unit.getUnitId();
 
         if ((units.getFlags(type) & UnitTypeFlags.BUILDING) != 0 &&
@@ -617,19 +698,15 @@ public final class TriggerUnitActions {
             return;
         }
 
-        if (!TriggerLocations.matchesGroupType(units, type, unitType)) {
-            return;
-        }
-
         if ((unit.getStatus() & UnitStatusFlags.BURROWED) != 0) {
-            this.game.getUnitBurrowing().unburrowUnit(unit, context.instructionLimit);
+            this.game.getUnitBurrowing().unburrowUnit(unit, instructionLimit);
             this.game.getOrders().queueReplacingSameOrders(unit, order, null, targetX, targetY, ScrUnitIds.NONE);
         } else {
             if (!this.game.getUnitOrderEligibility().canReceiveOrder(unit, order, unit.getOwnerIndex())) {
                 return;
             }
 
-            this.game.getOrders().issue(unit, order, null, targetX, targetY, ScrUnitIds.NONE, false, context.instructionLimit);
+            this.game.getOrders().issue(unit, order, null, targetX, targetY, ScrUnitIds.NONE, false, instructionLimit);
         }
 
         ComputerUnitRecord record = unit.getComputerRecord();
@@ -642,10 +719,8 @@ public final class TriggerUnitActions {
     }
 
     /**
-     * Applies Give Units to Player to one unit: the current player selector names the current player and players from
-     * {@code 12} are invalid; hallucinations, resource containers, Interceptors and Scarabs, add-ons and units already owned
-     * by the receiver are skipped. A completed refinery first gives its harvesting worker, then the unit, its loaded units,
-     * its hangar units, and for grounded buildings its add-on, the add-on it builds and a Nydus exit change owner.
+     * Applies Give Units to Player to one unit: the current player selector names the current player, and the unit is given as
+     * {@link UnitOwnership#giveUnit} gives it.
      *
      * @param context      the trigger context
      * @param unit         the unit
@@ -662,13 +737,14 @@ public final class TriggerUnitActions {
      * Applies Modify Unit Hit Points to one unit: the hit points become the unsigned {@code 32}-bit percentage of the
      * maximum (at least one eighth-bit unit); hallucinations and Broodlings then receive their default removal timer.
      *
-     * @param units            the unit type table
      * @param unit             the unit
      * @param percent          the percentage
      * @param instructionLimit the iscript budget
      * @return always {@code true}, since every unit counts
+     * @throws NullPointerException if the world was built without game data
      */
-    boolean modifyHitPoints(@NotNull ScrUnitTypeView units, @NotNull Unit unit, int percent, int instructionLimit) {
+    public boolean modifyHitPoints(@NotNull Unit unit, int percent, int instructionLimit) {
+        ScrUnitTypeView units = this.game.requireGameData().getUnitTypes();
         int hitPoints = Integer.divideUnsigned(units.getHitPoints(unit.getUnitId()) * percent, PERCENT);
 
         this.game.getUnitHealth().setHitPoints(unit, hitPoints == 0 ? 1 : hitPoints, instructionLimit);
@@ -683,15 +759,41 @@ public final class TriggerUnitActions {
     }
 
     /**
+     * Applies Modify Unit Shield Points to one unit with shields: the shields become the unsigned percentage of the maximum, limited to it.
+     *
+     * @param unit    the unit
+     * @param percent the percentage
+     * @return {@code true} if the unit has shields, {@code false} otherwise
+     * @throws NullPointerException if the world was built without game data
+     */
+    public boolean modifyShields(@NotNull Unit unit, int percent) {
+        ScrUnitTypeView units = this.game.requireGameData().getUnitTypes();
+        int type = unit.getUnitId();
+
+        if (units.getShieldEnabled(type) == 0) {
+            return false;
+        }
+
+        int maximum = units.getShieldAmount(type);
+        int shields = Integer.divideUnsigned(maximum * percent, PERCENT);
+
+        unit.setShieldPoints(Math.min(shields, maximum) << FIXED_POINT_FRACTION_BITS);
+
+        return true;
+    }
+
+    /**
      * Applies Modify Unit Energy to one spellcaster that is not a hallucination: the energy becomes the unsigned
      * percentage of the whole maximum, truncated to a BYTE and limited to the maximum.
      *
-     * @param units   the unit type table
      * @param unit    the unit
      * @param percent the percentage
      * @return {@code true} if the unit is a spellcaster and not a hallucination, {@code false} otherwise
+     * @throws NullPointerException if the world was built without game data
      */
-    boolean modifyEnergy(@NotNull ScrUnitTypeView units, @NotNull Unit unit, int percent) {
+    public boolean modifyEnergy(@NotNull Unit unit, int percent) {
+        ScrUnitTypeView units = this.game.requireGameData().getUnitTypes();
+
         if (!UnitTypeTraitsUtils.isSpellcaster(units, unit)) {
             return false;
         }
@@ -708,14 +810,14 @@ public final class TriggerUnitActions {
      * Applies Modify Unit Resource Amount to one resource container: the resource WORD is stored and mineral fields
      * refresh their depletion animation.
      *
-     * @param units            the unit type table
      * @param unit             the unit
-     * @param amount           the resource amount
+     * @param amount           the resource amount (its low WORD is used)
      * @param instructionLimit the iscript budget
      * @return {@code true} if the unit is a resource container, {@code false} otherwise
+     * @throws NullPointerException if the world was built without game data
      */
-    boolean modifyResources(@NotNull ScrUnitTypeView units, @NotNull Unit unit, int amount, int instructionLimit) {
-        if ((units.getFlags(unit.getUnitId()) & UnitTypeFlags.RESOURCE_CONTAINER) == 0) {
+    public boolean modifyResources(@NotNull Unit unit, int amount, int instructionLimit) {
+        if ((this.game.requireGameData().getUnitTypes().getFlags(unit.getUnitId()) & UnitTypeFlags.RESOURCE_CONTAINER) == 0) {
             return false;
         }
 
@@ -729,14 +831,14 @@ public final class TriggerUnitActions {
      * are added while the requirement test accepts another one (represented by {@link UnitHangar#canBuildFighter}); each
      * is constructed at the parent, completed, linked to its parent and hidden in the inside hangar list.
      *
-     * @param context the trigger context
-     * @param unit    the unit
-     * @param count   the number of subordinates to add
+     * @param unit             the unit
+     * @param count            the number of subordinates to add
+     * @param instructionLimit the iscript budget
      * @return {@code true} if at least one creation attempt was made, {@code false} otherwise
      * @throws UnsupportedOperationException if the accounting, the creation context or the owner is missing, or the unit pool is not initialized
      * @throws IllegalStateException         if the unit has no sprite
      */
-    boolean modifyHangar(@NotNull TriggerContext context, @NotNull Unit unit, int count) {
+    public boolean modifyHangar(@NotNull Unit unit, int count, int instructionLimit) {
         int type = unit.getUnitId();
 
         if (!this.game.requireGameData().getUnitTypes().hasHangar(type)) {
@@ -766,11 +868,11 @@ public final class TriggerUnitActions {
                                                                         sprite.getX(), sprite.getY(),
                                                                         unit.getOwnerIndex(),
                                                                         this.game.getUnitSystem().requireUnitPool().getCreationTag(unit.getIndex()),
-                                                                        context.instructionLimit);
+                                                                        instructionLimit);
 
             if (fighter != null) {
-                this.game.getUnitCompletion().initializeBeforePlacement(creation, fighter, context.instructionLimit);
-                this.game.getUnitCompletion().completeAfterPlacement(creation, fighter, owner.getType(), context.instructionLimit);
+                this.game.getUnitCompletion().initializeBeforePlacement(creation, fighter, instructionLimit);
+                this.game.getUnitCompletion().completeAfterPlacement(creation, fighter, owner.getType(), instructionLimit);
                 fighter.setHangarParent(unit);
                 this.game.getUnitHangar().storeInside(unit, fighter);
             }

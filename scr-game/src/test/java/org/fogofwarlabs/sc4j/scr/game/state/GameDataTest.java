@@ -72,6 +72,14 @@ final class GameDataTest {
      * The bytes of one overlay position: the horizontal offset byte followed by the vertical offset byte.
      */
     private static final int OVERLAY_POSITION_SIZE = 2;
+    /**
+     * The frames and positions past the counts of a special overlay file that the overlay read check reads.
+     */
+    private static final int PAST_COUNT_READS = 2;
+    /**
+     * An image whose {@code images.dat} Special Overlay is {@code 0}: it has no special overlay file.
+     */
+    private static final int IMAGE_WITHOUT_SPECIAL_OVERLAY = 956;
 
     private static final @NotNull String CONSOLE_DIRECTORY = "SD/game/consoles/";
     private static final @NotNull String TARGET_ACQUISITION_RANGE = "Target Acquisition Range";
@@ -208,7 +216,7 @@ final class GameDataTest {
     }
 
     @Test
-    void get_image_special_overlay_offset_should_decode_every_coordinate_and_reject_missing_ones() throws IOException {
+    void get_image_special_overlay_offset_should_read_the_resource_bytes_past_the_frame_and_position_counts() throws IOException {
         try (CascStorage storage = CascStorage.open(ExternalInput.INSTALLATION.getPath()); GameData gameData = GameData.load(storage)) {
             TblFile names = TblFile.parse(storage.readFile("arr/images.tbl"));
             int resourceIndex = gameData.getImages().get("Special Overlay", ImageIds.VESPENE_GEYSER);
@@ -216,22 +224,45 @@ final class GameDataTest {
             ByteBuffer contents = ByteBuffer.wrap(specialOverlay).order(ByteOrder.LITTLE_ENDIAN);
             int frameCount = contents.getInt(OVERLAY_FRAME_COUNT_OFFSET);
             int positionCount = contents.getInt(OVERLAY_POSITION_COUNT_OFFSET);
+            int pastCountReads = 0;
 
-            for (int frameIndex = 0; frameIndex < frameCount; frameIndex++) {
-                int frameOffset = contents.getInt(OVERLAY_FRAME_OFFSETS_OFFSET + frameIndex * Integer.BYTES);
+            for (int frameIndex = 0; frameIndex <= frameCount + PAST_COUNT_READS; frameIndex++) {
+                for (int positionIndex = 0; positionIndex <= positionCount + PAST_COUNT_READS; positionIndex++) {
+                    long frameOffsetPosition = OVERLAY_FRAME_OFFSETS_OFFSET + (long) frameIndex * Integer.BYTES;
+                    long position = frameOffsetPosition + Integer.BYTES > specialOverlay.length
+                                    ? Long.MAX_VALUE
+                                    : Integer.toUnsignedLong(contents.getInt((int) frameOffsetPosition) + positionIndex * OVERLAY_POSITION_SIZE);
+                    int frame = frameIndex;
+                    int overlay = positionIndex;
 
-                for (int positionIndex = 0; positionIndex < positionCount; positionIndex++) {
+                    if (position + OVERLAY_POSITION_SIZE > specialOverlay.length) {
+                        Assertions.assertThrows(IOException.class,
+                                                () -> gameData.getImageSpecialOverlayOffset(ImageIds.VESPENE_GEYSER, frame, overlay));
+                        continue;
+                    }
+
                     int coordinate = gameData.getImageSpecialOverlayOffset(ImageIds.VESPENE_GEYSER, frameIndex, positionIndex);
 
-                    Assertions.assertEquals(specialOverlay[frameOffset + positionIndex * OVERLAY_POSITION_SIZE], (short) coordinate);
-                    Assertions.assertEquals(specialOverlay[frameOffset + positionIndex * OVERLAY_POSITION_SIZE + 1],
-                                            (short) (coordinate >>> Short.SIZE));
+                    Assertions.assertEquals(specialOverlay[(int) position], (short) coordinate);
+                    Assertions.assertEquals(specialOverlay[(int) position + 1], (short) (coordinate >>> Short.SIZE));
+
+                    if (frameIndex >= frameCount || positionIndex >= positionCount) {
+                        pastCountReads++;
+                    }
                 }
             }
 
-            Assertions.assertThrows(IOException.class, () -> gameData.getImageSpecialOverlayOffset(ImageIds.VESPENE_GEYSER, frameCount, 0));
-            Assertions.assertThrows(IOException.class, () -> gameData.getImageSpecialOverlayOffset(ImageIds.VESPENE_GEYSER, 0, positionCount));
+            Assertions.assertTrue(pastCountReads > 0, "A read past the counts stays inside the file.");
+
             Assertions.assertThrows(IOException.class, () -> gameData.getImageSpecialOverlayOffset(ImageIds.VESPENE_GEYSER, -1, 0));
+        }
+    }
+
+    @Test
+    void get_image_special_overlay_offset_of_an_image_without_a_special_overlay_should_fail() throws IOException {
+        try (GameData gameData = GameData.loadFrom(ExternalInput.INSTALLATION.getPath())) {
+            Assertions.assertEquals(0, gameData.getImages().get("Special Overlay", IMAGE_WITHOUT_SPECIAL_OVERLAY));
+            Assertions.assertThrows(IOException.class, () -> gameData.getImageSpecialOverlayOffset(IMAGE_WITHOUT_SPECIAL_OVERLAY, 0, 0));
         }
     }
 

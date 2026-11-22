@@ -157,7 +157,8 @@ public final class ScrImageTarget implements AnimationTarget, AnimationEffects {
         this.savedSprites[level]    = this.sprite;
         this.savedUnits[level]      = this.unit;
         this.savedExecutions[level] = this.execution;
-                                      this.depth = level + 1;
+
+        this.depth = level + 1;
 
         this.image     = image;
         this.sprite    = sprite;

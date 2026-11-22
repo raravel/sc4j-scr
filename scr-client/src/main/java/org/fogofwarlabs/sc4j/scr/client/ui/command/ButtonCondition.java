@@ -3,7 +3,7 @@ package org.fogofwarlabs.sc4j.scr.client.ui.command;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * Identifies command-card conditions by their native function identifiers.
+ * Identifies command-card conditions by their native function identifiers, followed by SC:R's own conditions.
  * The evaluator applies each condition to the active unit, selection and player and returns an enabled, hidden or disabled state.
  */
 public enum ButtonCondition {
@@ -258,7 +258,12 @@ public enum ButtonCondition {
     /**
      * Unit requirement with exactly one selected unit.
      */
-    SINGLE_UNIT_REQUIREMENT(0x1403e5a50L);
+    SINGLE_UNIT_REQUIREMENT(0x1403e5a50L),
+    /**
+     * The state a game plugin sets for the condition value ({@code ScrButtonStates}), evaluated like the other conditions only for an own
+     * active unit. SC:R's own condition, whose identifier is no native function address.
+     */
+    SCRIPT(0x1L);
 
     /**
      * Finds the condition of a native function address, as the button set table holds it.

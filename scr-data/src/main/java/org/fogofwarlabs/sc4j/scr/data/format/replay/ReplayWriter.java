@@ -8,13 +8,18 @@ import org.jetbrains.annotations.NotNull;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.zip.CRC32;
 import java.util.zip.Deflater;
 
 /**
  * Writes a modern {@code 1.21+} replay container with checksummed, chunked sections and tagged extensions.
  * Each chunk uses zlib compression when it produces fewer bytes than the raw payload.
+ * <p>
+ * Mod sections ({@link #addModSection}) follow SC:R's own tagged sections. The whole file is built in one array, so a replay holds less than
+ * {@code 2} GiB in all.
  */
 public final class ReplayWriter {
     /**
@@ -74,6 +79,43 @@ public final class ReplayWriter {
      * The environment bytes stored in generated version blocks.
      */
     private static final byte @NotNull [] VERSION_BLOCK_ENVIRONMENT = {5, 0, 1, 1};
+
+    /**
+     * The header of a tagged section: the tag DWORD and the size DWORD.
+     */
+    private static final int EXTENSION_HEADER_SIZE = 2 * Integer.BYTES;
+    /**
+     * The room a written file takes besides its command, map and mod sections: more than the fixed-size sections with their chunk headers.
+     */
+    private static final int FIXED_SECTIONS_CAPACITY = 0x4000;
+    /**
+     * The largest file a write builds: the largest array the virtual machine allocates.
+     */
+    private static final int MAXIMUM_FILE_SIZE = Integer.MAX_VALUE - Long.BYTES;
+
+    /**
+     * The replay file a write fills, which sets its size DWORDs after the bytes they count.
+     */
+    private static final class ReplayOutput extends ByteArrayOutputStream {
+        /**
+         * Creates a {@link ReplayOutput} instance.
+         *
+         * @param capacity the initial capacity in bytes
+         */
+        private ReplayOutput(int capacity) {
+            super(capacity);
+        }
+
+        /**
+         * Sets a written DWORD.
+         *
+         * @param position the offset of the DWORD
+         * @param value    the value
+         */
+        private void patchInt(int position, int value) {
+            LittleEndianUtils.writeInt32(this.buf, position, value);
+        }
+    }
 
     /**
      * Checks whether a command type and payload length are recorded.
@@ -231,7 +273,7 @@ public final class ReplayWriter {
         checksum.update(payload);
         writeInt(output, (int) (checksum.getValue() ^ ReplayFile.CHECKSUM_COMPLEMENT));
 
-        int chunkCount = (payload.length + ReplayFile.CHUNK_SIZE - 1) / ReplayFile.CHUNK_SIZE;
+        int chunkCount = getChunkCount(payload.length);
         byte[] buffer = new byte[ReplayFile.CHUNK_SIZE * DEFLATE_BUFFER_MULTIPLIER + DEFLATE_BUFFER_MARGIN];
 
         writeInt(output, chunkCount);
@@ -265,13 +307,41 @@ public final class ReplayWriter {
         }
     }
 
-    private static void writeExtension(@NotNull ByteArrayOutputStream output, int tag, byte @NotNull [] payload) {
-        ByteArrayOutputStream section = new ByteArrayOutputStream();
-
-        writeSection(section, payload);
+    /**
+     * Writes a tagged section: the tag, the size of its body and the body, each payload one checksummed section.
+     *
+     * @param output   the destination
+     * @param tag      the tag DWORD
+     * @param payloads the decoded payloads of the body's sections, in order
+     */
+    private static void writeExtension(@NotNull ReplayOutput output, int tag, byte @NotNull [] @NotNull ... payloads) {
         writeInt(output, tag);
-        writeInt(output, section.size());
-        output.writeBytes(section.toByteArray());
+
+        int sizePosition = output.size();
+
+        writeInt(output, 0);
+
+        for (byte[] payload : payloads) {
+            writeSection(output, payload);
+        }
+
+        output.patchInt(sizePosition, output.size() - sizePosition - Integer.BYTES);
+    }
+
+    /**
+     * @param payloadLength the decoded size of a section
+     * @return the number of chunks of the section
+     */
+    private static int getChunkCount(int payloadLength) {
+        return (int) (((long) payloadLength + ReplayFile.CHUNK_SIZE - 1) / ReplayFile.CHUNK_SIZE);
+    }
+
+    /**
+     * @param payloadLength the decoded size of a section
+     * @return the largest size the encoded section takes: its checksum, chunk count and chunk lengths, and chunks no larger than raw
+     */
+    private static long getSectionSizeBound(int payloadLength) {
+        return 2L * Integer.BYTES + (long) getChunkCount(payloadLength) * Integer.BYTES + payloadLength;
     }
 
     private static void writeInt(@NotNull ByteArrayOutputStream output, int value) {
@@ -293,6 +363,11 @@ public final class ReplayWriter {
     private final byte @NotNull [] customColors;
     private final byte @NotNull [] versionBlock;
     private final int speedOverrideIndex;
+
+    /**
+     * The data of each mod section by its tag DWORD, in the order they were added.
+     */
+    private final @NotNull Map<Integer, byte @NotNull []> modSections;
 
     /**
      * Creates a {@link ReplayWriter} instance from encoded section payloads, for a game without a speed override.
@@ -366,15 +441,47 @@ public final class ReplayWriter {
         this.customColors       = customColors.clone();
         this.versionBlock       = versionBlock.clone();
         this.speedOverrideIndex = speedOverrideIndex;
+
+        this.modSections = new LinkedHashMap<>();
+    }
+
+    /**
+     * Adds a mod section, which the file holds after SC:R's own tagged sections, in the order the sections are added; SC:R skips it, and
+     * {@link ReplayFile#readModSection} reads it back. Mods choose their own tags ({@link ReplayFile#isModSectionTag}).
+     *
+     * @param tag  the section tag: four printable ASCII characters other than SC:R's own tags
+     * @param data the section data, retained, not copied, until the file is written
+     * @throws IllegalArgumentException if the tag is not a mod section tag or this writer already has a section of the tag
+     */
+    public void addModSection(@NotNull String tag, byte @NotNull [] data) {
+        int encodedTag = ReplayFile.encodeModSectionTag(tag);
+
+        if (this.modSections.containsKey(encodedTag)) {
+            throw Exceptions.newIllegalArgumentException("The replay already has a mod section {0}.", tag);
+        }
+
+        this.modSections.put(encodedTag, data);
     }
 
     /**
      * Writes the complete replay file.
      *
      * @return the replay file bytes
+     * @throws IllegalStateException if the sections may take more than the largest array the virtual machine allocates
      */
     public byte @NotNull [] write() {
-        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        long capacity = FIXED_SECTIONS_CAPACITY + getSectionSizeBound(this.commands.length) + getSectionSizeBound(this.mapData.length);
+
+        for (byte[] data : this.modSections.values()) {
+            capacity += EXTENSION_HEADER_SIZE + getSectionSizeBound(Integer.BYTES) + getSectionSizeBound(data.length);
+        }
+
+        if (capacity > MAXIMUM_FILE_SIZE) {
+            throw Exceptions.newIllegalStateException("The replay sections may take {0} bytes, more than the {1} a replay file holds.", capacity,
+                                                      MAXIMUM_FILE_SIZE);
+        }
+
+        ReplayOutput output = new ReplayOutput((int) capacity);
 
         writeSection(output, ReplayFile.EXTENDED_REPLAY_IDENTIFIER.getBytes(StandardCharsets.US_ASCII));
 
@@ -424,10 +531,15 @@ public final class ReplayWriter {
             writeExtension(output, ReplayFile.SPEED_OVERRIDE_TAG, speedOverrideBytes);
         }
 
-        byte[] file = output.toByteArray();
+        for (Map.Entry<Integer, byte[]> section : this.modSections.entrySet()) {
+            byte[] sizeBytes = new byte[Integer.BYTES];
 
-        LittleEndianUtils.writeInt32(file, extensionOffsetPosition, extensionOffset);
+            LittleEndianUtils.writeInt32(sizeBytes, 0, section.getValue().length);
+            writeExtension(output, section.getKey(), sizeBytes, section.getValue());
+        }
 
-        return file;
+        output.patchInt(extensionOffsetPosition, extensionOffset);
+
+        return output.toByteArray();
     }
 }

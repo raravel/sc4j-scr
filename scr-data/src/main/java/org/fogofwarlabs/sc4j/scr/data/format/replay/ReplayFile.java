@@ -3,6 +3,7 @@ package org.fogofwarlabs.sc4j.scr.data.format.replay;
 import org.fogofwarlabs.sc4j.base.binary.LittleEndianUtils;
 import org.fogofwarlabs.sc4j.base.exception.Exceptions;
 import org.fogofwarlabs.sc4j.base.text.TerminatedStringUtils;
+import org.fogofwarlabs.sc4j.scr.data.format.mpq.MpqArchive;
 import org.fogofwarlabs.sc4j.scr.data.format.mpq.MpqExploderUtils;
 import org.fogofwarlabs.sc4j.scr.data.format.text.LegacyTextUtils;
 import org.jetbrains.annotations.NotNull;
@@ -11,9 +12,7 @@ import org.jetbrains.annotations.Nullable;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
+import java.util.*;
 import java.util.zip.CRC32;
 import java.util.zip.DataFormatException;
 import java.util.zip.Inflater;
@@ -24,6 +23,11 @@ import java.util.zip.Inflater;
  * Supports the legacy (before {@code 1.18}), modern ({@code 1.18} to {@code 1.20}) and modern {@code 1.21+} container formats. Legacy
  * sections are decompressed per {@code 0x2000}-byte chunk with the PKWARE DCL codec, modern sections per chunk with zlib when the chunk
  * carries a zlib header.
+ * <p>
+ * A {@code 1.21+} file may also carry mod sections ({@link ReplayWriter#addModSection}): tagged sections after the classic replay data whose
+ * tags mods choose themselves, four printable ASCII characters other than the tags of SC:R's own sections ({@link #isModSectionTag}). SC:R
+ * skips tagged sections it does not know. A mod section's body is two sections of the replay codec, the data size DWORD and the data, as the
+ * command and map sections are stored; the parser only notes where they are, and {@link #readModSection} decodes one on request.
  */
 public final class ReplayFile {
     /**
@@ -85,6 +89,19 @@ public final class ReplayFile {
      * The {@code XSPD} tag of the speed override extension section, which this client writes for a game with a speed override.
      */
     static final int SPEED_OVERRIDE_TAG = 0x44505358;
+    /**
+     * The tags of SC:R's own tagged sections, which no mod section takes.
+     */
+    private static final int @NotNull [] NATIVE_TAGS = {SKIN_TAG, LIMITS_TAG, FIX_FLAGS_TAG, CUSTOM_COLORS_TAG, VERSION_BLOCK_TAG, SPEED_OVERRIDE_TAG};
+    /**
+     * The number of characters of a section tag.
+     */
+    private static final int TAG_LENGTH = Integer.BYTES;
+    /**
+     * The printable ASCII range a mod section tag's characters lie in.
+     */
+    private static final char FIRST_TAG_CHARACTER = 0x20;
+    private static final char LAST_TAG_CHARACTER = 0x7E;
 
     private static final int BYTE_MASK = 0xFF;
     private static final long DWORD_MASK = 0xFFFFFFFFL;
@@ -211,6 +228,79 @@ public final class ReplayFile {
 
             this.position += length;
         }
+    }
+
+    /**
+     * The place of a mod section's body in the parsed file.
+     */
+    private static final class ModSectionRange {
+        private final int position;
+        private final int endPosition;
+
+        /**
+         * Creates a {@link ModSectionRange} instance.
+         *
+         * @param position    the file offset of the body
+         * @param endPosition the file offset after the body
+         */
+        private ModSectionRange(int position, int endPosition) {
+            this.position    = position;
+            this.endPosition = endPosition;
+        }
+    }
+
+    /**
+     * Checks whether a text is a mod section tag: four printable ASCII characters (code points {@code 0x20} through {@code 0x7E}) other than the
+     * tags of SC:R's own tagged sections ({@code SKIN}, {@code LMTS}, {@code BFIX}, {@code CCLR}, {@code GCFG}, {@code XSPD}). Mods choose
+     * their own tags; the file stores a tag's characters in order.
+     *
+     * @param tag the text
+     * @return {@code true} if the text is a mod section tag, {@code false} otherwise
+     */
+    public static boolean isModSectionTag(@NotNull String tag) {
+        if (tag.length() != TAG_LENGTH) {
+            return false;
+        }
+
+        int encoded = 0;
+
+        for (int index = 0; index < TAG_LENGTH; index++) {
+            char character = tag.charAt(index);
+
+            if (character < FIRST_TAG_CHARACTER || character > LAST_TAG_CHARACTER) {
+                return false;
+            }
+
+            encoded |= character << (index * Byte.SIZE);
+        }
+
+        return !isNativeTag(encoded);
+    }
+
+    /**
+     * Encodes a mod section tag as the DWORD the file stores.
+     *
+     * @param tag the tag ({@link #isModSectionTag})
+     * @return the tag DWORD
+     * @throws IllegalArgumentException if the text is not a mod section tag
+     */
+    static int encodeModSectionTag(@NotNull String tag) {
+        if (!isModSectionTag(tag)) {
+            throw Exceptions.newIllegalArgumentException("\"{0}\" is not a mod section tag: four printable ASCII characters other than SC:R's own tags.",
+                                                         tag);
+        }
+
+        return LittleEndianUtils.readInt32(tag.getBytes(StandardCharsets.US_ASCII), 0);
+    }
+
+    private static boolean isNativeTag(int tag) {
+        for (int nativeTag : NATIVE_TAGS) {
+            if (nativeTag == tag) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -341,6 +431,7 @@ public final class ReplayFile {
         ReplayGameVersion gameVersion = ReplayGameVersion.absent();
         int speedOverrideIndex = 0;
         byte[] customColors = null;
+        Map<Integer, ModSectionRange> modSections = Map.of();
 
         // The seRS DWORD is an absolute extension offset, outside the encoded sections.
         if (replayIdentifierText.equals(EXTENDED_REPLAY_IDENTIFIER)) {
@@ -355,6 +446,7 @@ public final class ReplayFile {
                 gameVersion        = readGameVersion(new Reader(data, (int) extensionOffset, data.length));
                 speedOverrideIndex = readSpeedOverrideIndex(new Reader(data, (int) extensionOffset, data.length));
                 customColors       = readCustomColors(new Reader(data, (int) extensionOffset, data.length));
+                modSections        = findModSections(new Reader(data, (int) extensionOffset, data.length));
                 reader             = new Reader(data, reader.getPosition(), (int) extensionOffset);
             }
         }
@@ -391,6 +483,11 @@ public final class ReplayFile {
 
         file.speedOverrideIndex = speedOverrideIndex;
         file.customColors       = customColors;
+
+        if (!modSections.isEmpty()) {
+            file.modSections    = modSections;
+            file.modSectionData = data;
+        }
 
         if (nameSection != null) {
             file.playerNames = new byte[ReplayHeaderBuilder.PLAYER_COUNT][];
@@ -663,6 +760,118 @@ public final class ReplayFile {
         return customColors;
     }
 
+    /**
+     * Finds the tagged sections other than SC:R's own, which may be mod sections; of a tag that repeats, the last section counts, as for SC:R's
+     * own sections. A section size that does not fit the file ends the search.
+     *
+     * @param reader the reader at the extension sections
+     * @return the body of each found section by its tag DWORD
+     * @throws IOException if a section header cannot be read
+     */
+    private static @NotNull Map<Integer, ModSectionRange> findModSections(@NotNull Reader reader) throws IOException {
+        Map<Integer, ModSectionRange> sections = new HashMap<>();
+
+        while (reader.getRemaining() >= EXTENSION_HEADER_SIZE) {
+            int sectionIdentifier = reader.readInt32();
+            int sectionSize = reader.readInt32();
+
+            if (sectionSize < 0 || sectionSize > reader.getRemaining()) {
+                break;
+            }
+
+            if (!isNativeTag(sectionIdentifier)) {
+                sections.put(sectionIdentifier, new ModSectionRange(reader.getPosition(), reader.getPosition() + sectionSize));
+            }
+
+            reader.skip(sectionSize);
+        }
+
+        return sections;
+    }
+
+    /**
+     * Decodes a modern section of a known size into one array of that size: each chunk holds the next {@code 0x2000} bytes (the last one the
+     * rest), stored raw when its stored length is its raw length and zlib compressed otherwise.
+     *
+     * @param reader the reader at the section
+     * @param size   the decoded size
+     * @return the decoded section
+     * @throws IOException if the chunk count does not fit the size, a chunk is malformed or the checksum does not match
+     */
+    private static byte @NotNull [] readSizedSection(@NotNull Reader reader, int size) throws IOException {
+        long expectedChecksum = reader.readUnsigned32();
+        int chunkCount = reader.readInt32();
+        long expectedChunkCount = ((long) size + CHUNK_SIZE - 1) / CHUNK_SIZE;
+
+        if (chunkCount != expectedChunkCount) {
+            throw Exceptions.newIOException("The replay section has {0} chunks, not the {1} of its {2} bytes.", chunkCount, expectedChunkCount, size);
+        }
+
+        byte[] section = new byte[size];
+
+        for (int chunkIndex = 0; chunkIndex < chunkCount; chunkIndex++) {
+            int offset = chunkIndex * CHUNK_SIZE;
+            int rawLength = Math.min(CHUNK_SIZE, size - offset);
+            int length = reader.readInt32();
+
+            if (length < 0 || length > reader.getRemaining()) {
+                throw Exceptions.newIOException("The replay data is truncated.");
+            }
+
+            if (length == rawLength) {
+                System.arraycopy(reader.data, reader.getPosition(), section, offset, length);
+            } else {
+                inflate(reader.data, reader.getPosition(), length, section, offset, rawLength);
+            }
+
+            reader.skip(length);
+        }
+
+        CRC32 checksum = new CRC32();
+
+        checksum.update(section);
+
+        if ((checksum.getValue() ^ CHECKSUM_COMPLEMENT) != expectedChecksum) {
+            throw Exceptions.newIOException("The replay section checksum does not match.");
+        }
+
+        return section;
+    }
+
+    /**
+     * Inflates a zlib chunk into a range of an array.
+     *
+     * @param data         the array holding the chunk
+     * @param position     the offset of the chunk
+     * @param length       the stored length of the chunk
+     * @param output       the destination
+     * @param outputOffset the offset of the range
+     * @param outputLength the length of the range, which the chunk fills
+     * @throws IOException if the chunk is malformed or inflates to fewer bytes than the range
+     */
+    private static void inflate(byte @NotNull [] data, int position, int length,
+                                byte @NotNull [] output, int outputOffset, int outputLength) throws IOException {
+        try (Inflater inflater = new Inflater()) {
+            int produced = 0;
+
+            inflater.setInput(data, position, length);
+
+            try {
+                while (produced < outputLength) {
+                    int count = inflater.inflate(output, outputOffset + produced, outputLength - produced);
+
+                    if (count == 0) {
+                        throw Exceptions.newIOException("The zlib stream ends before its {0} bytes.", outputLength);
+                    }
+
+                    produced += count;
+                }
+            } catch (DataFormatException exception) {
+                throw Exceptions.newIOException(exception, "The zlib stream is malformed.");
+            }
+        }
+    }
+
     private static byte @NotNull [] readFixedSection(@NotNull Reader reader, int size) throws IOException {
         long expectedChecksum = reader.readUnsigned32();
         int chunkCount = reader.readInt32();
@@ -896,6 +1105,19 @@ public final class ReplayFile {
      * The game's custom color table: the {@code CCLR} section's or a live game's, {@code null} for none.
      */
     private byte @Nullable [] customColors;
+    /**
+     * The archive of the map file a live game starts from, or {@code null} for a parsed file or a game started otherwise.
+     */
+    private @Nullable MpqArchive mapArchive;
+
+    /**
+     * The body of each tagged section other than SC:R's own by its tag DWORD, empty for a file without one.
+     */
+    private @NotNull Map<Integer, ModSectionRange> modSections;
+    /**
+     * The parsed file content the mod sections are decoded from, or {@code null} for a file without mod sections.
+     */
+    private byte @Nullable [] modSectionData;
 
     /**
      * Creates a {@link ReplayFile} instance.
@@ -930,6 +1152,10 @@ public final class ReplayFile {
         this.savedGameStart     = false;
         this.speedOverrideIndex = 0;
         this.customColors       = null;
+        this.mapArchive         = null;
+
+        this.modSections    = Map.of();
+        this.modSectionData = null;
     }
 
     /**
@@ -1108,6 +1334,49 @@ public final class ReplayFile {
         }
 
         this.customColors = customColors.clone();
+    }
+
+    /**
+     * @return the archive of the map file a live game starts from ({@link #setMapArchive}), or {@code null} for a parsed file or none
+     */
+    public @Nullable MpqArchive getMapArchive() {
+        return this.mapArchive;
+    }
+
+    /**
+     * Sets the archive of the map file a live game starts from, which its game start offers to the mod's extensions.
+     *
+     * @param mapArchive the opened map archive, which holds the scenario of this recording; shared, not copied
+     */
+    public void setMapArchive(@NotNull MpqArchive mapArchive) {
+        this.mapArchive = mapArchive;
+    }
+
+    /**
+     * Reads a mod section of the parsed file ({@link ReplayWriter#addModSection}). The parser keeps the file content while it has a tagged section
+     * other than SC:R's own, and each call decodes the section anew.
+     *
+     * @param tag the section tag ({@link #isModSectionTag})
+     * @return the section data, or {@code null} if the file has no section of the tag
+     * @throws IOException              if the section is malformed or fails its checksum
+     * @throws IllegalArgumentException if the tag is not a mod section tag
+     */
+    public byte @Nullable [] readModSection(@NotNull String tag) throws IOException {
+        ModSectionRange range = this.modSections.get(encodeModSectionTag(tag));
+        byte[] data = this.modSectionData;
+
+        if (range == null || data == null) {
+            return null;
+        }
+
+        Reader reader = new Reader(data, range.position, range.endPosition);
+        int size = readInt32Section(reader, ReplayContainerFormat.MODERN_121);
+
+        if (size < 0) {
+            throw Exceptions.newIOException("The replay mod section {0} has a negative size: {1}", tag, size);
+        }
+
+        return readSizedSection(reader, size);
     }
 
     /**

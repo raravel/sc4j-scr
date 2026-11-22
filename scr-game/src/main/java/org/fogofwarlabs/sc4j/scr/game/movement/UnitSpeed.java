@@ -4,6 +4,7 @@ import org.fogofwarlabs.sc4j.base.exception.Exceptions;
 import org.fogofwarlabs.sc4j.engine.content.modifier.Stat;
 import org.fogofwarlabs.sc4j.engine.content.type.ContentType;
 import org.fogofwarlabs.sc4j.scr.data.type.ScrFlingyTypeView;
+import org.fogofwarlabs.sc4j.scr.data.type.ScrUnitTypeView;
 import org.fogofwarlabs.sc4j.scr.game.frame.GameExecutionScope;
 import org.fogofwarlabs.sc4j.scr.game.modifier.ScrSpeedModifier;
 import org.fogofwarlabs.sc4j.scr.game.player.PlayerUpgrades;
@@ -80,12 +81,27 @@ public final class UnitSpeed {
 
         ScrFlingyTypeView flingyTypes = this.game.requireGameData().getFlingyTypes();
 
-        unit.setTopSpeed(unit.calculateModifiedMovementSpeed(this.game.requireGameData().getUnitTypes(), flingyTypes.getTopSpeed(flingyType)));
+        unit.setTopSpeed(this.calculateModifiedTopSpeed(unit));
 
         int modifier = unit.getSpeedModifier();
 
         unit.setAcceleration(applySpeedModifier(flingyTypes.getAcceleration(flingyType), modifier));
         unit.setTurnRate(applySpeedModifier(flingyTypes.getTurnRate(flingyType), modifier));
+    }
+
+    /**
+     * Calculates the top speed of a unit: the {@code flingy.dat} top speed of its type's flingy with its speed modifiers
+     * ({@link Unit#calculateModifiedMovementSpeed}).
+     *
+     * @param unit the unit
+     * @return the modified top speed in units with eight fraction bits
+     * @throws NullPointerException if the world was built without game data
+     */
+    public int calculateModifiedTopSpeed(@NotNull Unit unit) {
+        ScrUnitTypeView units = this.game.requireGameData().getUnitTypes();
+        int flingyType = units.getFlingyType(unit.getUnitId());
+
+        return unit.calculateModifiedMovementSpeed(units, this.game.requireGameData().getFlingyTypes().getTopSpeed(flingyType));
     }
 
     /**

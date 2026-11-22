@@ -35,6 +35,10 @@ final class HdImageTextures {
      * Whether the bright, normal, specular and AO/depth layers are all present.
      */
     final boolean lightingData;
+    /**
+     * Whether a frame drawn from the diffuse layer in the lit path (without lighting data) keeps the team color mask.
+     */
+    final boolean keepsTeamColor;
 
     /**
      * The diffuse texture width in scale-{@code 4} frame units.
@@ -64,12 +68,14 @@ final class HdImageTextures {
      * @param lightingTextures the emissive, normal, specular and AO/depth textures
      * @param unlitTexture     the texture of lit-path frames without lighting data, or {@code 0}
      * @param lightingData     whether the bright, normal, specular and AO/depth layers are all present
+     * @param keepsTeamColor   whether a frame drawn from the diffuse layer in the lit path keeps the team color mask
      * @param textureWidth     the diffuse texture width in scale-{@code 4} frame units
      * @param textureHeight    the diffuse texture height in scale-{@code 4} frame units
      * @param byteSize         the texture memory the uploaded layers use
      */
     HdImageTextures(@NotNull HdFrameGeometry geometry,
                     int diffuseTexture, int teamColorTexture, int @NotNull [] lightingTextures, int unlitTexture, boolean lightingData,
+                    boolean keepsTeamColor,
                     float textureWidth, float textureHeight,
                     long byteSize) {
         this.geometry = geometry;
@@ -79,6 +85,7 @@ final class HdImageTextures {
         this.lightingTextures = lightingTextures;
         this.unlitTexture     = unlitTexture;
         this.lightingData     = lightingData;
+        this.keepsTeamColor   = keepsTeamColor;
 
         this.textureWidth  = textureWidth;
         this.textureHeight = textureHeight;

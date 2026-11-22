@@ -61,6 +61,11 @@ public final class PathObstacleCollector {
     private static final int BOUNDARY_CAPACITY = 128;
     private static final int CANDIDATE_CAPACITY = 32;
     private static final int SEGMENT_CAPACITY = 40;
+    /**
+     * The goal entries a goal append writes past the candidates, without a capacity check: they fill the saved copy of the terrain edge lists that
+     * follows the candidates (four list QWORDs and one QWORD of the four list counts), up to the visited rectangle count.
+     */
+    private static final int SAVED_TERRAIN_LIST_ENTRIES = 5;
 
     /**
      * An edge record QWORD: the coordinate WORD, the first and last WORDs of its extent, the direction BYTE and a flag BYTE. Flag bits {@code 0-1}
@@ -164,6 +169,7 @@ public final class PathObstacleCollector {
     private final int @NotNull [] nearestBoundaries;
     private int candidateCount;
     private int segmentCount;
+    private boolean savedTerrainListsOverwritten;
 
     private int currentX;
     private int currentY;
@@ -190,11 +196,12 @@ public final class PathObstacleCollector {
         this.destinationY       = 0;
         this.exclusionRectangle = 0L;
 
-        this.candidates        = new long[CANDIDATE_CAPACITY];
-        this.segments          = new long[SEGMENT_CAPACITY];
-        this.nearestBoundaries = new int[DIRECTION_COUNT];
-        this.candidateCount    = 0;
-        this.segmentCount      = 0;
+        this.candidates                   = new long[CANDIDATE_CAPACITY + SAVED_TERRAIN_LIST_ENTRIES];
+        this.segments                     = new long[SEGMENT_CAPACITY];
+        this.nearestBoundaries            = new int[DIRECTION_COUNT];
+        this.candidateCount               = 0;
+        this.segmentCount                 = 0;
+        this.savedTerrainListsOverwritten = false;
 
         this.currentX      = 0;
         this.currentY      = 0;
@@ -303,7 +310,7 @@ public final class PathObstacleCollector {
 
     /**
      * Sets the inputs of the following collections: the moving unit and its dimensions, the target unit, the destination and the exclusion rectangle
-     * around the target unit.
+     * around the target unit. A new search also saves the terrain edge lists again, replacing a copy that a goal append overwrote.
      *
      * @param game               the game with the terrain and the units
      * @param unit               the moving unit
@@ -325,6 +332,8 @@ public final class PathObstacleCollector {
         this.destinationX       = destinationX & WORD_MASK;
         this.destinationY       = destinationY & WORD_MASK;
         this.exclusionRectangle = exclusionRectangle;
+
+        this.savedTerrainListsOverwritten = false;
 
         ScrUnitTypeView units = game.requireGameData().getUnitTypes();
         int unitType = unit.getUnitId();
@@ -367,15 +376,21 @@ public final class PathObstacleCollector {
     /**
      * Sets the local search rectangle around a position (closed on the sides of the directions not in the mask) and collects the terrain and unit
      * edges of the four directions that reach into it, in coordinate order.
+     * <p>
+     * Every collection first restores the terrain edge lists from the copy saved by {@link #initialize(Game, Unit, int, int, int, long)}.
      *
      * @param positionX     the current X WORD
      * @param positionY     the current Y WORD
      * @param directionMask the direction BYTE of the position
      * @throws NullPointerException          if the collector is not initialized or the terrain contours or the unit spatial index are missing
-     * @throws UnsupportedOperationException if a moving unit is met without movement collision controls or the unit pool is not initialized
+     * @throws UnsupportedOperationException if a goal append overwrote the edge lists, a moving unit lacks collision controls or the unit pool is missing
      * @throws IllegalStateException         if the candidate has no sprite
      */
     public void collectBoundaries(int positionX, int positionY, int directionMask) {
+        if (this.savedTerrainListsOverwritten) {
+            throw Exceptions.newUnsupportedOperationException("Native local collision restores terrain edge lists that a goal append overwrote.");
+        }
+
         Game game = this.game;
 
         if (game == null) {
@@ -679,6 +694,7 @@ public final class PathObstacleCollector {
 
         hash = HASH_MULTIPLIER * hash + this.candidateCount;
         hash = HASH_MULTIPLIER * hash + this.segmentCount;
+        hash = HASH_MULTIPLIER * hash + (this.savedTerrainListsOverwritten ? 1 : 0);
 
         for (int index = 0; index < this.candidateCount; index++) {
             hash = HASH_MULTIPLIER * hash + Long.hashCode(this.candidates[index]);
@@ -864,6 +880,19 @@ public final class PathObstacleCollector {
                                                  (terminal ? CANDIDATE_TERMINAL : 0);
     }
 
+    /**
+     * Adds a visited rectangle between two corners; if the destination lies in it, the destination is first appended as a terminal candidate with
+     * every direction.
+     * <p>
+     * The goal append has no capacity check: past the {@code 32} candidates it overwrites the saved terrain edge lists, while the search still reads
+     * the appended entries back as candidates.
+     *
+     * @param firstX the X WORD of the first corner
+     * @param firstY the Y WORD of the first corner
+     * @param lastX  the X WORD of the opposite corner
+     * @param lastY  the Y WORD of the opposite corner
+     * @throws UnsupportedOperationException if a goal append reaches the visited rectangle count or the visited rectangles are full
+     */
     private void visitArea(int firstX, int firstY, int lastX, int lastY) {
         int left = Math.min((short) firstX, (short) lastX);
         int right = Math.max((short) firstX, (short) lastX);
@@ -873,7 +902,13 @@ public final class PathObstacleCollector {
         if ((short) this.destinationX >= left && (short) this.destinationX <= right &&
             (short) this.destinationY >= upper && (short) this.destinationY <= lower) {
             if (this.candidateCount == this.candidates.length) {
-                throw Exceptions.newUnsupportedOperationException("Native goal append crossed local candidate storage into saved contour pointers.");
+                String message = "Native goal append crossed the saved terrain edge lists into the visited rectangle count.";
+
+                throw Exceptions.newUnsupportedOperationException(message);
+            }
+
+            if (this.candidateCount >= CANDIDATE_CAPACITY) {
+                this.savedTerrainListsOverwritten = true;
             }
 
             this.candidates[this.candidateCount++] = (this.destinationX & LONG_WORD_MASK) | (this.destinationY & LONG_WORD_MASK) << WORD_BITS |

@@ -4,6 +4,7 @@ import org.fogofwarlabs.sc4j.scr.content.ScrOrderIds;
 import org.fogofwarlabs.sc4j.scr.content.ScrUnitIds;
 import org.fogofwarlabs.sc4j.scr.core.test.ExternalInput;
 import org.fogofwarlabs.sc4j.scr.core.test.RequiresInstallation;
+import org.fogofwarlabs.sc4j.scr.game.player.PlayerTable;
 import org.fogofwarlabs.sc4j.scr.game.replay.ReplayRuntime;
 import org.fogofwarlabs.sc4j.scr.game.save.SaveReferences;
 import org.fogofwarlabs.sc4j.scr.game.sprite.Sprite;
@@ -22,7 +23,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
 /**
- * Checks unit lifecycle records and their saved-format lists and retained payload bytes, whose layout is a save contract.
+ * Checks unit lifecycle records, the tracked Medic, and the records' saved-format lists and retained payload bytes, whose layout is a save contract.
  */
 final class ComputerLifecycleHookTest {
     private static final int TOWN_POSITION_X = 3808;
@@ -328,6 +329,41 @@ final class ComputerLifecycleHookTest {
                 Assertions.assertEquals(SAVED_WORD_VALUE,
                                         Short.toUnsignedInt(buildings.getShort(buildingSlot * BUILDING_RECORD_SIZE + SAVED_BUILDING_WORD)));
                 Assertions.assertEquals(SAVED_BYTE_VALUE, Byte.toUnsignedInt(towns.get(townSlot * SAVED_TOWN_SIZE + SAVED_TOWN_BYTE)));
+            });
+        }
+    }
+
+    @Test
+    @RequiresInstallation
+    void neutral_medic_death_and_owner_change_keep_tracked_computer_medic() throws IOException {
+        try (GameData data = GameData.loadFrom(ExternalInput.INSTALLATION.getPath())) {
+            ReplayRuntime runtime = RunningGameScenario.start(data);
+
+            RunningGameScenario.runInCommandDispatch(runtime, () -> {
+                Game game = runtime.getGame();
+                ComputerPlayerPhase phase = game.getComputerPlayerPhase();
+
+                Assertions.assertNotNull(phase);
+
+                Unit computerMedic = RunningGameScenario.createUnit(game, ScrUnitIds.TERRAN_MEDIC,
+                                                                    SCENARIO_POSITION, SCENARIO_POSITION, RunningGameScenario.COMPUTER);
+
+                phase.adoptUnit(computerMedic, RunningGameScenario.INSTRUCTION_LIMIT);
+
+                Unit tracked = phase.getPlayer(RunningGameScenario.COMPUTER).getMedic();
+
+                Assertions.assertNotNull(tracked);
+
+                Unit dying = RunningGameScenario.createUnit(game, ScrUnitIds.TERRAN_MEDIC,
+                                                            SCENARIO_POSITION, SCENARIO_POSITION, PlayerTable.NEUTRAL_PLAYER_ID);
+                Unit transferred = RunningGameScenario.createUnit(game, ScrUnitIds.TERRAN_MEDIC,
+                                                                  SCENARIO_POSITION, SCENARIO_POSITION, PlayerTable.NEUTRAL_PLAYER_ID);
+
+                game.getUnitLifecycle().kill(dying, RunningGameScenario.INSTRUCTION_LIMIT);
+                game.getUnitOwnership().setOwner(transferred, RunningGameScenario.HUMAN, false, RunningGameScenario.INSTRUCTION_LIMIT);
+
+                Assertions.assertSame(tracked, phase.getPlayer(RunningGameScenario.COMPUTER).getMedic());
+                Assertions.assertEquals(RunningGameScenario.HUMAN, transferred.getOwnerIndex());
             });
         }
     }

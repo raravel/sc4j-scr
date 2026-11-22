@@ -48,8 +48,14 @@ public final class ReplayHeaderBuilder {
     private static final int SLOT_COUNT_OFFSET = 0x39;
     private static final int SPEED_OFFSET = 0x3A;
     private static final int GAME_STATE_OFFSET = 0x3B;
-    private static final int GAME_TYPE_OFFSET = 0x3C;
-    private static final int GAME_SUBTYPE_OFFSET = 0x3E;
+    /**
+     * The offset of the game type WORD.
+     */
+    public static final int GAME_TYPE_OFFSET = 0x3C;
+    /**
+     * The offset of the game subtype WORD.
+     */
+    public static final int GAME_SUBTYPE_OFFSET = 0x3E;
     private static final int TURN_RATE_OFFSET = 0x40;
     private static final int TILESET_OFFSET = 0x44;
     private static final int SAVED_FLAG_OFFSET = 0x46;

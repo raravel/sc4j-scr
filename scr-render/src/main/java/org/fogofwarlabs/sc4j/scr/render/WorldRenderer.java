@@ -4,6 +4,7 @@ import org.fogofwarlabs.sc4j.base.exception.Exceptions;
 import org.fogofwarlabs.sc4j.base.exception.IgnoreException;
 import org.fogofwarlabs.sc4j.engine.client.render.GraphicsDevice;
 import org.fogofwarlabs.sc4j.engine.client.render.ShaderProgram;
+import org.fogofwarlabs.sc4j.engine.resource.graphics.SpriteSheet;
 import org.fogofwarlabs.sc4j.scr.content.ScrAddedGraphics;
 import org.fogofwarlabs.sc4j.scr.data.format.image.AnimFile;
 import org.fogofwarlabs.sc4j.scr.data.format.terrain.TerrainTileset;
@@ -18,6 +19,7 @@ import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
 import java.util.*;
+import java.util.function.IntFunction;
 import java.util.function.IntUnaryOperator;
 
 import static org.lwjgl.opengl.GL33C.*;
@@ -228,6 +230,11 @@ public final class WorldRenderer implements AutoCloseable {
      * The frame slots of a newly cached image.
      */
     private static final int INITIAL_FRAME_CAPACITY = 16;
+    /**
+     * The number of override sheet frames whose atlas entries are kept per kind, the frames and the coverage frames; the frame drawn least recently
+     * gives its atlas place to the next one of its size.
+     */
+    private static final int MAXIMUM_SHEET_FRAMES = 256;
     /**
      * The factor by which a full frame or held quad array grows.
      */
@@ -580,6 +587,72 @@ public final class WorldRenderer implements AutoCloseable {
         return scale;
     }
 
+    /**
+     * Decodes a frame of an override sheet on the sheet's full frame box.
+     *
+     * @param sheet      the indexed sheet
+     * @param frameIndex the frame index
+     * @return the decoded frame
+     * @throws IOException if the sheet has no such frame
+     */
+    private static @NotNull ClassicFrame decodeSheetFrame(@NotNull SpriteSheet sheet, int frameIndex) throws IOException {
+        if (frameIndex < 0 || frameIndex >= sheet.getFrameCount()) {
+            throw Exceptions.newIOException("The image sheet has no frame {0}.", frameIndex);
+        }
+
+        return ClassicFrame.of(sheet, frameIndex);
+    }
+
+    /**
+     * Computes the key of an atlas place size.
+     *
+     * @param width  the place width
+     * @param height the place height
+     * @return the key
+     */
+    private static long getPlaceKey(int width, int height) {
+        return (long) width << Integer.SIZE | height;
+    }
+
+    /**
+     * Creates an {@link AtlasEntry} instance of pixels at a place: the place and the smallest rectangle holding every nonzero pixel (all of it
+     * when none is).
+     *
+     * @param texture    the atlas texture
+     * @param horizontal the left of the place in the atlas
+     * @param vertical   the top of the place in the atlas
+     * @param pixels     the row-major palette indices
+     * @param width      the place width
+     * @param height     the place height
+     * @return the created {@link AtlasEntry} instance
+     */
+    private static @NotNull AtlasEntry createEntry(int texture, int horizontal, int vertical, byte @NotNull [] pixels, int width, int height) {
+        int opaqueLeft = width;
+        int opaqueTop = height;
+        int opaqueRight = 0;
+        int opaqueBottom = 0;
+
+        for (int row = 0; row < height; row++) {
+            for (int column = 0; column < width; column++) {
+                if (pixels[row * width + column] != 0) {
+                    opaqueLeft   = Math.min(opaqueLeft, column);
+                    opaqueTop    = Math.min(opaqueTop, row);
+                    opaqueRight  = Math.max(opaqueRight, column + 1);
+                    opaqueBottom = Math.max(opaqueBottom, row + 1);
+                }
+            }
+        }
+
+        if (opaqueRight == 0) {
+            opaqueLeft   = 0;
+            opaqueTop    = 0;
+            opaqueRight  = width;
+            opaqueBottom = height;
+        }
+
+        return new AtlasEntry(texture, horizontal, vertical, width, height, opaqueLeft, opaqueTop, opaqueRight, opaqueBottom);
+    }
+
     private static int roundUpToPowerOfTwo(int value) {
         if (value <= 1) {
             return value;
@@ -670,10 +743,26 @@ public final class WorldRenderer implements AutoCloseable {
     private int atlasVertical;
     private int atlasRowHeight;
     private final @Nullable AtlasEntry @NotNull [] terrainEntries;
+    /**
+     * The atlas entries of replaced megatile pictures by megatile index, and the picture each one holds.
+     */
+    private final @NotNull Map<Integer, AtlasEntry> megatileEntries;
+    private final @NotNull Map<Integer, byte[]> megatilePictures;
     private final @Nullable AtlasEntry @NotNull [] @Nullable [] spriteEntries;
     private @NotNull AtlasEntry @Nullable [] creepEdgeEntries;
     private final @NotNull SequencedMap<Long, AtlasEntry> warpFrames;
     private final @NotNull Map<Long, AtlasEntry> coverageMasks;
+    /**
+     * The atlas entries of the frames and of the coverage frames of the override sheets ({@link #setImageSheet}), the one drawn least recently
+     * first, and the atlas places released by them, by size ({@link #getPlaceKey}).
+     */
+    private final @NotNull SequencedMap<SpriteSheet, AtlasEntry> sheetEntries;
+    private final @NotNull SequencedMap<SpriteSheet, AtlasEntry> sheetCoverageMasks;
+    private final @NotNull Map<Long, Deque<AtlasEntry>> releasedSheetPlaces;
+    /**
+     * The sheet the image draws take their frames from instead of the image's installed graphics, or {@code null}.
+     */
+    private @Nullable SpriteSheet imageSheet;
 
     private @Nullable RenderAssets assets;
     private final @NotNull IntUnaryOperator loadedTileIdentifiers;
@@ -846,10 +935,17 @@ public final class WorldRenderer implements AutoCloseable {
         this.atlasVertical    = 0;
         this.atlasRowHeight   = 0;
         this.terrainEntries   = new AtlasEntry[TILE_IDENTIFIER_COUNT];
+        this.megatileEntries  = new HashMap<>();
+        this.megatilePictures = new HashMap<>();
         this.spriteEntries    = new AtlasEntry[ScrAddedGraphics.LAST_ID + 1][];
         this.creepEdgeEntries = null;
         this.warpFrames       = new LinkedHashMap<>();
         this.coverageMasks    = new HashMap<>();
+
+        this.sheetEntries        = new LinkedHashMap<>();
+        this.sheetCoverageMasks  = new LinkedHashMap<>();
+        this.releasedSheetPlaces = new HashMap<>();
+        this.imageSheet          = null;
 
         this.assets                = null;
         this.loadedTileIdentifiers = tileIndex -> this.mapTiles[tileIndex];
@@ -1213,7 +1309,22 @@ public final class WorldRenderer implements AutoCloseable {
      * @throws IOException if the image or frame is unavailable
      */
     public @Nullable ClassicFrame decodeImageFrame(int imageIndex, int frameIndex) throws IOException {
-        return this.assets == null ? null : this.assets.decodeImage(imageIndex, frameIndex);
+        if (this.assets == null) {
+            return null;
+        }
+
+        return this.imageSheet != null ? decodeSheetFrame(this.imageSheet, frameIndex) : this.assets.decodeImage(imageIndex, frameIndex);
+    }
+
+    /**
+     * Sets the sheet the image draws take their frame from instead of the image's installed graphics: the palette, shadow, cloak and effect draws
+     * draw its frame {@code 0}, the baked-remap and warp-texture draws fall back to the palette draw. The frame is uploaded on first use and kept
+     * for the {@value #MAXIMUM_SHEET_FRAMES} sheets drawn last while the map is loaded.
+     *
+     * @param imageSheet a one-frame indexed sheet, or {@code null} for the installed graphics
+     */
+    void setImageSheet(@Nullable SpriteSheet imageSheet) {
+        this.imageSheet = imageSheet;
     }
 
     /**
@@ -1223,7 +1334,7 @@ public final class WorldRenderer implements AutoCloseable {
      * @return {@code true} if the image has a baked remap, {@code false} otherwise or before the map's assets are loaded
      */
     boolean hasBakedRemap(int imageIndex) {
-        return this.assets != null && this.assets.hasBakedRemap(imageIndex);
+        return this.imageSheet == null && this.assets != null && this.assets.hasBakedRemap(imageIndex);
     }
 
     /**
@@ -1334,11 +1445,12 @@ public final class WorldRenderer implements AutoCloseable {
         this.paletteGrayscale = false;
 
         for (int player = 0; player < SceneRenderer.PLAYER_COLOR_ROWS; player++) {
+            int paletteRowOffset = (player + 1) * RenderAssets.PALETTE_BYTES;
+
             for (int index = 0; index < RenderAssets.REMAP_INDEX_COUNT; index++) {
-                this.playerColorRows[player * RenderAssets.REMAP_INDEX_COUNT + index] =
-                        colorRows[(player + 1) * RenderAssets.PALETTE_BYTES +
-                                  (RenderAssets.REMAP_FIRST_INDEX + index) * RenderAssets.PALETTE_ENTRY_SIZE +
-                                  RenderAssets.PALETTE_FOURTH];
+                int entryOffset = paletteRowOffset + (RenderAssets.REMAP_FIRST_INDEX + index) * RenderAssets.PALETTE_ENTRY_SIZE;
+
+                this.playerColorRows[player * RenderAssets.REMAP_INDEX_COUNT + index] = colorRows[entryOffset + RenderAssets.PALETTE_FOURTH];
             }
         }
 
@@ -1381,7 +1493,8 @@ public final class WorldRenderer implements AutoCloseable {
             lightingTables[tableIndex]          = loadedAssets.getLightingTable(tableIndex);
             this.lightingRowOffsets[tableIndex] = lightingRows;
             this.lightingRowCounts[tableIndex]  = lightingTables[tableIndex].length / RenderAssets.PALETTE_ENTRIES;
-                                                  lightingRows += this.lightingRowCounts[tableIndex];
+
+            lightingRows += this.lightingRowCounts[tableIndex];
         }
 
         ByteBuffer lighting = MemoryUtil.memAlloc(RenderAssets.PALETTE_ENTRIES * lightingRows);
@@ -1619,6 +1732,20 @@ public final class WorldRenderer implements AutoCloseable {
      * @throws IOException if a newly encountered tile identifier is outside the installed assets
      */
     public void drawTerrain(@NotNull IntUnaryOperator tileIdentifiers) throws IOException {
+        this.drawTerrain(tileIdentifiers, null);
+    }
+
+    /**
+     * Draws visible terrain with creep edges selected from current neighboring tile identifiers, with megatile pictures that replace installed
+     * ones. A replaced megatile keeps one atlas entry, whose texels are replaced when the picture array changes. Newly encountered tile identifiers
+     * are decoded on demand.
+     *
+     * @param tileIdentifiers the current row-major tile identifier for each tile index of the loaded map extent
+     * @param megatiles       the picture of a megatile index ({@code 32x32} palette indices, the same array while it is unchanged), or
+     *                        {@code null} for the installed picture; {@code null} for no replacements
+     * @throws IOException if a newly encountered tile identifier is outside the installed assets
+     */
+    public void drawTerrain(@NotNull IntUnaryOperator tileIdentifiers, @Nullable IntFunction<byte @Nullable []> megatiles) throws IOException {
         if (this.mapTiles == null || this.assets == null || this.creepEdgeEntries == null) {
             return;
         }
@@ -1644,6 +1771,10 @@ public final class WorldRenderer implements AutoCloseable {
                     this.flush();
                     entry                               = this.uploadFrame(this.assets.decodeTile(tileIdentifier), TerrainTileset.TILE_SIZE, TerrainTileset.TILE_SIZE);
                     this.terrainEntries[tileIdentifier] = entry;
+                }
+
+                if (megatiles != null) {
+                    entry = this.findMegatileEntry(megatiles, this.assets.getMegatileIndex(tileIdentifier), entry);
                 }
 
                 float horizontal = (column * TerrainTileset.TILE_SIZE - this.cameraX) * this.scale;
@@ -1774,7 +1905,9 @@ public final class WorldRenderer implements AutoCloseable {
                            ? this.coverageMasks.get(maskKey)
                            : imageFrames != null && frameIndex < imageFrames.length ? imageFrames[frameIndex] : null;
 
-        if (entry == null) {
+        if (this.imageSheet != null) {
+            entry = this.findSheetEntry(this.imageSheet, frameIndex, coverage);
+        } else if (entry == null) {
             this.flush();
 
             ClassicFrame frame = this.assets.decodeImage(imageIndex, frameIndex);
@@ -1843,6 +1976,102 @@ public final class WorldRenderer implements AutoCloseable {
                          : Math.clamp(playerColor, 0, SceneRenderer.PLAYER_COLOR + SceneRenderer.PLAYER_COLOR_ROWS - 1) + 1;
 
         this.holdImageQuad(entry, indexed, uniform, readsDestination, readExtension, horizontal, vertical, paletteRow, flipped);
+    }
+
+    /**
+     * Returns the atlas entry of the frame of a one-frame override sheet, uploading it on first use: the palette indices, or the coverage (nonzero
+     * indices opaque) of shadows and brightening. Past {@value #MAXIMUM_SHEET_FRAMES} sheets, the one drawn least recently releases its atlas
+     * place, which the next frame of its size takes.
+     *
+     * @param sheet      the indexed sheet
+     * @param frameIndex the frame index
+     * @param coverage   whether the coverage frame is drawn
+     * @return the atlas entry of the frame on the sheet's full frame box
+     * @throws IOException if the sheet has no such frame or the frame does not fit the atlas
+     */
+    private @NotNull AtlasEntry findSheetEntry(@NotNull SpriteSheet sheet, int frameIndex, boolean coverage) throws IOException {
+        SequencedMap<SpriteSheet, AtlasEntry> entries = coverage ? this.sheetCoverageMasks : this.sheetEntries;
+        AtlasEntry entry = entries.get(sheet);
+
+        if (entry != null) {
+            entries.putLast(sheet, entry);
+
+            return entry;
+        }
+
+        this.flush();
+
+        ClassicFrame frame = decodeSheetFrame(sheet, frameIndex);
+        byte[] pixels = frame.getPixels();
+
+        if (coverage) {
+            byte[] mask = new byte[pixels.length];
+
+            for (int index = 0; index < mask.length; index++) {
+                mask[index] = pixels[index] == 0 ? 0 : OverlayPass.OPAQUE_ALPHA;
+            }
+
+            pixels = mask;
+        }
+
+        if (entries.size() >= MAXIMUM_SHEET_FRAMES) {
+            AtlasEntry released = entries.pollFirstEntry().getValue();
+
+            this.releasedSheetPlaces.computeIfAbsent(getPlaceKey(released.width, released.height), key -> new ArrayDeque<>()).push(released);
+        }
+
+        Deque<AtlasEntry> places = this.releasedSheetPlaces.get(getPlaceKey(frame.getWidth(), frame.getHeight()));
+
+        if (places == null || places.isEmpty()) {
+            entry = this.uploadFrame(pixels, frame.getWidth(), frame.getHeight());
+        } else {
+            AtlasEntry place = places.pop();
+
+            entry = createEntry(place.texture, place.horizontal, place.vertical, pixels, place.width, place.height);
+            this.replaceFrame(entry, pixels);
+        }
+
+        entries.put(sheet, entry);
+
+        this.batchTexture = 0;
+
+        return entry;
+    }
+
+    /**
+     * Copies the palette a player color draws with: the screen palette with indices {@code 8..15} remapped by the player color's row, the live row
+     * of a player color {@link SceneRenderer#PLAYER_COLOR}{@code + player}.
+     *
+     * @param playerColor the player color index {@code 0..15}, or {@link SceneRenderer#PLAYER_COLOR}{@code + player}
+     * @return the {@link RenderAssets#PALETTE_ENTRIES} entries of {@link RenderAssets#PALETTE_ENTRY_SIZE} bytes, red, green and blue first, or
+     * {@code null} before a map is loaded
+     */
+    public byte @Nullable [] copyPlayerColorPalette(int playerColor) {
+        RenderAssets loadedAssets = this.assets;
+        byte[] base = this.basePaletteRow;
+
+        if (loadedAssets == null || base == null) {
+            return null;
+        }
+
+        if (playerColor < SceneRenderer.PLAYER_COLOR) {
+            int row = Math.clamp(playerColor, 0, RenderAssets.REMAP_ROWS - 1) + 1;
+
+            return Arrays.copyOfRange(loadedAssets.copyPalette(), row * RenderAssets.PALETTE_BYTES, (row + 1) * RenderAssets.PALETTE_BYTES);
+        }
+
+        int player = Math.min(playerColor - SceneRenderer.PLAYER_COLOR, SceneRenderer.PLAYER_COLOR_ROWS - 1);
+        byte[] row = base.clone();
+
+        for (int index = 0; index < RenderAssets.REMAP_INDEX_COUNT; index++) {
+            int remapped = this.playerColorRows[player * RenderAssets.REMAP_INDEX_COUNT + index] & BYTE_MASK;
+
+            System.arraycopy(base, remapped * RenderAssets.PALETTE_ENTRY_SIZE,
+                             row, (RenderAssets.REMAP_FIRST_INDEX + index) * RenderAssets.PALETTE_ENTRY_SIZE,
+                             RenderAssets.PALETTE_FOURTH);
+        }
+
+        return row;
     }
 
     /**
@@ -2030,6 +2259,12 @@ public final class WorldRenderer implements AutoCloseable {
     public void drawWarpTexture(int imageIndex, int frameIndex, int textureFrame, float worldX, float worldY, boolean flipped) throws IOException {
         if (this.assets == null || this.worldFinished) {
             throw Exceptions.newIllegalStateException("Warp textures require an active world frame.");
+        }
+
+        if (this.imageSheet != null) {
+            this.drawImage(imageIndex, frameIndex, 0, worldX, worldY, flipped);
+
+            return;
         }
 
         if (imageIndex < 0 || imageIndex >= this.spriteEntries.length ||
@@ -2955,6 +3190,64 @@ public final class WorldRenderer implements AutoCloseable {
         this.flush();
     }
 
+    /**
+     * Returns the atlas entry a terrain tile draws: the entry of its megatile's replacing picture, uploaded on first use and replaced in place when
+     * the picture array changes, or the installed tile's entry.
+     *
+     * @param megatiles the picture of a megatile index, or {@code null} for the installed picture
+     * @param megatile  the megatile index of the tile
+     * @param installed the atlas entry of the installed tile
+     * @return the atlas entry to draw
+     * @throws IOException if the picture is not {@code 32x32} palette indices
+     */
+    private @NotNull AtlasEntry findMegatileEntry(@NotNull IntFunction<byte @Nullable []> megatiles, int megatile, @NotNull AtlasEntry installed) throws IOException {
+        byte[] picture = megatiles.apply(megatile);
+
+        if (picture == null) {
+            return installed;
+        }
+
+        if (picture.length != TerrainTileset.TILE_SIZE * TerrainTileset.TILE_SIZE) {
+            throw Exceptions.newIOException("A megatile picture has {0} pixels.", picture.length);
+        }
+
+        AtlasEntry entry = this.megatileEntries.get(megatile);
+
+        if (entry == null) {
+            this.flush();
+            entry = this.uploadFrame(picture, TerrainTileset.TILE_SIZE, TerrainTileset.TILE_SIZE);
+            this.megatileEntries.put(megatile, entry);
+            this.megatilePictures.put(megatile, picture);
+        } else if (this.megatilePictures.get(megatile) != picture) {
+            this.flush();
+            this.replaceFrame(entry, picture);
+            this.megatilePictures.put(megatile, picture);
+        }
+
+        return entry;
+    }
+
+    /**
+     * Replaces the texels of an atlas entry with pixels of its size.
+     *
+     * @param entry  the atlas entry
+     * @param pixels the row-major palette indices
+     */
+    private void replaceFrame(@NotNull AtlasEntry entry, byte @NotNull [] pixels) {
+        ByteBuffer upload = MemoryUtil.memAlloc(pixels.length);
+
+        try {
+            upload.put(pixels).flip();
+            glBindTexture(GL_TEXTURE_2D, entry.texture);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, entry.horizontal, entry.vertical, entry.width, entry.height, GL_RED, GL_UNSIGNED_BYTE, upload);
+        } finally {
+            MemoryUtil.memFree(upload);
+        }
+
+        this.batchTexture = 0;
+    }
+
     private @NotNull AtlasEntry uploadFrame(byte @NotNull [] pixels, int width, int height) throws IOException {
         if (width <= 0 || height <= 0 || width > ATLAS_SIZE || height > ATLAS_SIZE) {
             throw Exceptions.newIOException("Sprite dimensions exceed the texture atlas: {0} by {1}", width, height);
@@ -2982,33 +3275,7 @@ public final class WorldRenderer implements AutoCloseable {
         }
 
         int texture = this.atlasTextures.getLast();
-        int opaqueLeft = width;
-        int opaqueTop = height;
-        int opaqueRight = 0;
-        int opaqueBottom = 0;
-
-        for (int vertical = 0; vertical < height; vertical++) {
-            for (int horizontal = 0; horizontal < width; horizontal++) {
-                if (pixels[vertical * width + horizontal] != 0) {
-                    opaqueLeft   = Math.min(opaqueLeft, horizontal);
-                    opaqueTop    = Math.min(opaqueTop, vertical);
-                    opaqueRight  = Math.max(opaqueRight, horizontal + 1);
-                    opaqueBottom = Math.max(opaqueBottom, vertical + 1);
-                }
-            }
-        }
-
-        if (opaqueRight == 0) {
-            opaqueLeft   = 0;
-            opaqueTop    = 0;
-            opaqueRight  = width;
-            opaqueBottom = height;
-        }
-
-        AtlasEntry entry = new AtlasEntry(texture,
-                                          this.atlasHorizontal, this.atlasVertical,
-                                          width, height,
-                                          opaqueLeft, opaqueTop, opaqueRight, opaqueBottom);
+        AtlasEntry entry = createEntry(texture, this.atlasHorizontal, this.atlasVertical, pixels, width, height);
         ByteBuffer upload = MemoryUtil.memAlloc(pixels.length);
 
         try {
@@ -3120,6 +3387,9 @@ public final class WorldRenderer implements AutoCloseable {
 
         this.warpFrames.clear();
         this.coverageMasks.clear();
+        this.sheetEntries.clear();
+        this.sheetCoverageMasks.clear();
+        this.releasedSheetPlaces.clear();
 
         for (int index = this.atlasTextures.size() - 1; index >= 0; index--) {
             int texture = this.atlasTextures.get(index);
@@ -3143,6 +3413,8 @@ public final class WorldRenderer implements AutoCloseable {
         this.assets           = null;
         this.creepEdgeEntries = null;
         Arrays.fill(this.terrainEntries, null);
+        this.megatileEntries.clear();
+        this.megatilePictures.clear();
 
         this.batchTexture    = 0;
         this.atlasRowHeight  = 0;

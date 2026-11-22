@@ -172,4 +172,60 @@ final class GameContextFieldsTest {
         Assertions.assertEquals(RANDOM_SEED, world.getRandom().getState());
         Assertions.assertEquals(0, world.getRandom().getTotalRandomCounts());
     }
+
+    @ParameterizedTest
+    @CsvSource({"0,0", "1,1", "2,2", "8,8"})
+    void snapshot_stores_the_number_of_human_players_as_the_active_player_count(int humans, int activePlayerCount) {
+        Game world = createGame();
+
+        for (int playerIndex = humans; playerIndex < PlayerTable.PLAYABLE_PLAYER_SLOTS; playerIndex++) {
+            Player player = world.getPlayerTable().getPlayer(playerIndex);
+
+            Assertions.assertNotNull(player);
+            player.setType(playerIndex % 2 == 0 ? PlayerTypes.COMPUTER : PlayerTypes.NONE);
+        }
+
+        GameContextFields fields = new GameContextFields(world, LOCAL_PLAYER);
+
+        Assertions.assertEquals(activePlayerCount, fields.readByte(GameStructureView.ACTIVE_PLAYER_COUNT_OFFSET));
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false,false,1", "true,false,0", "false,true,0"})
+    void snapshot_stores_the_single_player_byte_of_a_live_single_player_game(boolean network, boolean replay, int singlePlayer) {
+        Game world = createGame();
+
+        if (network) {
+            byte[] lobbyTypes = new byte[PlayerTable.PLAYABLE_PLAYER_SLOTS];
+            byte[] lobbyRaces = new byte[PlayerTable.PLAYABLE_PLAYER_SLOTS];
+
+            Arrays.fill(lobbyTypes, (byte) PlayerTypes.HUMAN);
+            Arrays.fill(lobbyRaces, (byte) ScrRaceIds.TERRAN);
+            world.getGameContext().setLobby(LOBBY_SLOT, lobbyTypes, lobbyRaces);
+        }
+
+        world.setReplayPlayback(replay);
+
+        GameContextFields fields = new GameContextFields(world, LOCAL_PLAYER);
+
+        Assertions.assertEquals(singlePlayer, fields.readByte(GameStructureView.SINGLE_PLAYER_OFFSET));
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false,2", "true,1"})
+    void snapshot_stores_the_console_race_of_the_local_player_or_terran_for_a_replay(boolean replay, int consoleRace) {
+        Game world = createGame();
+        byte[] lobbyTypes = new byte[PlayerTable.PLAYABLE_PLAYER_SLOTS];
+        byte[] lobbyRaces = new byte[PlayerTable.PLAYABLE_PLAYER_SLOTS];
+
+        Arrays.fill(lobbyTypes, (byte) PlayerTypes.HUMAN);
+        Arrays.fill(lobbyRaces, (byte) ScrRaceIds.ZERG);
+        lobbyRaces[LOBBY_SLOT] = (byte) ScrRaceIds.PROTOSS;
+        world.getGameContext().setLobby(LOBBY_SLOT, lobbyTypes, lobbyRaces);
+        world.setReplayPlayback(replay);
+
+        GameContextFields fields = new GameContextFields(world, LOCAL_PLAYER);
+
+        Assertions.assertEquals(consoleRace, fields.readByte(GameStructureView.CONSOLE_RACE_OFFSET));
+    }
 }

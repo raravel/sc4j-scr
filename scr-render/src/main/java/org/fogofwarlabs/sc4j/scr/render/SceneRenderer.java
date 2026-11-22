@@ -1,9 +1,12 @@
 package org.fogofwarlabs.sc4j.scr.render;
 
+import org.fogofwarlabs.sc4j.engine.resource.graphics.TextureSheet;
+import org.fogofwarlabs.sc4j.scr.data.resource.ScrImageSheet;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
+import java.util.function.IntFunction;
 import java.util.function.IntUnaryOperator;
 
 /**
@@ -203,6 +206,14 @@ public interface SceneRenderer {
     }
 
     /**
+     * @return the asset scale of the anims the backend draws ({@link #drawImageAnimation}): {@code 4} for HD, {@code 2} for HD2, {@code 0} when it
+     * draws no anims
+     */
+    default int getAssetScale() {
+        return 0;
+    }
+
+    /**
      * Sets the game's live image overlay offsets for the images whose placement reads them at draw time (the HD Bunker fire). The default ignores
      * them.
      *
@@ -240,6 +251,18 @@ public interface SceneRenderer {
     void drawTerrain(@NotNull IntUnaryOperator tileIdentifiers) throws IOException;
 
     /**
+     * Draws the visible terrain from the current game tile identifiers, including creep edges, with megatile pictures that replace installed ones:
+     * {@code 32x32} palette indices, rows from the top, drawn in the classic palette at world size. The default ignores the replacements.
+     *
+     * @param tileIdentifiers the current row-major tile identifier for each tile index of the loaded map extent
+     * @param megatiles       the picture of a megatile index, the same array while it is unchanged, or {@code null} for the installed picture
+     * @throws IOException if a tile identifier is outside the installed assets
+     */
+    default void drawTerrain(@NotNull IntUnaryOperator tileIdentifiers, @NotNull IntFunction<byte @Nullable []> megatiles) throws IOException {
+        this.drawTerrain(tileIdentifiers);
+    }
+
+    /**
      * Draws HD foliage, placed once per map from the game seed with its own generator and animated by the game frame; presentation only. The default
      * draws nothing: the classic graphics have no foliage.
      *
@@ -271,6 +294,56 @@ public interface SceneRenderer {
      * @throws IOException if the image cannot be loaded or its modifier is not drawn by this backend
      */
     void drawImage(int imageIndex, int frameIndex, int modifier, int modifierData, int playerColor, int worldX, int worldY, boolean flipped) throws IOException;
+
+    /**
+     * Draws one image of a sprite with the frames of an override sheet instead of the image's installed graphics, with the image's draw function.
+     * The default draws the installed graphics ({@link #drawImage}).
+     *
+     * @param sheet        the indexed frames the image draws, their canvas centered on the image position
+     * @param imageIndex   the image identifier
+     * @param frameIndex   the image frame, a frame of the sheet
+     * @param modifier     the image draw modifier
+     * @param modifierData the image modifier data
+     * @param playerColor  the owner's player color index {@code 0..15}, or {@link #PLAYER_COLOR}{@code + owner}
+     * @param worldX       the canvas center world coordinate
+     * @param worldY       the canvas center world coordinate
+     * @param flipped      whether the image is horizontally flipped
+     * @throws IOException if the frame cannot be drawn or the modifier is not drawn by this backend
+     */
+    default void drawImageSheet(@NotNull ScrImageSheet sheet,
+                                int imageIndex, int frameIndex,
+                                int modifier, int modifierData, int playerColor,
+                                int worldX, int worldY, boolean flipped) throws IOException {
+        this.drawImage(imageIndex, frameIndex, modifier, modifierData, playerColor, worldX, worldY, flipped);
+    }
+
+    /**
+     * Draws one image of a sprite with the frames of an override anim instead of the image's installed anim, with the image's draw function. A
+     * frame the anim does not place on its canvas is placed by the override sheet's frame, else on the canvas. The default draws the override sheet
+     * ({@link #drawImageSheet}) or the installed graphics ({@link #drawImage}).
+     *
+     * @param animation    the texture sheet of the anim, prepared at the backend's asset scale or the other one ({@link #getAssetScale()})
+     * @param sheet        the indexed frames the image draws in the classic graphics, or {@code null} for its installed graphics
+     * @param imageIndex   the image identifier
+     * @param frameIndex   the image frame, a frame of the anim
+     * @param modifier     the image draw modifier
+     * @param modifierData the image modifier data
+     * @param playerColor  the owner's player color index {@code 0..15}, or {@link #PLAYER_COLOR}{@code + owner}
+     * @param worldX       the canvas center world coordinate
+     * @param worldY       the canvas center world coordinate
+     * @param flipped      whether the image is horizontally flipped
+     * @throws IOException if the frame cannot be drawn or the modifier is not drawn by this backend
+     */
+    default void drawImageAnimation(@NotNull TextureSheet animation, @Nullable ScrImageSheet sheet,
+                                    int imageIndex, int frameIndex,
+                                    int modifier, int modifierData, int playerColor,
+                                    int worldX, int worldY, boolean flipped) throws IOException {
+        if (sheet != null) {
+            this.drawImageSheet(sheet, imageIndex, frameIndex, modifier, modifierData, playerColor, worldX, worldY, flipped);
+        } else {
+            this.drawImage(imageIndex, frameIndex, modifier, modifierData, playerColor, worldX, worldY, flipped);
+        }
+    }
 
     /**
      * Draws an image of draw function {@code 10} (a shadow). Without Shadow Stacking the draw builder dims the shadow of a warping-in sprite: when

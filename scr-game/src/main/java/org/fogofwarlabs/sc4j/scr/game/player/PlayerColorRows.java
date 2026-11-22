@@ -175,11 +175,33 @@ public final class PlayerColorRows {
     }
 
     /**
+     * Sets a palette index of a player's unit color row, as an EUD write of the row's byte does: the unit remapping and the team color follow it
+     * from the next drawn frame.
+     *
+     * @param player  the player slot
+     * @param index   the remapped color {@code 0..7} (palette indices {@code 8..15} of a unit frame)
+     * @param palette the palette index in the low eight bits
+     */
+    public void setUnitColor(int player, int index, int palette) {
+        this.bytes[player * UNIT_ROW + index] = (byte) palette;
+    }
+
+    /**
      * @param player the player slot
      * @return the minimap palette index
      */
     public int getMinimapColor(int player) {
         return Byte.toUnsignedInt(this.bytes[UNIT_ROWS_SIZE + player]);
+    }
+
+    /**
+     * Sets a player's minimap palette index, as an EUD write of its byte does: the minimap follows it from its next drawing.
+     *
+     * @param player  the player slot
+     * @param palette the palette index in the low eight bits
+     */
+    public void setMinimapColor(int player, int palette) {
+        this.bytes[UNIT_ROWS_SIZE + player] = (byte) palette;
     }
 
     /**

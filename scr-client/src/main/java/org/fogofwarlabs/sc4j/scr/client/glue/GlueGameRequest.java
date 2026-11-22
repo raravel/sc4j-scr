@@ -1,5 +1,6 @@
 package org.fogofwarlabs.sc4j.scr.client.glue;
 
+import org.fogofwarlabs.sc4j.scr.client.GameCommunityChat;
 import org.fogofwarlabs.sc4j.scr.game.session.setup.GameTemplate;
 import org.fogofwarlabs.sc4j.scr.net.lan.LanClient;
 import org.jetbrains.annotations.NotNull;
@@ -119,6 +120,7 @@ public final class GlueGameRequest {
      * @param playerName        the local player's name
      * @param expansion         whether Brood War was chosen
      * @param lanClient         the LAN client with the lobby and the session
+     * @param communityChat     the Beacon.Link community part of the game, or {@code null} for a game without the channel chat
      * @param speed             the game speed, {@code 0..6}
      * @param returnDestination the screen to continue at after the game: the multiplayer screens' home
      * @return the created {@link GlueGameRequest} instance
@@ -127,11 +129,13 @@ public final class GlueGameRequest {
                                                          @NotNull String playerName,
                                                          boolean expansion,
                                                          @NotNull LanClient lanClient,
+                                                         @Nullable GameCommunityChat communityChat,
                                                          int speed,
                                                          GlueNavigator.@NotNull Destination returnDestination) {
         GlueGameRequest request = new GlueGameRequest(Kind.NETWORK, map, playerName, expansion, 0, null, 0, new int[0]);
 
         request.lanClient         = lanClient;
+        request.communityChat     = communityChat;
         request.speed             = speed;
         request.returnDestination = returnDestination;
 
@@ -168,6 +172,7 @@ public final class GlueGameRequest {
     private final int @NotNull [] computerRaces;
 
     private @Nullable LanClient lanClient;
+    private @Nullable GameCommunityChat communityChat;
     private int speed;
     private GlueNavigator.@Nullable Destination returnDestination;
 
@@ -192,6 +197,7 @@ public final class GlueGameRequest {
         this.computerRaces = computerRaces.clone();
 
         this.lanClient         = null;
+        this.communityChat     = null;
         this.speed             = 0;
         this.returnDestination = null;
     }
@@ -257,6 +263,13 @@ public final class GlueGameRequest {
      */
     public @Nullable LanClient getLanClient() {
         return this.lanClient;
+    }
+
+    /**
+     * @return the Beacon.Link community part of a {@link Kind#NETWORK} game, or {@code null} for a game without the channel chat or another kind
+     */
+    public @Nullable GameCommunityChat getCommunityChat() {
+        return this.communityChat;
     }
 
     /**

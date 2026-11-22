@@ -149,7 +149,8 @@ public final class BattleNetServiceHeader {
 
                     if (fieldNumber == SERVICE_HASH_FIELD && wireType == ProtobufUtils.WIRE_TYPE_FIXED_32) {
                         values[SERVICE_HASH_FIELD] = value;
-                                                     presentFields |= 1 << SERVICE_HASH_FIELD;
+
+                        presentFields |= 1 << SERVICE_HASH_FIELD;
                     }
                 }
                 case ProtobufUtils.WIRE_TYPE_LENGTH_DELIMITED -> {

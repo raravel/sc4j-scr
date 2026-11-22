@@ -435,10 +435,11 @@ public final class GameCursor implements AutoCloseable {
             layout[LAYOUT_BOX_HEIGHT_INDEX] = bottom - top;
 
             for (int frame = 0; frame < count; frame++) {
-                layout[LAYOUT_FRAME_LEFT_INDEX + LAYOUT_FRAME_FIELDS * frame] =
-                        Byte.toUnsignedInt(data[HEADER_SIZE + FRAME_RECORD_SIZE * frame]) - left;
-                layout[LAYOUT_FRAME_TOP_INDEX + LAYOUT_FRAME_FIELDS * frame]  =
-                        Byte.toUnsignedInt(data[HEADER_SIZE + FRAME_RECORD_SIZE * frame + FRAME_TOP_BYTE_OFFSET]) - top;
+                int layoutOffset = LAYOUT_FRAME_FIELDS * frame;
+                int recordOffset = HEADER_SIZE + FRAME_RECORD_SIZE * frame;
+
+                layout[LAYOUT_FRAME_LEFT_INDEX + layoutOffset] = Byte.toUnsignedInt(data[recordOffset]) - left;
+                layout[LAYOUT_FRAME_TOP_INDEX + layoutOffset]  = Byte.toUnsignedInt(data[recordOffset + FRAME_TOP_BYTE_OFFSET]) - top;
             }
 
             return layout;

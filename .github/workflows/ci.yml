@@ -45,7 +45,7 @@ jobs:
           cache-provider: basic
 
       - name: Test
-        run: ./gradlew test -Psc4j.render.smoke=false
+        run: ./gradlew test
 
       - name: Upload the reports
         if: failure()
