@@ -56,7 +56,9 @@ List<String> scrModules = [
     // JMH benchmarks (the frame benchmark of the replay simulation).
     'benchmark',
     // eud-agent's headless map test runner.
-    'eud-runner'
+    'eud-runner',
+    // SC:R Enhanced's script runtime for eud-runner's script tests.
+    'enhanced-script'
 ]
 
 for (item in scrModules) {

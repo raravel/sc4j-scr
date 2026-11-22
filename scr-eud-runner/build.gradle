@@ -14,6 +14,8 @@ dependencies {
     implementation platform("org.lwjgl:lwjgl-bom:$LWJGL_VERSION")
     implementation 'org.lwjgl:lwjgl'
     implementation 'org.lwjgl:lwjgl-opengl'
+    // SC:R Enhanced's script runtime for --js; its jar and Rhino join the class path at run time.
+    implementation project(':scr-enhanced-script')
 }
 
 jar {

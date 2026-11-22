@@ -1,0 +1,34 @@
+plugins {
+    id 'java-library'
+    id 'org.fogofwarlabs.sc4j.scr.java'
+}
+
+// scr-enhanced-script: the Enhanced Script runtime of SC:R Enhanced (https://github.com/fogofwarlabs/sc4j-scr-enhanced, Apache-2.0),
+// copied for eud-runner's map tests. The sources keep their package org.fogofwarlabs.sc4j.screnhanced so they diff against the upstream
+// files; UPSTREAM.md names the commit they come from and every change made here. The jar registers no extension: eud-runner attaches the
+// runtime itself, only when a test names a script folder, so a run without one plays exactly as before.
+dependencies {
+    api project(':scr-game')
+    implementation project(':scr-data')
+    implementation project(':scr-render')
+    implementation project(':scr-net')
+    implementation project(':scr-client')
+    implementation "org.fogofwarlabs.sc4j:sc4j-engine:$sc4jVersion"
+    api 'org.mozilla:rhino:1.8.1'
+}
+
+jar {
+    archiveFileName = 'scr-enhanced-script.jar'
+    from(projectDir) {
+        include 'LICENSE', 'NOTICE', 'UPSTREAM.md', 'licenses/**'
+        // The fork's own LICENSE and NOTICE are in META-INF already; SC:R Enhanced's sit beside them.
+        into 'META-INF/scr-enhanced'
+    }
+}
+
+// The jars eud-runner needs at run time besides the engine's runtime/lib and scr.jar: this jar and Rhino.
+tasks.register('runtimeLibraries', Sync) {
+    from jar
+    from configurations.runtimeClasspath.filter { file -> file.name.startsWith('rhino-') }
+    into layout.buildDirectory.dir('runtime-libs')
+}

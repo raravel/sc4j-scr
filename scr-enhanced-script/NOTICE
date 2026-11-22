@@ -1,0 +1,32 @@
+SC4J SC:R Enhanced
+Copyright 2026 Fog of War Labs (https://fogofwarlabs.org)
+
+This product is licensed under the Apache License, Version 2.0 (LICENSE).
+
+StarCraft is a trademark of Blizzard Entertainment, Inc. SC4J is not affiliated with or endorsed by Blizzard Entertainment.
+SC:R Enhanced, a patch of the SC:R mod, reads the game data of a user-owned StarCraft: Remastered installation; its mod jar carries no such data.
+
+Third-party material
+====================
+
+The mod jar carries LICENSE, NOTICE and MPL-2.0.txt (licenses/MPL-2.0.txt) in META-INF/.
+
+Libraries in the mod jar
+------------------------
+
+Rhino 1.8.1 (org.mozilla:rhino)
+  Mozilla Public License 2.0. Text: licenses/MPL-2.0.txt. Sources: https://github.com/mozilla/rhino (release 1.8.1).
+
+Fonts
+-----
+
+SC:R Enhanced ships no third-party font: it uses the fonts of the user's own installation.
+
+Build and test tools (not in the mod jar)
+-----------------------------------------
+
+Gradle Wrapper (gradle/wrapper/gradle-wrapper.jar)
+  Apache License 2.0 (LICENSE of this repository holds the text).
+
+JUnit 5 (tests only)
+  Eclipse Public License 2.0.

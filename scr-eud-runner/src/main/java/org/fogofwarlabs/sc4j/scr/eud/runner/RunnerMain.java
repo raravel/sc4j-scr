@@ -10,6 +10,11 @@ import org.fogofwarlabs.sc4j.scr.game.session.LiveGame;
 import org.fogofwarlabs.sc4j.scr.game.session.setup.MeleeGameSetup;
 import org.fogofwarlabs.sc4j.scr.game.state.Game;
 import org.fogofwarlabs.sc4j.scr.game.state.GameData;
+import org.fogofwarlabs.sc4j.screnhanced.script.ScriptCheckUtils;
+import org.fogofwarlabs.sc4j.screnhanced.script.ScriptFinding;
+import org.fogofwarlabs.sc4j.screnhanced.script.ScriptPackage;
+import org.fogofwarlabs.sc4j.screnhanced.script.ScriptStorageUtils;
+import org.fogofwarlabs.sc4j.screnhanced.script.ScriptTrailer;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -102,9 +107,11 @@ public final class RunnerMain {
      * @param epmap              the trace file of a debug build, or {@code null}
      * @param profile            whether trigger work is counted
      * @param shotsDir           the folder of the shot pictures, or {@code null}
+     * @param js                 the Enhanced Script folder that runs in the game, or {@code null}
      */
     record Options(@NotNull Path data, @NotNull Path map, @NotNull Path out, @Nullable Path script, int frames, int slot,
-                   long frameTimeoutMillis, long timeLimitMillis, @Nullable Path epmap, boolean profile, @Nullable Path shotsDir) {
+                   long frameTimeoutMillis, long timeLimitMillis, @Nullable Path epmap, boolean profile, @Nullable Path shotsDir,
+                   @Nullable Path js) {
     }
 
     private RunnerMain(@NotNull Options options, @Nullable MtestScript script) {
@@ -154,6 +161,11 @@ public final class RunnerMain {
             }
         }
 
+        if (options.js() != null && !armScript(options)) {
+            System.exit(0);
+            return;
+        }
+
         RunnerMain runner = new RunnerMain(options, script);
 
         if (options.epmap() != null) {
@@ -163,11 +175,64 @@ public final class RunnerMain {
         runner.run();
     }
 
+    /**
+     * Checks the Enhanced Script folder of {@code --js} and arms {@link JsScriptExtension} with its package. The package is joined to a copy
+     * of the map's bytes in memory, the way the script tool's {@code pack} writes it, and read back as a map trailer; the map file is not
+     * changed and the game loads it as the build wrote it. A folder with check errors, or one that cannot be packed, writes a report that
+     * names every finding and runs no game.
+     *
+     * @param options the command line
+     * @return {@code true} if the script is armed, {@code false} if the report of a script that cannot run was written
+     * @throws IOException if the report cannot be written
+     */
+    private static boolean armScript(@NotNull Options options) throws IOException {
+        Path folder = options.js();
+        List<Object> findings = new ArrayList<>();
+        int errors;
+
+        try {
+            List<ScriptFinding> checked = ScriptCheckUtils.check(folder);
+
+            for (ScriptFinding finding : checked) {
+                findings.add(ordered("file", finding.getFile(), "line", finding.getLine(), "severity", finding.getSeverity().getLabel(),
+                                     "message", finding.getMessage()));
+            }
+
+            errors = ScriptCheckUtils.countErrors(checked);
+
+            if (errors == 0) {
+                String name = options.map().getFileName().toString();
+                ScriptPackage scriptPackage = ScriptPackage.readFolder(folder);
+                byte[] packed = ScriptStorageUtils.writePackage(Files.readAllBytes(options.map()), name, scriptPackage);
+                ScriptTrailer trailer = ScriptStorageUtils.readTrailer(packed, name);
+
+                if (trailer == null) {
+                    throw new IOException("The script package of " + folder + " was not written.");
+                }
+
+                JsScriptExtension.arm(trailer, findings);
+
+                return true;
+            }
+        } catch (IOException | RuntimeException exception) {
+            findings.add(ordered("file", folder.toString(), "line", 0, "severity", "error", "message",
+                                 exception.getClass().getSimpleName() + ": " + exception.getMessage()));
+        }
+
+        Map<String, Object> report = baseReport();
+
+        report.put("runtime", ordered("status", "skipped", "reason", "js_error"));
+        report.put("js", ordered("status", "check_error", "findings", findings));
+        writeReport(options.out(), report);
+
+        return false;
+    }
+
     private static void exitWithUsage(@NotNull String message) {
         System.err.println("eud-runner: " + message);
         System.err.println("usage: eud-runner --data <SC:R folder> --map <scx|scm> --out <report.json> [--script <file.mtest>] " +
                            "[--frames N] [--slot N] [--frame-timeout-ms N] [--time-limit-ms N] [--epmap <output.epmap>] [--profile] " +
-                           "[--shots-dir <folder>]");
+                           "[--shots-dir <folder>] [--js <script folder>]");
         System.exit(2);
     }
 
@@ -214,6 +279,10 @@ public final class RunnerMain {
         report.put("framesRun", this.frame);
         report.put("framesPlanned", this.plannedFrames());
         this.putScript(report, status.equals("hang") ? "failed" : "incomplete");
+
+        if (this.options.js() != null) {
+            report.put("js", JsScriptExtension.report());
+        }
         report.put("loadMs", this.loadMillis);
         report.put("elapsedMs", (System.nanoTime() - this.startNanos) / 1_000_000);
         writeReport(this.options.out(), report);
@@ -323,6 +392,10 @@ public final class RunnerMain {
 
         if (this.profiler != null) {
             report.put("profile", this.profiler.report());
+        }
+
+        if (this.options.js() != null) {
+            report.put("js", JsScriptExtension.report());
         }
 
         if (!this.interfaceErrors.isEmpty()) {
@@ -855,6 +928,7 @@ public final class RunnerMain {
         Path script = null;
         Path epmap = null;
         Path shotsDir = null;
+        Path js = null;
         boolean profile = false;
         int frames = DEFAULT_FRAMES;
         int slot = 0;
@@ -882,6 +956,7 @@ public final class RunnerMain {
                 case "--script" -> script = Path.of(value);
                 case "--epmap" -> epmap = Path.of(value);
                 case "--shots-dir" -> shotsDir = Path.of(value);
+                case "--js" -> js = Path.of(value);
                 case "--frames" -> frames = parsePositive(name, value, 1_000_000);
                 case "--slot" -> slot = parsePositive(name, value, 11);
                 case "--frame-timeout-ms" -> frameTimeout = parsePositive(name, value, 600_000);
@@ -894,7 +969,7 @@ public final class RunnerMain {
             throw new IllegalArgumentException("--data, --map and --out are required.");
         }
 
-        return new Options(data, map, out, script, frames, slot, frameTimeout, timeLimit, epmap, profile, shotsDir);
+        return new Options(data, map, out, script, frames, slot, frameTimeout, timeLimit, epmap, profile, shotsDir, js);
     }
 
     private static int parsePositive(@NotNull String name, @NotNull String value, int maximum) {
